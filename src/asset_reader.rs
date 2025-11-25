@@ -143,21 +143,21 @@ impl PixelComponentType {
     }
 }
 
-pub struct MacroBlock {
+pub struct TransformBlock {
     pixel_component_type: PixelComponentType,
     values: ndarray::Array2<u8>,
 }
 
-impl MacroBlock {}
+impl TransformBlock {}
 
-pub struct MacroBlockIterator {
+pub struct TransformBlockIterator {
     pixel_buffer: PixelBuffer,
     block_size: usize,
     pixel_component_type: PixelComponentType,
     current_block_index: usize,
 }
 
-impl MacroBlockIterator {
+impl TransformBlockIterator {
     // only supports 4:2:0 YCbCr
     pub fn new(
         pixel_buffer: PixelBuffer,
@@ -172,11 +172,11 @@ impl MacroBlockIterator {
         }
     }
 
-    fn new_macro_block(
+    fn new_transform_block(
         &self,
         block_size: usize, // only square blocks supported atm
         block_index: usize,
-    ) -> Result<MacroBlock, Box<dyn error::Error>> {
+    ) -> Result<TransformBlock, Box<dyn error::Error>> {
         let mut block_ndarray = ndarray::Array2::zeros((block_size, block_size));
 
         let plane_row_len = self.pixel_buffer.plane_row_len(self.pixel_component_type);
@@ -232,7 +232,7 @@ impl MacroBlockIterator {
             }
             CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
         }
-        Ok(MacroBlock {
+        Ok(TransformBlock {
             pixel_component_type: self.pixel_component_type,
             values: block_ndarray,
         })
@@ -260,8 +260,8 @@ impl MacroBlockIterator {
     }
 }
 
-impl Iterator for MacroBlockIterator {
-    type Item = MacroBlock;
+impl Iterator for TransformBlockIterator {
+    type Item = TransformBlock;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
@@ -274,8 +274,8 @@ impl Iterator for MacroBlockIterator {
         eprintln!("Getting block {}", self.current_block_index);
 
         let next_block = self
-            .new_macro_block(self.block_size, self.current_block_index)
-            .expect("Failed to make new macro block.");
+            .new_transform_block(self.block_size, self.current_block_index)
+            .expect("Failed to make new transform block.");
         self.current_block_index += 1;
         Some(next_block)
     }
@@ -348,40 +348,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_macro_block_0() {
+    fn test_get_transform_block_0() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
         let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
-        let mut iter = MacroBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
-        let block = iter.next().expect("No macro blocks produced.");
+        let mut iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
+        let block = iter.next().expect("No transform blocks produced.");
 
         assert_eq!(block.values.len(), 64);
     }
 
     #[test]
-    fn test_get_macro_block_1() {
+    fn test_get_transform_block_1() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
         let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
-        let iter = MacroBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
+        let iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
     }
 
     #[test]
-    fn test_get_macro_block_2() {
+    fn test_get_transform_block_2() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
         let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
-        let iter = MacroBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cb);
+        let iter = TransformBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cb);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
     }
 
     #[test]
-    fn test_get_macro_block_3() {
+    fn test_get_transform_block_3() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
         let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
-        let iter = MacroBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cr);
+        let iter = TransformBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cr);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
