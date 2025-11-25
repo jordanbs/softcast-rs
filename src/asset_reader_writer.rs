@@ -18,19 +18,24 @@
 use ndarray;
 use std::{error, path};
 
-use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
+use objc2_foundation::{
+    ns_string, NSArray, NSDictionary, NSMutableDictionary, NSNumber, NSObject, NSString, NSURL,
+};
 
 use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_av_foundation::{
     AVAsset, AVAssetReader, AVAssetReaderOutput, AVAssetReaderStatus, AVAssetReaderTrackOutput,
-    AVAssetTrack, AVMediaTypeVideo, AVURLAsset,
+    AVAssetTrack, AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
+    AVFileTypeMPEG4, AVMediaTypeVideo, AVURLAsset, AVVideoCodecKey, AVVideoCodecTypeH264,
+    AVVideoHeightKey, AVVideoWidthKey,
 };
 
-use objc2_core_foundation::{CFRetained, CFString};
+use objc2_core_foundation::{CFDictionary, CFDictionaryCreateMutable, CFRetained, CFString};
 
 use objc2_core_video::{
-    kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-    CVImageBuffer, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
+    kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
+    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVImageBuffer,
+    CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
     CVPixelBufferGetDataSize, CVPixelBufferGetHeightOfPlane, CVPixelBufferIsPlanar,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
@@ -163,6 +168,92 @@ impl LoadedAssetReader {
             })
         }
     }
+}
+
+pub struct AssetWriter {
+    av_asset_writer: Retained<AVAssetWriter>,
+    av_asset_writer_input: Retained<AVAssetWriterInput>,
+    av_asset_writer_input_pixel_buffer_adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
+}
+
+impl AssetWriter {
+    fn new(
+        av_asset_writer: Retained<AVAssetWriter>,
+        av_asset_writer_input: Retained<AVAssetWriterInput>,
+        av_asset_writer_input_pixel_buffer_adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
+    ) -> Self {
+        AssetWriter {
+            av_asset_writer: av_asset_writer,
+            av_asset_writer_input: av_asset_writer_input,
+            av_asset_writer_input_pixel_buffer_adaptor: av_asset_writer_input_pixel_buffer_adaptor,
+        }
+    }
+
+    pub fn load_new(settings: AssetWritterSettings) -> Result<Self, Box<dyn error::Error>> {
+        let path_bytes = settings.path.as_path().as_os_str().as_encoded_bytes();
+        let ns_path = NSString::from_str(std::str::from_utf8(path_bytes)?);
+        let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
+
+        unsafe {
+            let writer =
+                AVAssetWriter::assetWriterWithURL_fileType_error(&url, &AVFileTypeMPEG4.unwrap())?;
+
+            let codec_value = NSString::from_str(&settings.codec);
+            let width_value = NSNumber::new_i32(settings.resolution.0);
+            let height_value = NSNumber::new_i32(settings.resolution.1);
+
+            let input_settings_dict: Retained<NSMutableDictionary<NSString, AnyObject>> =
+                NSMutableDictionary::new();
+            input_settings_dict.insert(AVVideoCodecKey.unwrap(), &codec_value);
+            input_settings_dict.insert(AVVideoWidthKey.unwrap(), &width_value);
+            input_settings_dict.insert(AVVideoHeightKey.unwrap(), &height_value);
+
+            let input = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
+                &AVMediaTypeVideo.unwrap(),
+                Some(&input_settings_dict),
+            );
+
+            let pixel_buffer_settings_dict: Retained<NSMutableDictionary<NSString, AnyObject>> =
+                NSMutableDictionary::new();
+
+            let pixel_format = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+
+            let pixel_format_num = NSNumber::new_u32(pixel_format);
+
+            pixel_buffer_settings_dict.insert(
+                cfstring_as_nsstring(kCVPixelBufferPixelFormatTypeKey),
+                &pixel_format_num,
+            );
+            pixel_buffer_settings_dict
+                .insert(cfstring_as_nsstring(kCVPixelBufferWidthKey), &width_value);
+            pixel_buffer_settings_dict
+                .insert(cfstring_as_nsstring(kCVPixelBufferHeightKey), &height_value);
+
+            let adaptor =
+                AVAssetWriterInputPixelBufferAdaptor::
+                    assetWriterInputPixelBufferAdaptorWithAssetWriterInput_sourcePixelBufferAttributes(
+                        &input,
+                        Some(&pixel_buffer_settings_dict)
+                    );
+
+            let writer = AssetWriter::new(writer, input, adaptor);
+            Ok(writer)
+        }
+    }
+}
+
+fn cfstring_as_nsstring<'a>(cf: &'a CFString) -> &'a NSString {
+    // CFString implements AsRef<AnyObject>
+    let any: &AnyObject = cf.as_ref();
+
+    // Downcast via Objective-C's isKindOfClass:
+    any.downcast_ref::<NSString>().unwrap()
+}
+
+pub struct AssetWritterSettings {
+    path: path::PathBuf,
+    codec: String,
+    resolution: (i32, i32),
 }
 
 pub struct PixelBufferIterator<'a> {
