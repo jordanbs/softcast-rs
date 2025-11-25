@@ -15,4 +15,4 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod asset_reader;
+pub mod asset_reader_writer;

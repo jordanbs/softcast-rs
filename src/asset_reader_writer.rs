@@ -76,15 +76,6 @@ impl<'a> AssetReader<'a> {
             .av_asset_output)
     }
 
-    //     #[allow(deprecated)] // blocking i/o is expected here
-    //     pub fn get_next_pixel_buffer(&mut self) -> Result<PixelBuffer, Box<dyn error::Error>> {
-    //         let av_reader = self.av_asset_reader()?;
-    //         let av_output = self.av_asset_output()?;
-    //             if let Some(pixel_buffer) = self.get_next_pixel_buffer_helper(&av_reader, &av_output)? {
-    //                 return Ok(pixel_buffer);
-    //             }
-    //     }
-
     #[allow(deprecated)] // blocking i/o is expected here
     fn get_next_pixel_buffer(&mut self) -> Result<Option<PixelBuffer>, Box<dyn error::Error>> {
         let av_reader = self.av_asset_reader()?;
@@ -110,6 +101,67 @@ impl<'a> AssetReader<'a> {
 
     pub fn pixel_buffer_iter(&'a mut self) -> PixelBufferIterator<'a> {
         PixelBufferIterator::new(self)
+    }
+}
+
+#[derive(Clone)]
+struct LoadedAssetReader {
+    av_asset_reader: Retained<AVAssetReader>,
+    av_asset_output: Retained<AVAssetReaderTrackOutput>,
+}
+
+impl LoadedAssetReader {
+    #[allow(deprecated)] // blocking i/o is expected here
+    fn load(path: &path::Path) -> Result<Self, Box<dyn error::Error>> {
+        let path_bytes = path.as_os_str().as_encoded_bytes();
+        let path_str = std::str::from_utf8(path_bytes)?;
+        let ns_path = NSString::from_str(path_str);
+        let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
+
+        unsafe {
+            // Reader config.
+            let pixel_format_key: &NSString =
+                &*(kCVPixelBufferPixelFormatTypeKey as *const CFString as *const NSString);
+            let pixel_format_value =
+                NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+
+            let video_settings: Retained<NSDictionary<NSString, AnyObject>> =
+                NSDictionary::from_slices::<NSString>(
+                    &[pixel_format_key.as_ref()],
+                    &[pixel_format_value.as_ref()],
+                );
+
+            // Asset / track / reader / output setup.
+            let asset: Retained<AVURLAsset> = AVURLAsset::assetWithURL(&url);
+
+            // Get all video tracks.
+            let tracks: Retained<NSArray<AVAssetTrack>> =
+                asset.tracksWithMediaType(&AVMediaTypeVideo.unwrap());
+
+            let track: Retained<AVAssetTrack> =
+                tracks.firstObject().ok_or("File has no video tracks.")?;
+
+            let reader: Retained<AVAssetReader> =
+                AVAssetReader::assetReaderWithAsset_error(&asset as &AVAsset)?;
+
+            // Attach a track output that will give us CVPixelBuffer-backed CMSampleBuffers.
+            let output: Retained<AVAssetReaderTrackOutput> =
+                AVAssetReaderTrackOutput::assetReaderTrackOutputWithTrack_outputSettings(
+                    &track,
+                    Some(&video_settings),
+                );
+
+            reader.addOutput(&output as &AVAssetReaderOutput);
+
+            if !reader.startReading() {
+                return Err("startReading() failed".into());
+            }
+
+            Ok(LoadedAssetReader {
+                av_asset_reader: reader,
+                av_asset_output: output,
+            })
+        }
     }
 }
 
@@ -337,67 +389,6 @@ impl Iterator for TransformBlockIterator {
     }
 }
 
-#[derive(Clone)]
-struct LoadedAssetReader {
-    av_asset_reader: Retained<AVAssetReader>,
-    av_asset_output: Retained<AVAssetReaderTrackOutput>,
-}
-
-impl LoadedAssetReader {
-    #[allow(deprecated)] // blocking i/o is expected here
-    fn load(path: &path::Path) -> Result<Self, Box<dyn error::Error>> {
-        let path_bytes = path.as_os_str().as_encoded_bytes();
-        let path_str = std::str::from_utf8(path_bytes)?;
-        let ns_path = NSString::from_str(path_str);
-        let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
-
-        unsafe {
-            // Reader config.
-            let pixel_format_key: &NSString =
-                &*(kCVPixelBufferPixelFormatTypeKey as *const CFString as *const NSString);
-            let pixel_format_value =
-                NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
-
-            let video_settings: Retained<NSDictionary<NSString, AnyObject>> =
-                NSDictionary::from_slices::<NSString>(
-                    &[pixel_format_key.as_ref()],
-                    &[pixel_format_value.as_ref()],
-                );
-
-            // Asset / track / reader / output setup.
-            let asset: Retained<AVURLAsset> = AVURLAsset::assetWithURL(&url);
-
-            // Get all video tracks.
-            let tracks: Retained<NSArray<AVAssetTrack>> =
-                asset.tracksWithMediaType(&AVMediaTypeVideo.unwrap());
-
-            let track: Retained<AVAssetTrack> =
-                tracks.firstObject().ok_or("File has no video tracks.")?;
-
-            let reader: Retained<AVAssetReader> =
-                AVAssetReader::assetReaderWithAsset_error(&asset as &AVAsset)?;
-
-            // Attach a track output that will give us CVPixelBuffer-backed CMSampleBuffers.
-            let output: Retained<AVAssetReaderTrackOutput> =
-                AVAssetReaderTrackOutput::assetReaderTrackOutputWithTrack_outputSettings(
-                    &track,
-                    Some(&video_settings),
-                );
-
-            reader.addOutput(&output as &AVAssetReaderOutput);
-
-            if !reader.startReading() {
-                return Err("startReading() failed".into());
-            }
-
-            Ok(LoadedAssetReader {
-                av_asset_reader: reader,
-                av_asset_output: output,
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +446,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_get_transform_block_4() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
 
