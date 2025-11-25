@@ -188,29 +188,20 @@ impl MacroBlockIterator {
         assert_eq!(plane_height % block_size, 0);
 
         // CbCr samples are interleaved.
-        let interleave_offset = match self.pixel_component_type {
-            PixelComponentType::Y | PixelComponentType::Cb => 0,
-            PixelComponentType::Cr => 1,
-        };
-        let interleave_step = match self.pixel_component_type {
-            PixelComponentType::Y => 1,
-            PixelComponentType::Cb | PixelComponentType::Cr => 2,
-        };
+        let interleave_offset = self.interleave_offset();
+        let interleave_step = self.interleave_step();
 
         // always include pixels in the plane beyond width
-        let column_start = interleave_offset + (block_index * block_size) % plane_row_len;
+        let plane_row_samples = plane_row_len / interleave_step;
+        let column_start = interleave_offset + (block_index * block_size) % plane_row_samples;
         let column_end = column_start + block_size * interleave_step;
-        let row_start = block_size * ((block_index * block_size) / plane_row_len);
+        let row_start = block_size * ((block_index * block_size) / plane_row_samples);
         let row_end = row_start + block_size;
 
         eprintln!(
             "{}x{} - {}x{}",
             column_start, row_start, column_end, row_end
         );
-
-        if row_end == 1081 {
-            let _ = 2 + 2;
-        }
 
         assert!(column_end <= plane_row_len);
         assert!(row_end <= plane_height);
@@ -234,7 +225,7 @@ impl MacroBlockIterator {
             for plane_row in row_start..row_end {
                 for plane_column in (column_start..column_end).step_by(interleave_step) {
                     let plane_idx = plane_column + plane_row * plane_row_len;
-                    let block_column = plane_column - column_start;
+                    let block_column = (plane_column - column_start) / interleave_step;
                     let block_row = plane_row - row_start;
                     block_ndarray[(block_column, block_row)] = plane_slice[plane_idx];
                 }
@@ -246,17 +237,36 @@ impl MacroBlockIterator {
             values: block_ndarray,
         })
     }
+
+    fn interleave_offset(&self) -> usize {
+        match self.pixel_component_type {
+            PixelComponentType::Y | PixelComponentType::Cb => 0,
+            PixelComponentType::Cr => 1,
+        }
+    }
+    fn interleave_step(&self) -> usize {
+        match self.pixel_component_type {
+            PixelComponentType::Y => 1,
+            PixelComponentType::Cb | PixelComponentType::Cr => 2,
+        }
+    }
+
+    fn plane_indexes_per_block(&self) -> usize {
+        self.block_size * self.block_size * self.interleave_step()
+    }
+    fn plane_indexes_per_pixel_buffer(&self) -> usize {
+        self.pixel_buffer.plane_height(self.pixel_component_type)
+            * self.pixel_buffer.plane_row_len(self.pixel_component_type)
+    }
 }
 
 impl Iterator for MacroBlockIterator {
     type Item = MacroBlock;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next_plane_row_start = self.block_size
-            * ((self.current_block_index * self.block_size)
-                / self.pixel_buffer.plane_row_len(self.pixel_component_type));
+        let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
 
-        if next_plane_row_start >= self.pixel_buffer.plane_height(self.pixel_component_type) {
+        if next_plane_index >= self.plane_indexes_per_pixel_buffer() {
             // Completed this pixel buffer.
             return None;
         }
@@ -337,23 +347,11 @@ impl LoadedAssetReader {
 mod tests {
     use super::*;
 
-    //     #[test]
-    //     fn test_get_pixel_buffer_0() {
-    //         let mut reader =
-    //             AssetReader::new("/Users/jordanbs/Desktop/Screen Recording 2025-11-21 at 19.06.33.mov");
-    //         let pixel_buffer = reader.get_next_pixel_buffer().unwrap();
-    //         let value = pixel_buffer.get_pixel_value_at_coordinate(PixelComponentType::Y, (0, 0));
-    //
-    //         eprintln!("pixel_buffer: {:?} value: {}", pixel_buffer, value);
-    //         assert_ne!(value, 0);
-    //     }
-
     #[test]
     fn test_get_macro_block_0() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
         let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
         let mut iter = MacroBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
-        //         let blocks: Vec<MacroBlock> = iter.collect();
         let block = iter.next().expect("No macro blocks produced.");
 
         assert_eq!(block.values.len(), 64);
@@ -364,7 +362,26 @@ mod tests {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
         let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
         let iter = MacroBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
-        //         let blocks: Vec<MacroBlock> = iter.collect();
+        let count = iter.fold(0, |acc, _| acc + 1);
+
+        assert_eq!(count, 32400);
+    }
+
+    #[test]
+    fn test_get_macro_block_2() {
+        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
+        let iter = MacroBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cb);
+        let count = iter.fold(0, |acc, _| acc + 1);
+
+        assert_eq!(count, 32400);
+    }
+
+    #[test]
+    fn test_get_macro_block_3() {
+        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
+        let iter = MacroBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cr);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
