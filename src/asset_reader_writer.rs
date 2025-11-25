@@ -35,22 +35,22 @@ use objc2_core_video::{
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
 
-pub struct AssetReader<'a> {
-    path: &'a path::Path,
+pub struct AssetReader {
+    path: path::PathBuf,
     loaded_reader: Option<LoadedAssetReader>,
 }
 
-impl<'a> AssetReader<'a> {
-    pub fn new(file_path: &'a str) -> Self {
+impl AssetReader {
+    pub fn new(file_path: &str) -> Self {
         AssetReader {
-            path: path::Path::new(file_path),
+            path: path::PathBuf::from(file_path),
             loaded_reader: None,
         }
     }
 
     fn av_asset_reader(&mut self) -> Result<Retained<AVAssetReader>, Box<dyn error::Error>> {
         if self.loaded_reader.is_none() {
-            self.loaded_reader = Some(LoadedAssetReader::load(self.path)?)
+            self.loaded_reader = Some(LoadedAssetReader::load(self.path.as_path())?)
         }
 
         Ok(self
@@ -65,7 +65,7 @@ impl<'a> AssetReader<'a> {
         &mut self,
     ) -> Result<Retained<AVAssetReaderTrackOutput>, Box<dyn error::Error>> {
         if self.loaded_reader.is_none() {
-            self.loaded_reader = Some(LoadedAssetReader::load(self.path)?)
+            self.loaded_reader = Some(LoadedAssetReader::load(self.path.as_path())?)
         }
 
         Ok(self
@@ -99,7 +99,7 @@ impl<'a> AssetReader<'a> {
         }
     }
 
-    pub fn pixel_buffer_iter(&'a mut self) -> PixelBufferIterator<'a> {
+    pub fn pixel_buffer_iter(&mut self) -> PixelBufferIterator {
         PixelBufferIterator::new(self)
     }
 }
@@ -166,11 +166,11 @@ impl LoadedAssetReader {
 }
 
 pub struct PixelBufferIterator<'a> {
-    asset_reader: &'a mut AssetReader<'a>,
+    asset_reader: &'a mut AssetReader,
 }
 
 impl<'a> PixelBufferIterator<'a> {
-    fn new(asset_reader: &'a mut AssetReader<'a>) -> Self {
+    fn new(asset_reader: &'a mut AssetReader) -> Self {
         PixelBufferIterator {
             asset_reader: asset_reader,
         }
