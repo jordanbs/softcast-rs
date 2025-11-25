@@ -275,7 +275,7 @@ impl Iterator for TransformBlockIterator {
 
         let next_block = self
             .new_transform_block(self.block_size, self.current_block_index)
-            .expect("Failed to make new transform block.");
+            .expect("Failed to make new transform block."); // Internal error, should crash rather than returning None.
         self.current_block_index += 1;
         Some(next_block)
     }
@@ -316,11 +316,10 @@ impl LoadedAssetReader {
                 asset.tracksWithMediaType(&AVMediaTypeVideo.unwrap());
 
             let track: Retained<AVAssetTrack> =
-                tracks.firstObject().expect("File has no video tracks.");
+                tracks.firstObject().ok_or("File has no video tracks.")?;
 
             let reader: Retained<AVAssetReader> =
-                AVAssetReader::assetReaderWithAsset_error(&asset as &AVAsset)
-                    .expect("AVAssetReaderWithAssetWithError failed.");
+                AVAssetReader::assetReaderWithAsset_error(&asset as &AVAsset)?;
 
             // Attach a track output that will give us CVPixelBuffer-backed CMSampleBuffers.
             let output: Retained<AVAssetReaderTrackOutput> =
