@@ -59,23 +59,20 @@ impl<'a> AssetReader<'a> {
             .av_asset_output)
     }
 
-    #[allow(deprecated)] // blocking i/o is expected here
-    pub fn get_next_pixel_buffer(&mut self) -> Result<PixelBuffer, Box<dyn error::Error>> {
-        let av_reader = self.av_asset_reader()?;
-        let av_output = self.av_asset_output()?;
-        loop {
-            if let Some(pixel_buffer) = self.get_next_pixel_buffer_helper(&av_reader, &av_output)? {
-                return Ok(pixel_buffer);
-            }
-        }
-    }
+    //     #[allow(deprecated)] // blocking i/o is expected here
+    //     pub fn get_next_pixel_buffer(&mut self) -> Result<PixelBuffer, Box<dyn error::Error>> {
+    //         let av_reader = self.av_asset_reader()?;
+    //         let av_output = self.av_asset_output()?;
+    //             if let Some(pixel_buffer) = self.get_next_pixel_buffer_helper(&av_reader, &av_output)? {
+    //                 return Ok(pixel_buffer);
+    //             }
+    //     }
 
     #[allow(deprecated)] // blocking i/o is expected here
-    fn get_next_pixel_buffer_helper(
-        &self,
-        av_reader: &AVAssetReader,
-        av_output: &AVAssetReaderTrackOutput,
-    ) -> Result<Option<PixelBuffer>, Box<dyn error::Error>> {
+    fn get_next_pixel_buffer(&mut self) -> Result<Option<PixelBuffer>, Box<dyn error::Error>> {
+        let av_reader = self.av_asset_reader()?;
+        let av_output = self.av_asset_output()?;
+
         unsafe {
             // copyNextSampleBuffer returns the next CMSampleBufferRef or nil at EOF.
             if let Some(sample_buffer) = av_output.copyNextSampleBuffer() {
@@ -92,6 +89,31 @@ impl<'a> AssetReader<'a> {
                 status => Err(format!("Reader stopped with status {:?}", status).into()),
             }
         }
+    }
+
+    pub fn pixel_buffer_iter(&'a mut self) -> PixelBufferIterator<'a> {
+        PixelBufferIterator::new(self)
+    }
+}
+
+pub struct PixelBufferIterator<'a> {
+    asset_reader: &'a mut AssetReader<'a>,
+}
+
+impl<'a> PixelBufferIterator<'a> {
+    fn new(asset_reader: &'a mut AssetReader<'a>) -> Self {
+        PixelBufferIterator {
+            asset_reader: asset_reader,
+        }
+    }
+}
+
+impl<'a> Iterator for PixelBufferIterator<'a> {
+    type Item = PixelBuffer;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.asset_reader
+            .get_next_pixel_buffer()
+            .expect("Failed to get next pixel buffer.")
     }
 }
 
@@ -155,6 +177,7 @@ pub struct TransformBlockIterator {
     block_size: usize,
     pixel_component_type: PixelComponentType,
     current_block_index: usize,
+    locked_pixel_buffer_memory: bool,
 }
 
 impl TransformBlockIterator {
@@ -169,6 +192,7 @@ impl TransformBlockIterator {
             pixel_buffer: pixel_buffer,
             pixel_component_type: pixel_component_type,
             current_block_index: 0,
+            locked_pixel_buffer_memory: false,
         }
     }
 
@@ -198,25 +222,21 @@ impl TransformBlockIterator {
         let row_start = block_size * ((block_index * block_size) / plane_row_samples);
         let row_end = row_start + block_size;
 
-        eprintln!(
-            "{}x{} - {}x{}",
-            column_start, row_start, column_end, row_end
-        );
+        //         eprintln!(
+        //             "{}x{} - {}x{}",
+        //             column_start, row_start, column_end, row_end
+        //         );
 
         assert!(column_end <= plane_row_len);
         assert!(row_end <= plane_height);
 
         unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferLockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
-
             let plane_ptr = CVPixelBufferGetBaseAddressOfPlane(
                 &self.pixel_buffer.cv_image_buffer,
                 self.pixel_component_type.plane_index(),
             ) as *const u8;
 
             if plane_ptr.is_null() {
-                CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
                 return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
             }
 
@@ -230,12 +250,23 @@ impl TransformBlockIterator {
                     block_ndarray[(block_column, block_row)] = plane_slice[plane_idx];
                 }
             }
-            CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
         }
         Ok(TransformBlock {
             pixel_component_type: self.pixel_component_type,
             values: block_ndarray,
         })
+    }
+    fn ensure_pixel_buffer_address_is_locked(&self) {
+        unsafe {
+            let flags = CVPixelBufferLockFlags::ReadOnly;
+            CVPixelBufferLockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+        }
+    }
+    fn ensure_pixel_buffer_address_is_unlocked(&self) {
+        unsafe {
+            let flags = CVPixelBufferLockFlags::ReadOnly;
+            CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+        }
     }
 
     fn interleave_offset(&self) -> usize {
@@ -265,13 +296,15 @@ impl Iterator for TransformBlockIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
-
         if next_plane_index >= self.plane_indexes_per_pixel_buffer() {
             // Completed this pixel buffer.
+            self.ensure_pixel_buffer_address_is_unlocked();
             return None;
         }
 
-        eprintln!("Getting block {}", self.current_block_index);
+        //         eprintln!("Getting block {}", self.current_block_index);
+
+        self.ensure_pixel_buffer_address_is_locked();
 
         let next_block = self
             .new_transform_block(self.block_size, self.current_block_index)
@@ -349,7 +382,10 @@ mod tests {
     #[test]
     fn test_get_transform_block_0() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
-        let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
+        let pixel_buffer = reader
+            .get_next_pixel_buffer()
+            .expect("No pixel buffer.")
+            .unwrap();
         let mut iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
         let block = iter.next().expect("No transform blocks produced.");
 
@@ -359,7 +395,10 @@ mod tests {
     #[test]
     fn test_get_transform_block_1() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
-        let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
+        let pixel_buffer = reader
+            .get_next_pixel_buffer()
+            .expect("No pixel buffer.")
+            .unwrap();
         let iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
         let count = iter.fold(0, |acc, _| acc + 1);
 
@@ -369,7 +408,10 @@ mod tests {
     #[test]
     fn test_get_transform_block_2() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
-        let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
+        let pixel_buffer = reader
+            .get_next_pixel_buffer()
+            .expect("No pixel buffer.")
+            .unwrap();
         let iter = TransformBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cb);
         let count = iter.fold(0, |acc, _| acc + 1);
 
@@ -379,10 +421,26 @@ mod tests {
     #[test]
     fn test_get_transform_block_3() {
         let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
-        let pixel_buffer = reader.get_next_pixel_buffer().expect("No pixel buffer.");
+        let pixel_buffer = reader
+            .get_next_pixel_buffer()
+            .expect("No pixel buffer.")
+            .unwrap();
         let iter = TransformBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cr);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
+    }
+
+    #[test]
+    fn test_get_transform_block_4() {
+        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+
+        let mut count = 0;
+        for pixel_buffer in reader.pixel_buffer_iter() {
+            let iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
+            count = iter.fold(count, |acc, _| acc + 1);
+        }
+
+        assert_eq!(count, 5540400);
     }
 }
