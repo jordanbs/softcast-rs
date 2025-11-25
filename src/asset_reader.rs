@@ -273,16 +273,22 @@ impl TransformBlockIterator {
             values: block_ndarray,
         })
     }
-    fn ensure_pixel_buffer_address_is_locked(&self) {
-        unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferLockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+    fn ensure_pixel_buffer_address_is_locked(&mut self) {
+        if !self.locked_pixel_buffer_memory {
+            unsafe {
+                let flags = CVPixelBufferLockFlags::ReadOnly;
+                CVPixelBufferLockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+                self.locked_pixel_buffer_memory = true;
+            }
         }
     }
-    fn ensure_pixel_buffer_address_is_unlocked(&self) {
-        unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+    fn ensure_pixel_buffer_address_is_unlocked(&mut self) {
+        if self.locked_pixel_buffer_memory {
+            unsafe {
+                let flags = CVPixelBufferLockFlags::ReadOnly;
+                CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+            }
+            self.locked_pixel_buffer_memory = false;
         }
     }
 
