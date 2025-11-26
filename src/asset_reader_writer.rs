@@ -18,9 +18,7 @@
 use ndarray;
 use std::{error, path};
 
-use objc2_foundation::{
-    ns_string, NSArray, NSDictionary, NSMutableDictionary, NSNumber, NSObject, NSString, NSURL,
-};
+use objc2_foundation::{NSArray, NSDictionary, NSMutableDictionary, NSNumber, NSString, NSURL};
 
 use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_av_foundation::{
@@ -30,7 +28,7 @@ use objc2_av_foundation::{
     AVVideoHeightKey, AVVideoWidthKey,
 };
 
-use objc2_core_foundation::{CFDictionary, CFDictionaryCreateMutable, CFRetained, CFString};
+use objc2_core_foundation::{CFRetained, CFString};
 
 use objc2_core_video::{
     kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
@@ -221,13 +219,11 @@ impl AssetWriter {
             let pixel_format_num = NSNumber::new_u32(pixel_format);
 
             pixel_buffer_settings_dict.insert(
-                cfstring_as_nsstring(kCVPixelBufferPixelFormatTypeKey),
+                kCVPixelBufferPixelFormatTypeKey.as_nsstring(),
                 &pixel_format_num,
             );
-            pixel_buffer_settings_dict
-                .insert(cfstring_as_nsstring(kCVPixelBufferWidthKey), &width_value);
-            pixel_buffer_settings_dict
-                .insert(cfstring_as_nsstring(kCVPixelBufferHeightKey), &height_value);
+            pixel_buffer_settings_dict.insert(kCVPixelBufferWidthKey.as_nsstring(), &width_value);
+            pixel_buffer_settings_dict.insert(kCVPixelBufferHeightKey.as_nsstring(), &height_value);
 
             let adaptor =
                 AVAssetWriterInputPixelBufferAdaptor::
@@ -242,13 +238,15 @@ impl AssetWriter {
     }
 }
 
-fn cfstring_as_nsstring<'a>(cf: &'a CFString) -> &'a NSString {
-    // CFString implements AsRef<AnyObject>
-    let any: &AnyObject = cf.as_ref();
-
-    // Downcast via Objective-C's isKindOfClass:
-    any.downcast_ref::<NSString>().unwrap()
+trait AsNSString: AsRef<AnyObject> {
+    fn as_nsstring(&self) -> &NSString {
+        let any: &AnyObject = self.as_ref();
+        any.downcast_ref::<NSString>()
+            .expect("Failed to toll-free bridge to NSString.")
+    }
 }
+
+impl AsNSString for CFString {}
 
 pub struct AssetWritterSettings {
     path: path::PathBuf,
