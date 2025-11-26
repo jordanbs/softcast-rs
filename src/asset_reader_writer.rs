@@ -24,11 +24,13 @@ use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_av_foundation::{
     AVAsset, AVAssetReader, AVAssetReaderOutput, AVAssetReaderStatus, AVAssetReaderTrackOutput,
     AVAssetTrack, AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
-    AVFileTypeMPEG4, AVMediaTypeVideo, AVURLAsset, AVVideoCodecKey, AVVideoCodecTypeH264,
-    AVVideoHeightKey, AVVideoWidthKey,
+    AVAssetWriterStatus, AVFileTypeMPEG4, AVMediaTypeVideo, AVURLAsset, AVVideoCodecKey,
+    AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
 };
 
 use objc2_core_foundation::{CFRetained, CFString};
+
+use objc2_core_media::CMTime;
 
 use objc2_core_video::{
     kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
@@ -37,6 +39,9 @@ use objc2_core_video::{
     CVPixelBufferGetDataSize, CVPixelBufferGetHeightOfPlane, CVPixelBufferIsPlanar,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
+
+use std::thread::sleep;
+use std::time::{Duration, SystemTime};
 
 pub struct AssetReader {
     path: path::PathBuf,
@@ -51,32 +56,21 @@ impl AssetReader {
         }
     }
 
-    fn av_asset_reader(&mut self) -> Result<Retained<AVAssetReader>, Box<dyn error::Error>> {
+    fn loaded_reader(&mut self) -> Result<LoadedAssetReader, Box<dyn error::Error>> {
         if self.loaded_reader.is_none() {
             self.loaded_reader = Some(LoadedAssetReader::load(self.path.as_path())?)
         }
+        Ok(self.loaded_reader.as_ref().unwrap().clone())
+    }
 
-        Ok(self
-            .loaded_reader
-            .as_ref()
-            .cloned()
-            .ok_or("No reader")?
-            .av_asset_reader)
+    fn av_asset_reader(&mut self) -> Result<Retained<AVAssetReader>, Box<dyn error::Error>> {
+        Ok(self.loaded_reader()?.av_asset_reader)
     }
 
     fn av_asset_output(
         &mut self,
     ) -> Result<Retained<AVAssetReaderTrackOutput>, Box<dyn error::Error>> {
-        if self.loaded_reader.is_none() {
-            self.loaded_reader = Some(LoadedAssetReader::load(self.path.as_path())?)
-        }
-
-        Ok(self
-            .loaded_reader
-            .as_ref()
-            .cloned()
-            .ok_or("No reader")?
-            .av_asset_output)
+        Ok(self.loaded_reader()?.av_asset_output)
     }
 
     #[allow(deprecated)] // blocking i/o is expected here
@@ -105,12 +99,20 @@ impl AssetReader {
     pub fn pixel_buffer_iter(&mut self) -> PixelBufferIterator {
         PixelBufferIterator::new(self)
     }
+
+    pub fn resolution(&mut self) -> Result<(i32, i32), Box<dyn error::Error>> {
+        self.loaded_reader()?.resolution()
+    }
+    pub fn frame_rate(&mut self) -> Result<f64, Box<dyn error::Error>> {
+        self.loaded_reader()?.frame_rate()
+    }
 }
 
 #[derive(Clone)]
 struct LoadedAssetReader {
     av_asset_reader: Retained<AVAssetReader>,
     av_asset_output: Retained<AVAssetReaderTrackOutput>,
+    av_asset_track: Retained<AVAssetTrack>,
 }
 
 impl LoadedAssetReader {
@@ -163,27 +165,59 @@ impl LoadedAssetReader {
             Ok(LoadedAssetReader {
                 av_asset_reader: reader,
                 av_asset_output: output,
+                av_asset_track: track,
             })
+        }
+    }
+    pub fn resolution(&mut self) -> Result<(i32, i32), Box<dyn error::Error>> {
+        unsafe {
+            let natural_size = self.av_asset_track.naturalSize();
+            Ok((natural_size.width as i32, natural_size.height as i32))
+        }
+    }
+    pub fn frame_rate(&mut self) -> Result<f64, Box<dyn error::Error>> {
+        unsafe {
+            let frame_rate: f64 = self.av_asset_track.nominalFrameRate().into();
+            Ok(frame_rate)
         }
     }
 }
 
+pub struct AssetWritterSettings {
+    path: path::PathBuf,
+    codec: Codec,
+    resolution: (i32, i32),
+    frame_rate: f64,
+}
+
 pub struct AssetWriter {
+    settings: AssetWritterSettings,
+
     av_asset_writer: Retained<AVAssetWriter>,
     av_asset_writer_input: Retained<AVAssetWriterInput>,
     av_asset_writer_input_pixel_buffer_adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
+
+    frame_index: i64,
+    started_writing: bool,
+    timescale: i32,
 }
 
 impl AssetWriter {
     fn new(
+        settings: AssetWritterSettings,
         av_asset_writer: Retained<AVAssetWriter>,
         av_asset_writer_input: Retained<AVAssetWriterInput>,
         av_asset_writer_input_pixel_buffer_adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
     ) -> Self {
+        let tiemscale = settings.frame_rate as i32;
         AssetWriter {
+            settings: settings,
             av_asset_writer: av_asset_writer,
             av_asset_writer_input: av_asset_writer_input,
             av_asset_writer_input_pixel_buffer_adaptor: av_asset_writer_input_pixel_buffer_adaptor,
+            frame_index: 0,
+            started_writing: false,
+            timescale: tiemscale as i32,
         }
     }
 
@@ -196,7 +230,7 @@ impl AssetWriter {
             let writer =
                 AVAssetWriter::assetWriterWithURL_fileType_error(&url, &AVFileTypeMPEG4.unwrap())?;
 
-            let codec_value = NSString::from_str(&settings.codec);
+            let codec_value = NSString::from_str(&settings.codec.as_string());
             let width_value = NSNumber::new_i32(settings.resolution.0);
             let height_value = NSNumber::new_i32(settings.resolution.1);
 
@@ -232,8 +266,83 @@ impl AssetWriter {
                         Some(&pixel_buffer_settings_dict)
                     );
 
-            let writer = AssetWriter::new(writer, input, adaptor);
+            input.setExpectsMediaDataInRealTime(false);
+            writer.addInput(&input);
+
+            let writer = AssetWriter::new(settings, writer, input, adaptor);
+
             Ok(writer)
+        }
+    }
+
+    pub fn is_ready_for_more_media_data(&self) -> bool {
+        unsafe { self.av_asset_writer_input.isReadyForMoreMediaData() }
+    }
+
+    pub fn start_writing(&mut self) -> Result<(), Box<dyn error::Error>> {
+        self.ensure_started_writing()
+    }
+
+    pub fn wait_for_writer_to_be_ready(&self) -> Result<(), Box<dyn error::Error>> {
+        // very lame to use sleep here... should be using KVO to monitor this property
+        unsafe {
+            const TIMEOUT: Duration = Duration::from_secs(1);
+            const WAIT_INTERVAL: Duration = Duration::from_millis(16); // a 60fps frame
+            let start = SystemTime::now();
+            while (self.av_asset_writer.status() == AVAssetWriterStatus::Unknown
+                || !self.is_ready_for_more_media_data())
+                && start + TIMEOUT > SystemTime::now()
+            {
+                sleep(WAIT_INTERVAL);
+            }
+            if !self.is_ready_for_more_media_data() {
+                return Err("Did not become ready for more media data.".into());
+            }
+            match self.av_asset_writer.status() {
+                AVAssetWriterStatus::Writing => Ok(()),
+                _ => Err("Failed to become ready to write.".into()),
+            }
+        }
+    }
+
+    fn ensure_started_writing(&mut self) -> Result<(), Box<dyn error::Error>> {
+        unsafe {
+            if !self.started_writing {
+                self.av_asset_writer.startWriting();
+                let start_pts = CMTime::new(0, self.timescale);
+                //                 eprintln!("start_pts {:?}", start_pts);
+                self.av_asset_writer.startSessionAtSourceTime(start_pts);
+                self.started_writing = true;
+            }
+            Ok(())
+        }
+    }
+
+    pub fn append_pixel_buffer(
+        &mut self,
+        pixel_buffer: PixelBuffer,
+    ) -> Result<(), Box<dyn error::Error>> {
+        unsafe {
+            self.ensure_started_writing()?;
+            //             assert!(self.is_ready_for_more_media_data());
+
+            let pts = CMTime::new(self.frame_index, self.timescale);
+            //             eprintln!("pts {:?}", pts);
+            self.av_asset_writer_input_pixel_buffer_adaptor
+                .appendPixelBuffer_withPresentationTime(&pixel_buffer.cv_image_buffer, pts);
+            self.frame_index += 1;
+            Ok(())
+        }
+    }
+
+    #[allow(deprecated)] // allow synchronous version of finishWriting()
+    pub fn finish_writing(&self) -> Result<(), Box<dyn error::Error>> {
+        unsafe {
+            self.av_asset_writer_input.markAsFinished();
+            match self.av_asset_writer.finishWriting() {
+                true => Ok(()),
+                false => Err("Failed to finish writing.".into()),
+            }
         }
     }
 }
@@ -248,10 +357,18 @@ trait AsNSString: AsRef<AnyObject> {
 
 impl AsNSString for CFString {}
 
-pub struct AssetWritterSettings {
-    path: path::PathBuf,
-    codec: String,
-    resolution: (i32, i32),
+pub enum Codec {
+    H264,
+}
+
+impl Codec {
+    fn as_string(&self) -> String {
+        unsafe {
+            match self {
+                Codec::H264 => AVVideoCodecTypeH264.unwrap().to_string(),
+            }
+        }
+    }
 }
 
 pub struct PixelBufferIterator<'a> {
@@ -481,6 +598,7 @@ impl Iterator for TransformBlockIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_get_transform_block_0() {
@@ -546,5 +664,35 @@ mod tests {
         }
 
         assert_eq!(count, 5540400);
+    }
+
+    #[test]
+    fn test_reader_to_writer_0() {
+        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let output_file = "/tmp/sample-5s.mp4";
+
+        let writer_settings = AssetWritterSettings {
+            path: path::PathBuf::from(output_file),
+            codec: Codec::H264,
+            resolution: reader.resolution().expect("Failed to get resolution."),
+            frame_rate: reader.frame_rate().expect("Failed to get frame rate"),
+        };
+        let _ = fs::remove_file(output_file);
+        let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
+        writer.start_writing().expect("Failed to start writing");
+
+        writer
+            .wait_for_writer_to_be_ready()
+            .expect("Failed to become ready before writing.");
+
+        for pixel_buffer in reader.pixel_buffer_iter() {
+            writer
+                .append_pixel_buffer(pixel_buffer)
+                .expect("Failed to append pixel buffer");
+            writer
+                .wait_for_writer_to_be_ready()
+                .expect("Failed to become ready after writing some pixels.");
+        }
+        writer.finish_writing().expect("Failed to finish writing.");
     }
 }
