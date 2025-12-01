@@ -463,23 +463,18 @@ pub mod pixel_buffer {
         }
     }
 
-    pub struct TransformBlockIterator {
+    // only square blocks supported
+    pub struct TransformBlockIterator<const BLOCK_LEN: usize> {
         pixel_buffer: PixelBuffer,
-        block_size: usize,
         pixel_component_type: PixelComponentType,
         current_block_index: usize,
         locked_pixel_buffer_memory: bool,
     }
 
-    impl TransformBlockIterator {
+    impl<const BLOCK_LEN: usize> TransformBlockIterator<BLOCK_LEN> {
         // only supports 4:2:0 YCbCr
-        pub fn new(
-            pixel_buffer: PixelBuffer,
-            block_size: usize,
-            pixel_component_type: PixelComponentType,
-        ) -> Self {
+        pub fn new(pixel_buffer: PixelBuffer, pixel_component_type: PixelComponentType) -> Self {
             Self {
-                block_size: block_size,
                 pixel_buffer: pixel_buffer,
                 pixel_component_type: pixel_component_type,
                 current_block_index: 0,
@@ -489,18 +484,17 @@ pub mod pixel_buffer {
 
         fn new_transform_block(
             &self,
-            block_size: usize, // only square blocks supported atm
             block_index: usize,
-        ) -> Result<TransformBlock, Box<dyn error::Error>> {
-            let mut block_ndarray = ndarray::Array2::zeros((block_size, block_size));
+        ) -> Result<TransformBlock<BLOCK_LEN>, Box<dyn error::Error>> {
+            let mut block_ndarray = ndarray::Array2::zeros((BLOCK_LEN, BLOCK_LEN));
 
             let plane_row_len = self.pixel_buffer.plane_row_len(self.pixel_component_type);
             let plane_height = self.pixel_buffer.plane_height(self.pixel_component_type);
             let plane_len = self.pixel_buffer.plane_data_len();
 
             assert!(plane_row_len * plane_height <= plane_len);
-            assert_eq!(plane_row_len % block_size, 0);
-            assert_eq!(plane_height % block_size, 0);
+            assert_eq!(plane_row_len % BLOCK_LEN, 0);
+            assert_eq!(plane_height % BLOCK_LEN, 0);
 
             // CbCr samples are interleaved.
             let interleave_offset = self.interleave_offset();
@@ -508,10 +502,10 @@ pub mod pixel_buffer {
 
             // always include pixels in the plane beyond width
             let plane_row_samples = plane_row_len / interleave_step;
-            let column_start = interleave_offset + (block_index * block_size) % plane_row_samples;
-            let column_end = column_start + block_size * interleave_step;
-            let row_start = block_size * ((block_index * block_size) / plane_row_samples);
-            let row_end = row_start + block_size;
+            let column_start = interleave_offset + (block_index * BLOCK_LEN) % plane_row_samples;
+            let column_end = column_start + BLOCK_LEN * interleave_step;
+            let row_start = BLOCK_LEN * ((block_index * BLOCK_LEN) / plane_row_samples);
+            let row_end = row_start + BLOCK_LEN;
 
             //         eprintln!(
             //             "{}x{} - {}x{}",
@@ -542,10 +536,9 @@ pub mod pixel_buffer {
                     }
                 }
             }
-            Ok(TransformBlock {
-                pixel_component_type: self.pixel_component_type,
-                values: block_ndarray,
-            })
+            let transform_block =
+                TransformBlock::<BLOCK_LEN>::new(self.pixel_component_type, block_ndarray);
+            Ok(transform_block)
         }
         fn ensure_pixel_buffer_address_is_locked(&mut self) {
             if !self.locked_pixel_buffer_memory {
@@ -580,7 +573,7 @@ pub mod pixel_buffer {
         }
 
         fn plane_indexes_per_block(&self) -> usize {
-            self.block_size * self.block_size * self.interleave_step()
+            BLOCK_LEN * BLOCK_LEN * self.interleave_step()
         }
         fn plane_indexes_per_pixel_buffer(&self) -> usize {
             self.pixel_buffer.plane_height(self.pixel_component_type)
@@ -588,8 +581,8 @@ pub mod pixel_buffer {
         }
     }
 
-    impl Iterator for TransformBlockIterator {
-        type Item = TransformBlock;
+    impl<const BLOCK_LEN: usize> Iterator for TransformBlockIterator<BLOCK_LEN> {
+        type Item = TransformBlock<BLOCK_LEN>;
 
         fn next(&mut self) -> Option<Self::Item> {
             let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
@@ -604,7 +597,7 @@ pub mod pixel_buffer {
             self.ensure_pixel_buffer_address_is_locked();
 
             let next_block = self
-                .new_transform_block(self.block_size, self.current_block_index)
+                .new_transform_block(self.current_block_index)
                 .expect("Failed to make new transform block."); // Internal error, should crash rather than returning None.
             self.current_block_index += 1;
             Some(next_block)
@@ -616,12 +609,61 @@ pub mod transform_block {
     use super::*;
     use pixel_buffer::*;
 
-    pub struct TransformBlock {
+    pub struct TransformBlock<const BLOCK_LEN: usize> {
         pub pixel_component_type: PixelComponentType,
         pub values: ndarray::Array2<u8>,
+        resolution: (usize, usize),
     }
 
-    impl TransformBlock {}
+    impl<const BLOCK_LEN: usize> TransformBlock<BLOCK_LEN> {
+        pub(super) fn new(
+            pixel_component_type: PixelComponentType,
+            values: ndarray::Array2<u8>,
+        ) -> Self {
+            // take ownership of values with a move
+            let resolution = values.dim();
+            TransformBlock {
+                pixel_component_type: pixel_component_type,
+                values: values,
+                resolution: resolution,
+            }
+        }
+
+        fn width(&self) -> usize {
+            self.resolution.0
+        }
+        fn height(&self) -> usize {
+            self.resolution.1
+        }
+    }
+
+    pub struct PixelBufferIterator<I, const BLOCK_LEN: usize> {
+        inner: I,
+    }
+
+    impl<I, const BLOCK_LEN: usize> PixelBufferIterator<I, BLOCK_LEN>
+    where
+        I: Iterator<Item = TransformBlock<BLOCK_LEN>>,
+    {
+        fn new(inner: I) -> Self {
+            PixelBufferIterator { inner: inner }
+        }
+    }
+
+    impl<I, const BLOCK_LEN: usize> Iterator for PixelBufferIterator<I, BLOCK_LEN>
+    where
+        I: Iterator<Item = TransformBlock<BLOCK_LEN>>,
+    {
+        type Item = PixelBuffer;
+        fn next(&mut self) -> Option<Self::Item> {
+            //
+            //             assert_eq!()
+            //
+            //             let num_macro_blocks =
+            //             let macro_blocks = self.inner.take(n);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -640,7 +682,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let mut iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
+        let mut iter = TransformBlockIterator::<8>::new(pixel_buffer, PixelComponentType::Y);
         let block = iter.next().expect("No transform blocks produced.");
 
         assert_eq!(block.values.len(), 64);
@@ -653,7 +695,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
+        let iter = TransformBlockIterator::<8>::new(pixel_buffer, PixelComponentType::Y);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
@@ -666,7 +708,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let iter = TransformBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cb);
+        let iter = TransformBlockIterator::<4>::new(pixel_buffer, PixelComponentType::Cb);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
@@ -679,7 +721,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let iter = TransformBlockIterator::new(pixel_buffer, 4, PixelComponentType::Cr);
+        let iter = TransformBlockIterator::<4>::new(pixel_buffer, PixelComponentType::Cr);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
@@ -692,7 +734,7 @@ mod tests {
 
         let mut count = 0;
         for pixel_buffer in reader.pixel_buffer_iter() {
-            let iter = TransformBlockIterator::new(pixel_buffer, 8, PixelComponentType::Y);
+            let iter = TransformBlockIterator::<8>::new(pixel_buffer, PixelComponentType::Y);
             count = iter.fold(count, |acc, _| acc + 1);
         }
 
