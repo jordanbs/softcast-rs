@@ -43,305 +43,345 @@ use objc2_core_video::{
 use std::thread::sleep;
 use std::time::{Duration, SystemTime};
 
-pub struct AssetReader {
-    path: path::PathBuf,
-    loaded_reader: Option<LoadedAssetReader>,
-}
+pub mod asset_reader {
+    use super::*;
+    use pixel_buffer::*;
 
-impl AssetReader {
-    pub fn new(file_path: &str) -> Self {
-        AssetReader {
-            path: path::PathBuf::from(file_path),
-            loaded_reader: None,
-        }
+    pub struct AssetReader {
+        path: path::PathBuf,
+        loaded_reader: Option<LoadedAssetReader>,
     }
 
-    fn loaded_reader(&mut self) -> Result<LoadedAssetReader, Box<dyn error::Error>> {
-        if self.loaded_reader.is_none() {
-            self.loaded_reader = Some(LoadedAssetReader::load(self.path.as_path())?)
-        }
-        Ok(self.loaded_reader.as_ref().unwrap().clone())
-    }
-
-    fn av_asset_reader(&mut self) -> Result<Retained<AVAssetReader>, Box<dyn error::Error>> {
-        Ok(self.loaded_reader()?.av_asset_reader)
-    }
-
-    fn av_asset_output(
-        &mut self,
-    ) -> Result<Retained<AVAssetReaderTrackOutput>, Box<dyn error::Error>> {
-        Ok(self.loaded_reader()?.av_asset_output)
-    }
-
-    #[allow(deprecated)] // blocking i/o is expected here
-    fn get_next_pixel_buffer(&mut self) -> Result<Option<PixelBuffer>, Box<dyn error::Error>> {
-        let av_reader = self.av_asset_reader()?;
-        let av_output = self.av_asset_output()?;
-
-        unsafe {
-            // copyNextSampleBuffer returns the next CMSampleBufferRef or nil at EOF.
-            if let Some(sample_buffer) = av_output.copyNextSampleBuffer() {
-                let cv_pixel_buffer = sample_buffer
-                    .image_buffer()
-                    .ok_or("Failed to get CVPixelBuffer.")?;
-
-                let pixel_buffer = PixelBuffer::new(cv_pixel_buffer);
-                return Ok(Some(pixel_buffer));
-            }
-            // No sample buffer, see if we've reached the end of file.
-            match av_reader.status() {
-                AVAssetReaderStatus::Completed => Ok(None),
-                status => Err(format!("Reader stopped with status {:?}", status).into()),
+    impl AssetReader {
+        pub fn new(file_path: &str) -> Self {
+            AssetReader {
+                path: path::PathBuf::from(file_path),
+                loaded_reader: None,
             }
         }
-    }
 
-    pub fn pixel_buffer_iter(&mut self) -> PixelBufferIterator {
-        PixelBufferIterator::new(self)
-    }
-
-    pub fn resolution(&mut self) -> Result<(i32, i32), Box<dyn error::Error>> {
-        self.loaded_reader()?.resolution()
-    }
-    pub fn frame_rate(&mut self) -> Result<f64, Box<dyn error::Error>> {
-        self.loaded_reader()?.frame_rate()
-    }
-}
-
-#[derive(Clone)]
-struct LoadedAssetReader {
-    av_asset_reader: Retained<AVAssetReader>,
-    av_asset_output: Retained<AVAssetReaderTrackOutput>,
-    av_asset_track: Retained<AVAssetTrack>,
-}
-
-impl LoadedAssetReader {
-    #[allow(deprecated)] // blocking i/o is expected here
-    fn load(path: &path::Path) -> Result<Self, Box<dyn error::Error>> {
-        let path_bytes = path.as_os_str().as_encoded_bytes();
-        let path_str = std::str::from_utf8(path_bytes)?;
-        let ns_path = NSString::from_str(path_str);
-        let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
-
-        unsafe {
-            // Reader config.
-            let pixel_format_key: &NSString =
-                &*(kCVPixelBufferPixelFormatTypeKey as *const CFString as *const NSString);
-            let pixel_format_value =
-                NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
-
-            let video_settings: Retained<NSDictionary<NSString, AnyObject>> =
-                NSDictionary::from_slices::<NSString>(
-                    &[pixel_format_key.as_ref()],
-                    &[pixel_format_value.as_ref()],
-                );
-
-            // Asset / track / reader / output setup.
-            let asset: Retained<AVURLAsset> = AVURLAsset::assetWithURL(&url);
-
-            // Get all video tracks.
-            let tracks: Retained<NSArray<AVAssetTrack>> =
-                asset.tracksWithMediaType(&AVMediaTypeVideo.unwrap());
-
-            let track: Retained<AVAssetTrack> =
-                tracks.firstObject().ok_or("File has no video tracks.")?;
-
-            let reader: Retained<AVAssetReader> =
-                AVAssetReader::assetReaderWithAsset_error(&asset as &AVAsset)?;
-
-            // Attach a track output that will give us CVPixelBuffer-backed CMSampleBuffers.
-            let output: Retained<AVAssetReaderTrackOutput> =
-                AVAssetReaderTrackOutput::assetReaderTrackOutputWithTrack_outputSettings(
-                    &track,
-                    Some(&video_settings),
-                );
-
-            reader.addOutput(&output as &AVAssetReaderOutput);
-
-            if !reader.startReading() {
-                return Err("startReading() failed".into());
+        fn loaded_reader(&mut self) -> Result<LoadedAssetReader, Box<dyn error::Error>> {
+            if self.loaded_reader.is_none() {
+                self.loaded_reader = Some(LoadedAssetReader::load(self.path.as_path())?)
             }
+            Ok(self.loaded_reader.as_ref().unwrap().clone())
+        }
 
-            Ok(LoadedAssetReader {
-                av_asset_reader: reader,
-                av_asset_output: output,
-                av_asset_track: track,
-            })
+        fn av_asset_reader(&mut self) -> Result<Retained<AVAssetReader>, Box<dyn error::Error>> {
+            Ok(self.loaded_reader()?.av_asset_reader)
+        }
+
+        fn av_asset_output(
+            &mut self,
+        ) -> Result<Retained<AVAssetReaderTrackOutput>, Box<dyn error::Error>> {
+            Ok(self.loaded_reader()?.av_asset_output)
+        }
+
+        #[allow(deprecated)] // blocking i/o is expected here
+        pub(super) fn get_next_pixel_buffer(
+            &mut self,
+        ) -> Result<Option<PixelBuffer>, Box<dyn error::Error>> {
+            let av_reader = self.av_asset_reader()?;
+            let av_output = self.av_asset_output()?;
+
+            unsafe {
+                // copyNextSampleBuffer returns the next CMSampleBufferRef or nil at EOF.
+                if let Some(sample_buffer) = av_output.copyNextSampleBuffer() {
+                    let cv_pixel_buffer = sample_buffer
+                        .image_buffer()
+                        .ok_or("Failed to get CVPixelBuffer.")?;
+
+                    let pixel_buffer = PixelBuffer::new(cv_pixel_buffer);
+                    return Ok(Some(pixel_buffer));
+                }
+                // No sample buffer, see if we've reached the end of file.
+                match av_reader.status() {
+                    AVAssetReaderStatus::Completed => Ok(None),
+                    status => Err(format!("Reader stopped with status {:?}", status).into()),
+                }
+            }
+        }
+
+        pub fn pixel_buffer_iter(&mut self) -> PixelBufferIterator {
+            PixelBufferIterator::new(self)
+        }
+
+        pub fn resolution(&mut self) -> Result<(i32, i32), Box<dyn error::Error>> {
+            self.loaded_reader()?.resolution()
+        }
+        pub fn frame_rate(&mut self) -> Result<f64, Box<dyn error::Error>> {
+            self.loaded_reader()?.frame_rate()
         }
     }
-    pub fn resolution(&mut self) -> Result<(i32, i32), Box<dyn error::Error>> {
-        unsafe {
-            let natural_size = self.av_asset_track.naturalSize();
-            Ok((natural_size.width as i32, natural_size.height as i32))
+
+    #[derive(Clone)]
+    struct LoadedAssetReader {
+        av_asset_reader: Retained<AVAssetReader>,
+        av_asset_output: Retained<AVAssetReaderTrackOutput>,
+        av_asset_track: Retained<AVAssetTrack>,
+    }
+
+    impl LoadedAssetReader {
+        #[allow(deprecated)] // blocking i/o is expected here
+        fn load(path: &path::Path) -> Result<Self, Box<dyn error::Error>> {
+            let path_bytes = path.as_os_str().as_encoded_bytes();
+            let path_str = std::str::from_utf8(path_bytes)?;
+            let ns_path = NSString::from_str(path_str);
+            let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
+
+            unsafe {
+                // Reader config.
+                let pixel_format_key: &NSString =
+                    &*(kCVPixelBufferPixelFormatTypeKey as *const CFString as *const NSString);
+                let pixel_format_value =
+                    NSNumber::new_u32(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+
+                let video_settings: Retained<NSDictionary<NSString, AnyObject>> =
+                    NSDictionary::from_slices::<NSString>(
+                        &[pixel_format_key.as_ref()],
+                        &[pixel_format_value.as_ref()],
+                    );
+
+                // Asset / track / reader / output setup.
+                let asset: Retained<AVURLAsset> = AVURLAsset::assetWithURL(&url);
+
+                // Get all video tracks.
+                let tracks: Retained<NSArray<AVAssetTrack>> =
+                    asset.tracksWithMediaType(&AVMediaTypeVideo.unwrap());
+
+                let track: Retained<AVAssetTrack> =
+                    tracks.firstObject().ok_or("File has no video tracks.")?;
+
+                let reader: Retained<AVAssetReader> =
+                    AVAssetReader::assetReaderWithAsset_error(&asset as &AVAsset)?;
+
+                // Attach a track output that will give us CVPixelBuffer-backed CMSampleBuffers.
+                let output: Retained<AVAssetReaderTrackOutput> =
+                    AVAssetReaderTrackOutput::assetReaderTrackOutputWithTrack_outputSettings(
+                        &track,
+                        Some(&video_settings),
+                    );
+
+                reader.addOutput(&output as &AVAssetReaderOutput);
+
+                if !reader.startReading() {
+                    return Err("startReading() failed".into());
+                }
+
+                Ok(LoadedAssetReader {
+                    av_asset_reader: reader,
+                    av_asset_output: output,
+                    av_asset_track: track,
+                })
+            }
+        }
+        pub fn resolution(&mut self) -> Result<(i32, i32), Box<dyn error::Error>> {
+            unsafe {
+                let natural_size = self.av_asset_track.naturalSize();
+                Ok((natural_size.width as i32, natural_size.height as i32))
+            }
+        }
+        pub fn frame_rate(&mut self) -> Result<f64, Box<dyn error::Error>> {
+            unsafe {
+                let frame_rate: f64 = self.av_asset_track.nominalFrameRate().into();
+                Ok(frame_rate)
+            }
         }
     }
-    pub fn frame_rate(&mut self) -> Result<f64, Box<dyn error::Error>> {
-        unsafe {
-            let frame_rate: f64 = self.av_asset_track.nominalFrameRate().into();
-            Ok(frame_rate)
+
+    pub struct PixelBufferIterator<'a> {
+        asset_reader: &'a mut AssetReader,
+    }
+
+    impl<'a> PixelBufferIterator<'a> {
+        fn new(asset_reader: &'a mut AssetReader) -> Self {
+            PixelBufferIterator {
+                asset_reader: asset_reader,
+            }
+        }
+    }
+
+    impl<'a> Iterator for PixelBufferIterator<'a> {
+        type Item = PixelBuffer;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.asset_reader
+                .get_next_pixel_buffer()
+                .expect("Failed to get next pixel buffer.")
         }
     }
 }
 
-pub struct AssetWritterSettings {
-    path: path::PathBuf,
-    codec: Codec,
-    resolution: (i32, i32),
-    frame_rate: f64,
-}
+pub mod asset_writer {
+    use super::*;
+    use pixel_buffer::*;
 
-pub struct AssetWriter {
-    settings: AssetWritterSettings,
+    pub struct AssetWritterSettings {
+        pub path: path::PathBuf,
+        pub codec: Codec,
+        pub resolution: (i32, i32),
+        pub frame_rate: f64,
+    }
 
-    av_asset_writer: Retained<AVAssetWriter>,
-    av_asset_writer_input: Retained<AVAssetWriterInput>,
-    av_asset_writer_input_pixel_buffer_adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
-
-    frame_index: i64,
-    started_writing: bool,
-    timescale: i32,
-}
-
-impl AssetWriter {
-    fn new(
-        settings: AssetWritterSettings,
+    pub struct AssetWriter {
+        //         settings: AssetWritterSettings,
         av_asset_writer: Retained<AVAssetWriter>,
         av_asset_writer_input: Retained<AVAssetWriterInput>,
         av_asset_writer_input_pixel_buffer_adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
-    ) -> Self {
-        let tiemscale = settings.frame_rate as i32;
-        AssetWriter {
-            settings: settings,
-            av_asset_writer: av_asset_writer,
-            av_asset_writer_input: av_asset_writer_input,
-            av_asset_writer_input_pixel_buffer_adaptor: av_asset_writer_input_pixel_buffer_adaptor,
-            frame_index: 0,
-            started_writing: false,
-            timescale: tiemscale as i32,
-        }
+
+        frame_index: i64,
+        started_writing: bool,
+        timescale: i32,
     }
 
-    pub fn load_new(settings: AssetWritterSettings) -> Result<Self, Box<dyn error::Error>> {
-        let path_bytes = settings.path.as_path().as_os_str().as_encoded_bytes();
-        let ns_path = NSString::from_str(std::str::from_utf8(path_bytes)?);
-        let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
+    impl AssetWriter {
+        fn new(
+            settings: AssetWritterSettings,
+            av_asset_writer: Retained<AVAssetWriter>,
+            av_asset_writer_input: Retained<AVAssetWriterInput>,
+            av_asset_writer_input_pixel_buffer_adaptor: Retained<
+                AVAssetWriterInputPixelBufferAdaptor,
+            >,
+        ) -> Self {
+            let tiemscale = settings.frame_rate as i32;
+            AssetWriter {
+                //                 settings: settings,
+                av_asset_writer: av_asset_writer,
+                av_asset_writer_input: av_asset_writer_input,
+                av_asset_writer_input_pixel_buffer_adaptor:
+                    av_asset_writer_input_pixel_buffer_adaptor,
+                frame_index: 0,
+                started_writing: false,
+                timescale: tiemscale as i32,
+            }
+        }
 
-        unsafe {
-            let writer =
-                AVAssetWriter::assetWriterWithURL_fileType_error(&url, &AVFileTypeMPEG4.unwrap())?;
+        pub fn load_new(settings: AssetWritterSettings) -> Result<Self, Box<dyn error::Error>> {
+            let path_bytes = settings.path.as_path().as_os_str().as_encoded_bytes();
+            let ns_path = NSString::from_str(std::str::from_utf8(path_bytes)?);
+            let url = NSURL::fileURLWithPath_isDirectory(&ns_path, false);
 
-            let codec_value = NSString::from_str(&settings.codec.as_string());
-            let width_value = NSNumber::new_i32(settings.resolution.0);
-            let height_value = NSNumber::new_i32(settings.resolution.1);
+            unsafe {
+                let writer = AVAssetWriter::assetWriterWithURL_fileType_error(
+                    &url,
+                    &AVFileTypeMPEG4.unwrap(),
+                )?;
 
-            let input_settings_dict: Retained<NSMutableDictionary<NSString, AnyObject>> =
-                NSMutableDictionary::new();
-            input_settings_dict.insert(AVVideoCodecKey.unwrap(), &codec_value);
-            input_settings_dict.insert(AVVideoWidthKey.unwrap(), &width_value);
-            input_settings_dict.insert(AVVideoHeightKey.unwrap(), &height_value);
+                let codec_value = NSString::from_str(&settings.codec.as_string());
+                let width_value = NSNumber::new_i32(settings.resolution.0);
+                let height_value = NSNumber::new_i32(settings.resolution.1);
 
-            let input = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
-                &AVMediaTypeVideo.unwrap(),
-                Some(&input_settings_dict),
-            );
+                let input_settings_dict: Retained<NSMutableDictionary<NSString, AnyObject>> =
+                    NSMutableDictionary::new();
+                input_settings_dict.insert(AVVideoCodecKey.unwrap(), &codec_value);
+                input_settings_dict.insert(AVVideoWidthKey.unwrap(), &width_value);
+                input_settings_dict.insert(AVVideoHeightKey.unwrap(), &height_value);
 
-            let pixel_buffer_settings_dict: Retained<NSMutableDictionary<NSString, AnyObject>> =
-                NSMutableDictionary::new();
+                let input = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
+                    &AVMediaTypeVideo.unwrap(),
+                    Some(&input_settings_dict),
+                );
 
-            let pixel_format = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+                let pixel_buffer_settings_dict: Retained<NSMutableDictionary<NSString, AnyObject>> =
+                    NSMutableDictionary::new();
 
-            let pixel_format_num = NSNumber::new_u32(pixel_format);
+                let pixel_format = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
 
-            pixel_buffer_settings_dict.insert(
-                kCVPixelBufferPixelFormatTypeKey.as_nsstring(),
-                &pixel_format_num,
-            );
-            pixel_buffer_settings_dict.insert(kCVPixelBufferWidthKey.as_nsstring(), &width_value);
-            pixel_buffer_settings_dict.insert(kCVPixelBufferHeightKey.as_nsstring(), &height_value);
+                let pixel_format_num = NSNumber::new_u32(pixel_format);
 
-            let adaptor =
+                pixel_buffer_settings_dict.insert(
+                    kCVPixelBufferPixelFormatTypeKey.as_nsstring(),
+                    &pixel_format_num,
+                );
+                pixel_buffer_settings_dict
+                    .insert(kCVPixelBufferWidthKey.as_nsstring(), &width_value);
+                pixel_buffer_settings_dict
+                    .insert(kCVPixelBufferHeightKey.as_nsstring(), &height_value);
+
+                let adaptor =
                 AVAssetWriterInputPixelBufferAdaptor::
                     assetWriterInputPixelBufferAdaptorWithAssetWriterInput_sourcePixelBufferAttributes(
                         &input,
                         Some(&pixel_buffer_settings_dict)
                     );
 
-            input.setExpectsMediaDataInRealTime(false);
-            writer.addInput(&input);
+                input.setExpectsMediaDataInRealTime(false);
+                writer.addInput(&input);
 
-            let writer = AssetWriter::new(settings, writer, input, adaptor);
+                let writer = AssetWriter::new(settings, writer, input, adaptor);
 
-            Ok(writer)
-        }
-    }
-
-    pub fn is_ready_for_more_media_data(&self) -> bool {
-        unsafe { self.av_asset_writer_input.isReadyForMoreMediaData() }
-    }
-
-    pub fn start_writing(&mut self) -> Result<(), Box<dyn error::Error>> {
-        self.ensure_started_writing()
-    }
-
-    pub fn wait_for_writer_to_be_ready(&self) -> Result<(), Box<dyn error::Error>> {
-        // very lame to use sleep here... should be using KVO to monitor this property
-        unsafe {
-            const TIMEOUT: Duration = Duration::from_secs(1);
-            const WAIT_INTERVAL: Duration = Duration::from_millis(16); // a 60fps frame
-            let start = SystemTime::now();
-            while (self.av_asset_writer.status() == AVAssetWriterStatus::Unknown
-                || !self.is_ready_for_more_media_data())
-                && start + TIMEOUT > SystemTime::now()
-            {
-                sleep(WAIT_INTERVAL);
-            }
-            if !self.is_ready_for_more_media_data() {
-                return Err("Did not become ready for more media data.".into());
-            }
-            match self.av_asset_writer.status() {
-                AVAssetWriterStatus::Writing => Ok(()),
-                _ => Err("Failed to become ready to write.".into()),
+                Ok(writer)
             }
         }
-    }
 
-    fn ensure_started_writing(&mut self) -> Result<(), Box<dyn error::Error>> {
-        unsafe {
-            if !self.started_writing {
-                self.av_asset_writer.startWriting();
-                let start_pts = CMTime::new(0, self.timescale);
-                //                 eprintln!("start_pts {:?}", start_pts);
-                self.av_asset_writer.startSessionAtSourceTime(start_pts);
-                self.started_writing = true;
+        pub fn is_ready_for_more_media_data(&self) -> bool {
+            unsafe { self.av_asset_writer_input.isReadyForMoreMediaData() }
+        }
+
+        pub fn start_writing(&mut self) -> Result<(), Box<dyn error::Error>> {
+            self.ensure_started_writing()
+        }
+
+        pub fn wait_for_writer_to_be_ready(&self) -> Result<(), Box<dyn error::Error>> {
+            // TODO: very lame to use sleep here... should be using KVO to monitor this property
+            // TODO: use -requestMediaDataWhenReadyOnQueue:usingBlock:
+            unsafe {
+                const TIMEOUT: Duration = Duration::from_secs(1);
+                const WAIT_INTERVAL: Duration = Duration::from_millis(16); // a 60fps frame
+                let start = SystemTime::now();
+                while (self.av_asset_writer.status() == AVAssetWriterStatus::Unknown
+                    || !self.is_ready_for_more_media_data())
+                    && start + TIMEOUT > SystemTime::now()
+                {
+                    sleep(WAIT_INTERVAL);
+                }
+                if !self.is_ready_for_more_media_data() {
+                    return Err("Did not become ready for more media data.".into());
+                }
+                match self.av_asset_writer.status() {
+                    AVAssetWriterStatus::Writing => Ok(()),
+                    _ => Err("Failed to become ready to write.".into()),
+                }
             }
-            Ok(())
         }
-    }
 
-    pub fn append_pixel_buffer(
-        &mut self,
-        pixel_buffer: PixelBuffer,
-    ) -> Result<(), Box<dyn error::Error>> {
-        unsafe {
-            self.ensure_started_writing()?;
-            //             assert!(self.is_ready_for_more_media_data());
-
-            let pts = CMTime::new(self.frame_index, self.timescale);
-            //             eprintln!("pts {:?}", pts);
-            self.av_asset_writer_input_pixel_buffer_adaptor
-                .appendPixelBuffer_withPresentationTime(&pixel_buffer.cv_image_buffer, pts);
-            self.frame_index += 1;
-            Ok(())
+        fn ensure_started_writing(&mut self) -> Result<(), Box<dyn error::Error>> {
+            unsafe {
+                if !self.started_writing {
+                    self.av_asset_writer.startWriting();
+                    let start_pts = CMTime::new(0, self.timescale);
+                    //                 eprintln!("start_pts {:?}", start_pts);
+                    self.av_asset_writer.startSessionAtSourceTime(start_pts);
+                    self.started_writing = true;
+                }
+                Ok(())
+            }
         }
-    }
 
-    #[allow(deprecated)] // allow synchronous version of finishWriting()
-    pub fn finish_writing(&self) -> Result<(), Box<dyn error::Error>> {
-        unsafe {
-            self.av_asset_writer_input.markAsFinished();
-            match self.av_asset_writer.finishWriting() {
-                true => Ok(()),
-                false => Err("Failed to finish writing.".into()),
+        pub fn append_pixel_buffer(
+            &mut self,
+            pixel_buffer: PixelBuffer,
+        ) -> Result<(), Box<dyn error::Error>> {
+            unsafe {
+                self.ensure_started_writing()?;
+                //             assert!(self.is_ready_for_more_media_data());
+
+                let pts = CMTime::new(self.frame_index, self.timescale);
+                //             eprintln!("pts {:?}", pts);
+                self.av_asset_writer_input_pixel_buffer_adaptor
+                    .appendPixelBuffer_withPresentationTime(&pixel_buffer.cv_image_buffer, pts);
+                self.frame_index += 1;
+                Ok(())
+            }
+        }
+
+        #[allow(deprecated)] // allow synchronous version of finishWriting()
+        pub fn finish_writing(&self) -> Result<(), Box<dyn error::Error>> {
+            unsafe {
+                self.av_asset_writer_input.markAsFinished();
+                match self.av_asset_writer.finishWriting() {
+                    true => Ok(()),
+                    false => Err("Failed to finish writing.".into()),
+                }
             }
         }
     }
@@ -371,232 +411,225 @@ impl Codec {
     }
 }
 
-pub struct PixelBufferIterator<'a> {
-    asset_reader: &'a mut AssetReader,
-}
+pub mod pixel_buffer {
+    use super::*;
+    use transform_block::*;
 
-impl<'a> PixelBufferIterator<'a> {
-    fn new(asset_reader: &'a mut AssetReader) -> Self {
-        PixelBufferIterator {
-            asset_reader: asset_reader,
+    // Holds a single frame
+    #[derive(Debug)]
+    pub struct PixelBuffer {
+        pub(super) cv_image_buffer: CFRetained<CVImageBuffer>,
+    }
+
+    impl PixelBuffer {
+        pub fn new(cv_image_buffer: CFRetained<CVImageBuffer>) -> Self {
+            assert!(CVPixelBufferIsPlanar(&cv_image_buffer));
+
+            PixelBuffer {
+                cv_image_buffer: cv_image_buffer,
+            }
+        }
+
+        // The following functions are safe to call without locking the base address of CVPixelBuffer.
+
+        fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize {
+            CVPixelBufferGetBytesPerRowOfPlane(
+                &self.cv_image_buffer,
+                pixel_component_type.plane_index(),
+            ) as usize
+        }
+        fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize {
+            CVPixelBufferGetHeightOfPlane(&self.cv_image_buffer, pixel_component_type.plane_index())
+        }
+        fn plane_data_len(&self) -> usize {
+            CVPixelBufferGetDataSize(&self.cv_image_buffer)
         }
     }
-}
 
-impl<'a> Iterator for PixelBufferIterator<'a> {
-    type Item = PixelBuffer;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.asset_reader
-            .get_next_pixel_buffer()
-            .expect("Failed to get next pixel buffer.")
+    #[derive(Clone, Copy)]
+    pub enum PixelComponentType {
+        Y,
+        Cb,
+        Cr,
     }
-}
 
-// Holds a single frame
-#[derive(Debug)]
-pub struct PixelBuffer {
-    cv_image_buffer: CFRetained<CVImageBuffer>,
-}
-
-impl PixelBuffer {
-    pub fn new(cv_image_buffer: CFRetained<CVImageBuffer>) -> Self {
-        assert!(CVPixelBufferIsPlanar(&cv_image_buffer));
-
-        PixelBuffer {
-            cv_image_buffer: cv_image_buffer,
+    impl PixelComponentType {
+        fn plane_index(&self) -> usize {
+            match self {
+                Self::Y => 0,
+                Self::Cb => 1,
+                Self::Cr => 1,
+            }
         }
     }
 
-    // The following functions are safe to call without locking the base address of CVPixelBuffer.
-
-    fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize {
-        CVPixelBufferGetBytesPerRowOfPlane(
-            &self.cv_image_buffer,
-            pixel_component_type.plane_index(),
-        ) as usize
-    }
-    fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize {
-        CVPixelBufferGetHeightOfPlane(&self.cv_image_buffer, pixel_component_type.plane_index())
-    }
-    fn plane_data_len(&self) -> usize {
-        CVPixelBufferGetDataSize(&self.cv_image_buffer)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum PixelComponentType {
-    Y,
-    Cb,
-    Cr,
-}
-
-impl PixelComponentType {
-    fn plane_index(&self) -> usize {
-        match self {
-            Self::Y => 0,
-            Self::Cb => 1,
-            Self::Cr => 1,
-        }
-    }
-}
-
-pub struct TransformBlock {
-    pixel_component_type: PixelComponentType,
-    values: ndarray::Array2<u8>,
-}
-
-impl TransformBlock {}
-
-pub struct TransformBlockIterator {
-    pixel_buffer: PixelBuffer,
-    block_size: usize,
-    pixel_component_type: PixelComponentType,
-    current_block_index: usize,
-    locked_pixel_buffer_memory: bool,
-}
-
-impl TransformBlockIterator {
-    // only supports 4:2:0 YCbCr
-    pub fn new(
+    pub struct TransformBlockIterator {
         pixel_buffer: PixelBuffer,
         block_size: usize,
         pixel_component_type: PixelComponentType,
-    ) -> Self {
-        Self {
-            block_size: block_size,
-            pixel_buffer: pixel_buffer,
-            pixel_component_type: pixel_component_type,
-            current_block_index: 0,
-            locked_pixel_buffer_memory: false,
-        }
+        current_block_index: usize,
+        locked_pixel_buffer_memory: bool,
     }
 
-    fn new_transform_block(
-        &self,
-        block_size: usize, // only square blocks supported atm
-        block_index: usize,
-    ) -> Result<TransformBlock, Box<dyn error::Error>> {
-        let mut block_ndarray = ndarray::Array2::zeros((block_size, block_size));
-
-        let plane_row_len = self.pixel_buffer.plane_row_len(self.pixel_component_type);
-        let plane_height = self.pixel_buffer.plane_height(self.pixel_component_type);
-        let plane_len = self.pixel_buffer.plane_data_len();
-
-        assert!(plane_row_len * plane_height <= plane_len);
-        assert_eq!(plane_row_len % block_size, 0);
-        assert_eq!(plane_height % block_size, 0);
-
-        // CbCr samples are interleaved.
-        let interleave_offset = self.interleave_offset();
-        let interleave_step = self.interleave_step();
-
-        // always include pixels in the plane beyond width
-        let plane_row_samples = plane_row_len / interleave_step;
-        let column_start = interleave_offset + (block_index * block_size) % plane_row_samples;
-        let column_end = column_start + block_size * interleave_step;
-        let row_start = block_size * ((block_index * block_size) / plane_row_samples);
-        let row_end = row_start + block_size;
-
-        //         eprintln!(
-        //             "{}x{} - {}x{}",
-        //             column_start, row_start, column_end, row_end
-        //         );
-
-        assert!(column_end <= plane_row_len);
-        assert!(row_end <= plane_height);
-
-        unsafe {
-            let plane_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.pixel_buffer.cv_image_buffer,
-                self.pixel_component_type.plane_index(),
-            ) as *const u8;
-
-            if plane_ptr.is_null() {
-                return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
+    impl TransformBlockIterator {
+        // only supports 4:2:0 YCbCr
+        pub fn new(
+            pixel_buffer: PixelBuffer,
+            block_size: usize,
+            pixel_component_type: PixelComponentType,
+        ) -> Self {
+            Self {
+                block_size: block_size,
+                pixel_buffer: pixel_buffer,
+                pixel_component_type: pixel_component_type,
+                current_block_index: 0,
+                locked_pixel_buffer_memory: false,
             }
+        }
 
-            let plane_slice = std::slice::from_raw_parts(plane_ptr, plane_len);
+        fn new_transform_block(
+            &self,
+            block_size: usize, // only square blocks supported atm
+            block_index: usize,
+        ) -> Result<TransformBlock, Box<dyn error::Error>> {
+            let mut block_ndarray = ndarray::Array2::zeros((block_size, block_size));
 
-            for plane_row in row_start..row_end {
-                for plane_column in (column_start..column_end).step_by(interleave_step) {
-                    let plane_idx = plane_column + plane_row * plane_row_len;
-                    let block_column = (plane_column - column_start) / interleave_step;
-                    let block_row = plane_row - row_start;
-                    block_ndarray[(block_column, block_row)] = plane_slice[plane_idx];
+            let plane_row_len = self.pixel_buffer.plane_row_len(self.pixel_component_type);
+            let plane_height = self.pixel_buffer.plane_height(self.pixel_component_type);
+            let plane_len = self.pixel_buffer.plane_data_len();
+
+            assert!(plane_row_len * plane_height <= plane_len);
+            assert_eq!(plane_row_len % block_size, 0);
+            assert_eq!(plane_height % block_size, 0);
+
+            // CbCr samples are interleaved.
+            let interleave_offset = self.interleave_offset();
+            let interleave_step = self.interleave_step();
+
+            // always include pixels in the plane beyond width
+            let plane_row_samples = plane_row_len / interleave_step;
+            let column_start = interleave_offset + (block_index * block_size) % plane_row_samples;
+            let column_end = column_start + block_size * interleave_step;
+            let row_start = block_size * ((block_index * block_size) / plane_row_samples);
+            let row_end = row_start + block_size;
+
+            //         eprintln!(
+            //             "{}x{} - {}x{}",
+            //             column_start, row_start, column_end, row_end
+            //         );
+
+            assert!(column_end <= plane_row_len);
+            assert!(row_end <= plane_height);
+
+            unsafe {
+                let plane_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &self.pixel_buffer.cv_image_buffer,
+                    self.pixel_component_type.plane_index(),
+                ) as *const u8;
+
+                if plane_ptr.is_null() {
+                    return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
+                }
+
+                let plane_slice = std::slice::from_raw_parts(plane_ptr, plane_len);
+
+                for plane_row in row_start..row_end {
+                    for plane_column in (column_start..column_end).step_by(interleave_step) {
+                        let plane_idx = plane_column + plane_row * plane_row_len;
+                        let block_column = (plane_column - column_start) / interleave_step;
+                        let block_row = plane_row - row_start;
+                        block_ndarray[(block_column, block_row)] = plane_slice[plane_idx];
+                    }
+                }
+            }
+            Ok(TransformBlock {
+                pixel_component_type: self.pixel_component_type,
+                values: block_ndarray,
+            })
+        }
+        fn ensure_pixel_buffer_address_is_locked(&mut self) {
+            if !self.locked_pixel_buffer_memory {
+                unsafe {
+                    let flags = CVPixelBufferLockFlags::ReadOnly;
+                    CVPixelBufferLockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+                    self.locked_pixel_buffer_memory = true;
                 }
             }
         }
-        Ok(TransformBlock {
-            pixel_component_type: self.pixel_component_type,
-            values: block_ndarray,
-        })
-    }
-    fn ensure_pixel_buffer_address_is_locked(&mut self) {
-        if !self.locked_pixel_buffer_memory {
-            unsafe {
-                let flags = CVPixelBufferLockFlags::ReadOnly;
-                CVPixelBufferLockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
-                self.locked_pixel_buffer_memory = true;
+        fn ensure_pixel_buffer_address_is_unlocked(&mut self) {
+            if self.locked_pixel_buffer_memory {
+                unsafe {
+                    let flags = CVPixelBufferLockFlags::ReadOnly;
+                    CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+                }
+                self.locked_pixel_buffer_memory = false;
             }
         }
-    }
-    fn ensure_pixel_buffer_address_is_unlocked(&mut self) {
-        if self.locked_pixel_buffer_memory {
-            unsafe {
-                let flags = CVPixelBufferLockFlags::ReadOnly;
-                CVPixelBufferUnlockBaseAddress(&self.pixel_buffer.cv_image_buffer, flags);
+
+        fn interleave_offset(&self) -> usize {
+            match self.pixel_component_type {
+                PixelComponentType::Y | PixelComponentType::Cb => 0,
+                PixelComponentType::Cr => 1,
             }
-            self.locked_pixel_buffer_memory = false;
+        }
+        fn interleave_step(&self) -> usize {
+            match self.pixel_component_type {
+                PixelComponentType::Y => 1,
+                PixelComponentType::Cb | PixelComponentType::Cr => 2,
+            }
+        }
+
+        fn plane_indexes_per_block(&self) -> usize {
+            self.block_size * self.block_size * self.interleave_step()
+        }
+        fn plane_indexes_per_pixel_buffer(&self) -> usize {
+            self.pixel_buffer.plane_height(self.pixel_component_type)
+                * self.pixel_buffer.plane_row_len(self.pixel_component_type)
         }
     }
 
-    fn interleave_offset(&self) -> usize {
-        match self.pixel_component_type {
-            PixelComponentType::Y | PixelComponentType::Cb => 0,
-            PixelComponentType::Cr => 1,
-        }
-    }
-    fn interleave_step(&self) -> usize {
-        match self.pixel_component_type {
-            PixelComponentType::Y => 1,
-            PixelComponentType::Cb | PixelComponentType::Cr => 2,
-        }
-    }
+    impl Iterator for TransformBlockIterator {
+        type Item = TransformBlock;
 
-    fn plane_indexes_per_block(&self) -> usize {
-        self.block_size * self.block_size * self.interleave_step()
-    }
-    fn plane_indexes_per_pixel_buffer(&self) -> usize {
-        self.pixel_buffer.plane_height(self.pixel_component_type)
-            * self.pixel_buffer.plane_row_len(self.pixel_component_type)
+        fn next(&mut self) -> Option<Self::Item> {
+            let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
+            if next_plane_index >= self.plane_indexes_per_pixel_buffer() {
+                // Completed this pixel buffer.
+                self.ensure_pixel_buffer_address_is_unlocked();
+                return None;
+            }
+
+            //         eprintln!("Getting block {}", self.current_block_index);
+
+            self.ensure_pixel_buffer_address_is_locked();
+
+            let next_block = self
+                .new_transform_block(self.block_size, self.current_block_index)
+                .expect("Failed to make new transform block."); // Internal error, should crash rather than returning None.
+            self.current_block_index += 1;
+            Some(next_block)
+        }
     }
 }
 
-impl Iterator for TransformBlockIterator {
-    type Item = TransformBlock;
+pub mod transform_block {
+    use super::*;
+    use pixel_buffer::*;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
-        if next_plane_index >= self.plane_indexes_per_pixel_buffer() {
-            // Completed this pixel buffer.
-            self.ensure_pixel_buffer_address_is_unlocked();
-            return None;
-        }
-
-        //         eprintln!("Getting block {}", self.current_block_index);
-
-        self.ensure_pixel_buffer_address_is_locked();
-
-        let next_block = self
-            .new_transform_block(self.block_size, self.current_block_index)
-            .expect("Failed to make new transform block."); // Internal error, should crash rather than returning None.
-        self.current_block_index += 1;
-        Some(next_block)
+    pub struct TransformBlock {
+        pub pixel_component_type: PixelComponentType,
+        pub values: ndarray::Array2<u8>,
     }
+
+    impl TransformBlock {}
 }
 
 #[cfg(test)]
 mod tests {
+    use super::asset_reader::*;
+    use super::asset_writer::*;
+    use super::pixel_buffer::*;
+    use super::transform_block::*;
     use super::*;
     use std::fs;
 
