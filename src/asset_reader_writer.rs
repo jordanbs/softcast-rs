@@ -16,7 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use ndarray;
-use std::{error, path};
+use std::{error, path, ptr::NonNull};
 
 use objc2_foundation::{NSArray, NSDictionary, NSMutableDictionary, NSNumber, NSString, NSURL};
 
@@ -28,14 +28,14 @@ use objc2_av_foundation::{
     AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
 };
 
-use objc2_core_foundation::{CFRetained, CFString};
+use objc2_core_foundation::{kCFAllocatorDefault, CFRetained, CFString};
 
 use objc2_core_media::CMTime;
 
 use objc2_core_video::{
     kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
-    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVImageBuffer,
-    CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
+    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVImageBuffer, CVPixelBuffer,
+    CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
     CVPixelBufferGetDataSize, CVPixelBufferGetHeightOfPlane, CVPixelBufferIsPlanar,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
@@ -430,6 +430,45 @@ pub mod pixel_buffer {
             }
         }
 
+        pub(super) fn from<const BLOCK_LEN: usize>(
+            transform_blocks: &[TransformBlock<BLOCK_LEN>],
+            resolution: (usize, usize),
+        ) -> Result<Self, Box<dyn std::error::Error>> {
+            let mut cv_pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
+            let pixel_buffer_out: NonNull<*mut CVPixelBuffer> = NonNull::from(&mut cv_pixel_buffer);
+            unsafe {
+                let status = CVPixelBufferCreate(
+                    kCFAllocatorDefault,
+                    resolution.0,
+                    resolution.1,
+                    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                    None,
+                    pixel_buffer_out,
+                );
+                if status == 0 {
+                    return Err(
+                        format!("Failed to create CVPixelBuffer with error {}", status).into(),
+                    );
+                }
+
+                let cv_pixel_buffer = CFRetained::from_raw(
+                    // coerce the mutable ptr into an immutable ptr
+                    NonNull::new(cv_pixel_buffer).ok_or("CVPixelBuffer is NULL")?,
+                );
+                assert!(CVPixelBufferIsPlanar(&cv_pixel_buffer));
+
+                let flags = CVPixelBufferLockFlags::empty(); // empty means write
+                CVPixelBufferLockBaseAddress(&cv_pixel_buffer, flags);
+
+                CVPixelBufferUnlockBaseAddress(&cv_pixel_buffer, flags);
+
+                let pixel_buffer = Self {
+                    cv_image_buffer: cv_pixel_buffer,
+                };
+                Ok(pixel_buffer)
+            }
+        }
+
         // The following functions are safe to call without locking the base address of CVPixelBuffer.
 
         fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize {
@@ -620,6 +659,9 @@ pub mod transform_block {
             pixel_component_type: PixelComponentType,
             values: ndarray::Array2<u8>,
         ) -> Self {
+            assert_eq!(BLOCK_LEN, values.dim().0);
+            assert_eq!(BLOCK_LEN, values.dim().1);
+
             // take ownership of values with a move
             let resolution = values.dim();
             TransformBlock {
@@ -628,25 +670,24 @@ pub mod transform_block {
                 resolution: resolution,
             }
         }
-
-        fn width(&self) -> usize {
-            self.resolution.0
-        }
-        fn height(&self) -> usize {
-            self.resolution.1
-        }
     }
 
     pub struct PixelBufferIterator<I, const BLOCK_LEN: usize> {
         inner: I,
+        pixel_buffer_resolution: (usize, usize),
     }
 
     impl<I, const BLOCK_LEN: usize> PixelBufferIterator<I, BLOCK_LEN>
     where
         I: Iterator<Item = TransformBlock<BLOCK_LEN>>,
     {
-        fn new(inner: I) -> Self {
-            PixelBufferIterator { inner: inner }
+        fn new(inner: I, pixel_buffer_resolution: (usize, usize)) -> Self {
+            assert_eq!(pixel_buffer_resolution.0 % BLOCK_LEN, 0);
+            assert_eq!(pixel_buffer_resolution.1 % BLOCK_LEN, 0);
+            PixelBufferIterator {
+                inner: inner,
+                pixel_buffer_resolution: pixel_buffer_resolution,
+            }
         }
     }
 
@@ -656,11 +697,11 @@ pub mod transform_block {
     {
         type Item = PixelBuffer;
         fn next(&mut self) -> Option<Self::Item> {
-            //
-            //             assert_eq!()
-            //
-            //             let num_macro_blocks =
-            //             let macro_blocks = self.inner.take(n);
+            let num_macro_blocks = BLOCK_LEN * BLOCK_LEN
+                / (self.pixel_buffer_resolution.0 * self.pixel_buffer_resolution.1);
+            let macro_blocks = self.inner.by_ref().take(num_macro_blocks);
+
+            assert_eq!(macro_blocks.count(), num_macro_blocks);
             None
         }
     }
