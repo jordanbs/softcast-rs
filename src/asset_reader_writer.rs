@@ -36,9 +36,9 @@ use objc2_core_video::{
     kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
     kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVImageBuffer, CVPixelBuffer,
     CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
-    CVPixelBufferGetDataSize, CVPixelBufferGetHeight, CVPixelBufferGetHeightOfPlane,
-    CVPixelBufferGetWidth, CVPixelBufferIsPlanar, CVPixelBufferLockBaseAddress,
-    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    CVPixelBufferGetHeight, CVPixelBufferGetHeightOfPlane, CVPixelBufferGetWidth,
+    CVPixelBufferIsPlanar, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+    CVPixelBufferUnlockBaseAddress,
 };
 
 use std::thread::sleep;
@@ -478,6 +478,21 @@ pub mod pixel_buffer {
             }
         }
 
+        fn block_index_to_cv_pixel_buffer_plane_offset(
+            block_index: usize,
+            block_row_index: usize,
+            block_len: usize,
+            plane_bytes_per_row: usize,
+        ) -> usize {
+            let cv_row_index = block_len * ((block_len * block_index) / plane_bytes_per_row);
+            let cv_row_offset = plane_bytes_per_row * (cv_row_index + block_row_index);
+
+            let cv_column_index = (block_len * block_index) % plane_bytes_per_row;
+            let cv_column_offset = cv_column_index;
+
+            cv_row_offset + cv_column_offset
+        }
+
         pub(super) fn from<const BLOCK_LEN: usize>(
             y_pixel_components: &mut TransformBlockIterator<BLOCK_LEN, YPixelComponentType>,
             cb_pixel_components: &mut TransformBlockIterator<BLOCK_LEN, CbPixelComponentType>,
@@ -493,9 +508,13 @@ pub mod pixel_buffer {
             ) -> Result<bool, Box<dyn std::error::Error>> {
                 let plane_index = PixelType::TYPE.plane_index();
 
-                let base_addr = CVPixelBufferGetBaseAddressOfPlane(&dst, plane_index) as *mut u8;
+                let plane_ptr = CVPixelBufferGetBaseAddressOfPlane(&dst, plane_index) as *mut u8;
                 let plane_bytes_per_row = CVPixelBufferGetBytesPerRowOfPlane(&dst, plane_index);
                 let plane_height = CVPixelBufferGetHeightOfPlane(&dst, plane_index);
+
+                if plane_ptr.is_null() {
+                    return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
+                }
 
                 if plane_bytes_per_row % BLOCK_LEN != 0 {
                     return Err(format!(
@@ -527,38 +546,22 @@ pub mod pixel_buffer {
                             .get_ptr([0, src_row_index])
                             .ok_or("Could not get TransformBlock ptr.")?;
 
-                        let dst_row_index =
-                            BLOCK_LEN * ((BLOCK_LEN * block_index) / plane_bytes_per_row);
-                        let dst_row_offset = plane_bytes_per_row * dst_row_index;
-
-                        let dst_column_index = (BLOCK_LEN * block_index) % plane_bytes_per_row;
-                        let dst_column_offset = dst_column_index;
+                        let dst_offset = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
+                            block_index,
+                            src_row_index,
+                            BLOCK_LEN,
+                            plane_bytes_per_row,
+                        );
 
                         unsafe {
-                            let dst_ptr_start =
-                                base_addr.add(dst_row_offset).add(dst_column_offset);
-
-                            match PixelType::TYPE.interleave_step() {
-                                1 => {
-                                    std::ptr::copy_nonoverlapping(
-                                        src_ptr_start,
-                                        dst_ptr_start,
-                                        BLOCK_LEN,
-                                    );
-                                }
-                                interleave_step => {
-                                    let mut src_ptr = src_ptr_start;
-                                    let mut dst_ptr = dst_ptr_start;
-
-                                    src_ptr = src_ptr.add(PixelType::TYPE.interleave_offset());
-
-                                    for _src_col_index in 0..BLOCK_LEN {
-                                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, 1);
-                                        dst_ptr = dst_ptr.add(interleave_step);
-                                        src_ptr = src_ptr.add(interleave_step);
-                                    }
-                                }
-                            };
+                            let dst_ptr_start = plane_ptr.add(dst_offset);
+                            PixelBuffer::copy_row(
+                                src_ptr_start,
+                                dst_ptr_start,
+                                false,
+                                BLOCK_LEN,
+                                PixelType::TYPE,
+                            );
                         }
                     }
                     total_blocks += 1;
@@ -637,6 +640,95 @@ pub mod pixel_buffer {
             }
         }
 
+        // CVPixelBuffer MUST be locked.
+        pub fn to_transform_block<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
+            &self,
+            block_index: usize,
+        ) -> Result<TransformBlock<BLOCK_LEN, PixelType>, Box<dyn std::error::Error>> {
+            let plane_index = PixelType::TYPE.plane_index();
+            let plane_row_len = self.plane_row_len(PixelType::TYPE);
+            let plane_height = self.plane_height(PixelType::TYPE);
+
+            assert_eq!(plane_row_len % BLOCK_LEN, 0);
+            assert_eq!(plane_height % BLOCK_LEN, 0);
+
+            let mut block_ndarray = ndarray::Array2::zeros((BLOCK_LEN, BLOCK_LEN));
+
+            unsafe {
+                let plane_ptr =
+                    CVPixelBufferGetBaseAddressOfPlane(&self.cv_image_buffer, plane_index)
+                        as *mut u8;
+
+                if plane_ptr.is_null() {
+                    return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
+                }
+
+                for block_row_index in 0..BLOCK_LEN {
+                    let src_offset_start = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
+                        block_index,
+                        block_row_index,
+                        BLOCK_LEN,
+                        plane_row_len,
+                    );
+                    let src_ptr_start = plane_ptr.add(src_offset_start);
+                    let dst_ptr_start = block_ndarray
+                        .get_mut_ptr([0, block_row_index])
+                        .ok_or("Could not get mut ptr of ndarray.")?;
+
+                    PixelBuffer::copy_row(
+                        src_ptr_start,
+                        dst_ptr_start,
+                        true,
+                        BLOCK_LEN,
+                        PixelType::TYPE,
+                    );
+                }
+            }
+
+            let transform_block = TransformBlock::<BLOCK_LEN, PixelType>::new(block_ndarray);
+            Ok(transform_block)
+        }
+        fn copy_row(
+            src_ptr: *const u8,
+            dst_ptr: *mut u8,
+            interleaving_src: bool, // false to interleave dst
+            block_len: usize,
+            pixel_component_type: PixelComponentType,
+        ) {
+            let src_ptr_start = src_ptr;
+            let dst_ptr_start = dst_ptr;
+
+            unsafe {
+                match pixel_component_type.interleave_step() {
+                    1 => {
+                        std::ptr::copy_nonoverlapping(src_ptr_start, dst_ptr_start, block_len);
+                    }
+                    interleave_step => {
+                        let mut src_ptr = src_ptr_start; // shadow
+                        let mut dst_ptr = dst_ptr_start; // shadow
+
+                        if interleaving_src {
+                            src_ptr = src_ptr.add(pixel_component_type.interleave_offset());
+                        } else {
+                            dst_ptr = dst_ptr.add(pixel_component_type.interleave_offset());
+                        }
+
+                        for _src_col_index in 0..block_len {
+                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, 1);
+
+                            if interleaving_src {
+                                src_ptr = src_ptr.add(interleave_step);
+                                dst_ptr = dst_ptr.add(1);
+                            } else {
+                                src_ptr = src_ptr.add(1);
+                                dst_ptr = dst_ptr.add(interleave_step);
+                            }
+                        }
+                    }
+                };
+            }
+        }
+
         pub fn transform_block_iter<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
             &self,
         ) -> Result<TransformBlockIterator<'_, BLOCK_LEN, PixelType>, Box<dyn std::error::Error>>
@@ -661,8 +753,7 @@ pub mod pixel_buffer {
             (width, height)
         }
 
-        #[cfg(debug_assertions)]
-        fn dump_file(&self, prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
+        pub fn dump_file(&self, prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
             use std::fs;
             use std::slice;
             use std::sync::atomic;
@@ -737,58 +828,7 @@ pub mod pixel_buffer {
             &self,
             block_index: usize,
         ) -> Result<TransformBlock<BLOCK_LEN, PixelType>, Box<dyn error::Error>> {
-            let mut block_ndarray = ndarray::Array2::zeros((BLOCK_LEN, BLOCK_LEN));
-
-            let plane_row_len = self.pixel_buffer.plane_row_len(PixelType::TYPE);
-            let plane_height = self.pixel_buffer.plane_height(PixelType::TYPE);
-            let plane_len = plane_row_len * plane_height;
-
-            assert_eq!(plane_row_len % BLOCK_LEN, 0);
-            assert_eq!(plane_height % BLOCK_LEN, 0);
-
-            // CbCr samples are interleaved.
-            let interleave_offset = self.interleave_offset();
-            let interleave_step = self.interleave_step();
-
-            // always include pixels in the plane beyond width
-            let plane_row_samples = plane_row_len / interleave_step;
-            let column_start = interleave_offset + (block_index * BLOCK_LEN) % plane_row_samples;
-            let column_end = column_start + BLOCK_LEN * interleave_step;
-            let row_start = BLOCK_LEN * ((block_index * BLOCK_LEN) / plane_row_samples);
-            let row_end = row_start + BLOCK_LEN;
-
-            //         eprintln!(
-            //             "{}x{} - {}x{}",
-            //             column_start, row_start, column_end, row_end
-            //         );
-
-            assert!(column_end <= plane_row_len);
-            assert!(row_end <= plane_height);
-
-            unsafe {
-                let plane_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                    &self.pixel_buffer.cv_image_buffer,
-                    PixelType::TYPE.plane_index(),
-                ) as *const u8;
-
-                if plane_ptr.is_null() {
-                    return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
-                }
-
-                let plane_slice = std::slice::from_raw_parts(plane_ptr, plane_len);
-
-                // TODO: make this a memcpy.. and factor the routines and its inverse in a shared location
-                for plane_row in row_start..row_end {
-                    for plane_column in (column_start..column_end).step_by(interleave_step) {
-                        let plane_idx = plane_column + plane_row * plane_row_len;
-                        let block_column = (plane_column - column_start) / interleave_step;
-                        let block_row = plane_row - row_start;
-                        block_ndarray[(block_column, block_row)] = plane_slice[plane_idx];
-                    }
-                }
-            }
-            let transform_block = TransformBlock::<BLOCK_LEN, PixelType>::new(block_ndarray);
-            Ok(transform_block)
+            self.pixel_buffer.to_transform_block(block_index)
         }
         fn ensure_pixel_buffer_address_is_locked(&mut self) {
             if !self.locked_pixel_buffer_memory {
@@ -810,9 +850,9 @@ pub mod pixel_buffer {
         }
 
         // the following could be static fns
-        fn interleave_offset(&self) -> usize {
-            PixelType::TYPE.interleave_offset()
-        }
+        //         fn interleave_offset(&self) -> usize {
+        //             PixelType::TYPE.interleave_offset()
+        //         }
         fn interleave_step(&self) -> usize {
             PixelType::TYPE.interleave_step()
         }
@@ -1023,10 +1063,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(debug_assertions))] // too slow on debug
+    //     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_writer_1() {
-        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
-        let output_file = "/tmp/sample-5s.mp4";
+        let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4");
+        let output_file = "/tmp/bipbop-1920x1080-5s.mp4";
 
         let writer_settings = AssetWritterSettings {
             path: path::PathBuf::from(output_file),
@@ -1074,6 +1114,11 @@ mod tests {
                 pixel_buffer_iter.next().is_none(),
                 "More than one pixel buffer generated."
             );
+
+            pixel_buffer.dump_file("i").expect("first dump file failed");
+            new_pixel_buffer
+                .dump_file("o")
+                .expect("second dump file failed");
 
             writer
                 .append_pixel_buffer(new_pixel_buffer)
