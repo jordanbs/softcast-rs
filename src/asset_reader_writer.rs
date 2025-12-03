@@ -655,9 +655,6 @@ pub mod pixel_buffer {
         fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize {
             CVPixelBufferGetHeightOfPlane(&self.cv_image_buffer, pixel_component_type.plane_index())
         }
-        fn plane_data_len(&self) -> usize {
-            CVPixelBufferGetDataSize(&self.cv_image_buffer)
-        }
         pub fn resolution(&self) -> (usize, usize) {
             let width = CVPixelBufferGetWidth(&self.cv_image_buffer);
             let height = CVPixelBufferGetHeight(&self.cv_image_buffer);
@@ -678,7 +675,7 @@ pub mod pixel_buffer {
                     &self.cv_image_buffer,
                     PixelComponentType::Y.plane_index(),
                 ) as *const u8;
-                let y_bytes_per_row = self.plane_data_len(PixelComponentType::Y);
+                let y_bytes_per_row = self.plane_row_len(PixelComponentType::Y);
                 let y_height = self.plane_height(PixelComponentType::Y);
                 let y_bytes: &[u8] = slice::from_raw_parts(y_ptr, y_bytes_per_row * y_height);
 
@@ -686,7 +683,7 @@ pub mod pixel_buffer {
                     &self.cv_image_buffer,
                     PixelComponentType::Cb.plane_index(),
                 ) as *const u8;
-                let cbcr_bytes_per_row = self.plane_data_len(PixelComponentType::Cb);
+                let cbcr_bytes_per_row = self.plane_row_len(PixelComponentType::Cb);
                 let cbcr_height = self.plane_height(PixelComponentType::Cb);
                 let cbcr_bytes: &[u8] =
                     slice::from_raw_parts(cbcr_ptr, cbcr_bytes_per_row * cbcr_height);
@@ -744,9 +741,8 @@ pub mod pixel_buffer {
 
             let plane_row_len = self.pixel_buffer.plane_row_len(PixelType::TYPE);
             let plane_height = self.pixel_buffer.plane_height(PixelType::TYPE);
-            let plane_len = self.pixel_buffer.plane_data_len();
+            let plane_len = plane_row_len * plane_height;
 
-            assert!(plane_row_len * plane_height <= plane_len);
             assert_eq!(plane_row_len % BLOCK_LEN, 0);
             assert_eq!(plane_height % BLOCK_LEN, 0);
 
