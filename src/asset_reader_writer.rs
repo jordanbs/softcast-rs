@@ -16,7 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use ndarray;
-use std::{error, marker::PhantomData, path, ptr::NonNull};
+use std::{error, path, ptr::NonNull};
 
 use objc2_foundation::{NSArray, NSDictionary, NSMutableDictionary, NSNumber, NSString, NSURL};
 
@@ -36,8 +36,9 @@ use objc2_core_video::{
     kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
     kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVImageBuffer, CVPixelBuffer,
     CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
-    CVPixelBufferGetDataSize, CVPixelBufferGetHeightOfPlane, CVPixelBufferIsPlanar,
-    CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    CVPixelBufferGetDataSize, CVPixelBufferGetHeight, CVPixelBufferGetHeightOfPlane,
+    CVPixelBufferGetWidth, CVPixelBufferIsPlanar, CVPixelBufferLockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
 
 use std::thread::sleep;
@@ -102,7 +103,7 @@ pub mod asset_reader {
             }
         }
 
-        pub fn pixel_buffer_iter(&mut self) -> PixelBufferIterator {
+        pub fn pixel_buffer_iter(&mut self) -> PixelBufferIterator<'_> {
             PixelBufferIterator::new(self)
         }
 
@@ -411,7 +412,7 @@ impl Codec {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum PixelComponentType {
     Y,
     Cb,
@@ -426,15 +427,27 @@ impl PixelComponentType {
             Self::Cr => 1,
         }
     }
+    fn interleave_offset(&self) -> usize {
+        match self {
+            PixelComponentType::Y | PixelComponentType::Cb => 0,
+            PixelComponentType::Cr => 1,
+        }
+    }
+    fn interleave_step(&self) -> usize {
+        match self {
+            PixelComponentType::Y => 1,
+            PixelComponentType::Cb | PixelComponentType::Cr => 2,
+        }
+    }
 }
 
 pub trait HasPixelComponentType {
     const TYPE: PixelComponentType;
 }
 
-struct YPixelComponentType;
-struct CbPixelComponentType;
-struct CrPixelComponentType;
+pub struct YPixelComponentType;
+pub struct CbPixelComponentType;
+pub struct CrPixelComponentType;
 
 impl HasPixelComponentType for YPixelComponentType {
     const TYPE: PixelComponentType = PixelComponentType::Y;
@@ -465,13 +478,116 @@ pub mod pixel_buffer {
             }
         }
 
-        pub(super) fn from<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
-            transform_blocks: &[TransformBlock<BLOCK_LEN, PixelType>],
+        pub(super) fn from<const BLOCK_LEN: usize>(
+            y_pixel_components: &mut TransformBlockIterator<BLOCK_LEN, YPixelComponentType>,
+            cb_pixel_components: &mut TransformBlockIterator<BLOCK_LEN, CbPixelComponentType>,
+            cr_pixel_components: &mut TransformBlockIterator<BLOCK_LEN, CrPixelComponentType>,
             resolution: (usize, usize),
-        ) -> Result<Self, Box<dyn std::error::Error>> {
-            let mut cv_pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
-            let pixel_buffer_out: NonNull<*mut CVPixelBuffer> = NonNull::from(&mut cv_pixel_buffer);
+        ) -> Result<Option<Self>, Box<dyn std::error::Error>> {
+            // Takes each type of TransformBlock and assigns it to a CVPixelBuffer
+            // Returns true if the pixel buffer has been completely filled.
+            // Returns false if the the iterators have been drained before attempting to fill a pixel buffer.
+            fn assign_values<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
+                src: &mut TransformBlockIterator<BLOCK_LEN, PixelType>,
+                dst: &CVPixelBuffer,
+            ) -> Result<bool, Box<dyn std::error::Error>> {
+                let plane_index = PixelType::TYPE.plane_index();
+
+                let base_addr = CVPixelBufferGetBaseAddressOfPlane(&dst, plane_index) as *mut u8;
+                let plane_bytes_per_row = CVPixelBufferGetBytesPerRowOfPlane(&dst, plane_index);
+                let plane_height = CVPixelBufferGetHeightOfPlane(&dst, plane_index);
+
+                if plane_bytes_per_row % BLOCK_LEN != 0 {
+                    return Err(format!(
+                        "plane_bytes_per_row:{} % BLOCK_LEN:{} != 0. pixel_type:{:?}",
+                        plane_bytes_per_row,
+                        BLOCK_LEN,
+                        PixelType::TYPE
+                    )
+                    .into());
+                }
+                if plane_height % BLOCK_LEN != 0 {
+                    return Err(format!(
+                        "plane_height:{} % BLOCK_LEN:{} != 0. pixel_type:{:?}",
+                        plane_height,
+                        BLOCK_LEN,
+                        PixelType::TYPE
+                    )
+                    .into());
+                }
+
+                let num_blocks_needed =
+                    plane_bytes_per_row * plane_height / (BLOCK_LEN * BLOCK_LEN);
+                let mut total_blocks = 0;
+
+                for (block_index, block) in src.by_ref().take(num_blocks_needed).enumerate() {
+                    for src_row_index in 0..BLOCK_LEN {
+                        let src_ptr_start = block
+                            .values
+                            .get_ptr([0, src_row_index])
+                            .ok_or("Could not get TransformBlock ptr.")?;
+
+                        let dst_row_index =
+                            BLOCK_LEN * ((BLOCK_LEN * block_index) / plane_bytes_per_row);
+                        let dst_row_offset = plane_bytes_per_row * dst_row_index;
+
+                        let dst_column_index = (BLOCK_LEN * block_index) % plane_bytes_per_row;
+                        let dst_column_offset = dst_column_index;
+
+                        unsafe {
+                            let dst_ptr_start =
+                                base_addr.add(dst_row_offset).add(dst_column_offset);
+
+                            match PixelType::TYPE.interleave_step() {
+                                1 => {
+                                    std::ptr::copy_nonoverlapping(
+                                        src_ptr_start,
+                                        dst_ptr_start,
+                                        BLOCK_LEN,
+                                    );
+                                }
+                                interleave_step => {
+                                    let mut src_ptr = src_ptr_start;
+                                    let mut dst_ptr = dst_ptr_start;
+
+                                    src_ptr = src_ptr.add(PixelType::TYPE.interleave_offset());
+
+                                    for _src_col_index in 0..BLOCK_LEN {
+                                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, 1);
+                                        dst_ptr = dst_ptr.add(interleave_step);
+                                        src_ptr = src_ptr.add(interleave_step);
+                                    }
+                                }
+                            };
+                        }
+                    }
+                    total_blocks += 1;
+                }
+                // No TransformBlocks - signal the pixel buffer is empty.
+                if total_blocks == 0 {
+                    return Ok(false);
+                }
+
+                let expected_bytes =
+                    (plane_bytes_per_row * plane_height) / PixelType::TYPE.interleave_step();
+                if total_blocks * BLOCK_LEN * BLOCK_LEN != expected_bytes {
+                    let expected = expected_bytes / (BLOCK_LEN * BLOCK_LEN);
+                    return Err(format!(
+                        "Ran out of {:?} TransformBlocks. Expected {}. Got {}. ",
+                        PixelType::TYPE,
+                        expected,
+                        total_blocks,
+                    )
+                    .into());
+                }
+
+                Ok(true)
+            }
+
             unsafe {
+                let mut cv_pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
+                let pixel_buffer_out: NonNull<*mut CVPixelBuffer> =
+                    NonNull::from(&mut cv_pixel_buffer);
                 let status = CVPixelBufferCreate(
                     kCFAllocatorDefault,
                     resolution.0,
@@ -480,7 +596,7 @@ pub mod pixel_buffer {
                     None,
                     pixel_buffer_out,
                 );
-                if status == 0 {
+                if status != 0 {
                     return Err(
                         format!("Failed to create CVPixelBuffer with error {}", status).into(),
                     );
@@ -495,13 +611,37 @@ pub mod pixel_buffer {
                 let flags = CVPixelBufferLockFlags::empty(); // empty means write
                 CVPixelBufferLockBaseAddress(&cv_pixel_buffer, flags);
 
+                if !assign_values(y_pixel_components, &cv_pixel_buffer)? {
+                    CVPixelBufferUnlockBaseAddress(&cv_pixel_buffer, flags);
+                    return Ok(None);
+                }
+                if !assign_values(cb_pixel_components, &cv_pixel_buffer)? {
+                    CVPixelBufferUnlockBaseAddress(&cv_pixel_buffer, flags);
+                    return Err(
+                        "Consumed Y pixel components but exhausted all Cb pixel components.".into(),
+                    );
+                }
+                if !assign_values(cr_pixel_components, &cv_pixel_buffer)? {
+                    CVPixelBufferUnlockBaseAddress(&cv_pixel_buffer, flags);
+                    return Err(
+                        "Consumed Y and Cb pixel components but exhausted all Cr pixel components."
+                            .into(),
+                    );
+                }
+
                 CVPixelBufferUnlockBaseAddress(&cv_pixel_buffer, flags);
 
-                let pixel_buffer = Self {
+                Ok(Some(Self {
                     cv_image_buffer: cv_pixel_buffer,
-                };
-                Ok(pixel_buffer)
+                }))
             }
+        }
+
+        pub fn transform_block_iter<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
+            &self,
+        ) -> Result<TransformBlockIterator<'_, BLOCK_LEN, PixelType>, Box<dyn std::error::Error>>
+        {
+            Ok(TransformBlockIterator::<BLOCK_LEN, PixelType>::new(self))
         }
 
         // The following functions are safe to call without locking the base address of CVPixelBuffer.
@@ -518,21 +658,26 @@ pub mod pixel_buffer {
         fn plane_data_len(&self) -> usize {
             CVPixelBufferGetDataSize(&self.cv_image_buffer)
         }
+        pub fn resolution(&self) -> (usize, usize) {
+            let width = CVPixelBufferGetWidth(&self.cv_image_buffer);
+            let height = CVPixelBufferGetHeight(&self.cv_image_buffer);
+            (width, height)
+        }
     }
 
     // only square blocks supported
-    pub struct TransformBlockIterator<const BLOCK_LEN: usize, PixelType: HasPixelComponentType> {
-        pixel_buffer: PixelBuffer,
+    pub struct TransformBlockIterator<'a, const BLOCK_LEN: usize, PixelType: HasPixelComponentType> {
+        pixel_buffer: &'a PixelBuffer,
         current_block_index: usize,
         locked_pixel_buffer_memory: bool,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
-    impl<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>
-        TransformBlockIterator<BLOCK_LEN, PixelType>
+    impl<'a, const BLOCK_LEN: usize, PixelType: HasPixelComponentType>
+        TransformBlockIterator<'a, BLOCK_LEN, PixelType>
     {
         // only supports 4:2:0 YCbCr
-        pub fn new(pixel_buffer: PixelBuffer) -> Self {
+        pub fn new(pixel_buffer: &'a PixelBuffer) -> Self {
             Self {
                 pixel_buffer: pixel_buffer,
                 current_block_index: 0,
@@ -619,16 +764,10 @@ pub mod pixel_buffer {
 
         // the following could be static fns
         fn interleave_offset(&self) -> usize {
-            match PixelType::TYPE {
-                PixelComponentType::Y | PixelComponentType::Cb => 0,
-                PixelComponentType::Cr => 1,
-            }
+            PixelType::TYPE.interleave_offset()
         }
         fn interleave_step(&self) -> usize {
-            match PixelType::TYPE {
-                PixelComponentType::Y => 1,
-                PixelComponentType::Cb | PixelComponentType::Cr => 2,
-            }
+            PixelType::TYPE.interleave_step()
         }
 
         fn plane_indexes_per_block(&self) -> usize {
@@ -640,8 +779,8 @@ pub mod pixel_buffer {
         }
     }
 
-    impl<const BLOCK_LEN: usize, PixelType: HasPixelComponentType> Iterator
-        for TransformBlockIterator<BLOCK_LEN, PixelType>
+    impl<'a, const BLOCK_LEN: usize, PixelType: HasPixelComponentType> Iterator
+        for TransformBlockIterator<'a, BLOCK_LEN, PixelType>
     {
         type Item = TransformBlock<BLOCK_LEN, PixelType>;
 
@@ -672,7 +811,6 @@ pub mod transform_block {
 
     pub struct TransformBlock<const BLOCK_LEN: usize, PixelType: HasPixelComponentType> {
         pub values: ndarray::Array2<u8>,
-        resolution: (usize, usize),
         _marker: std::marker::PhantomData<PixelType>,
     }
 
@@ -684,50 +822,50 @@ pub mod transform_block {
             assert_eq!(BLOCK_LEN, values.dim().1);
 
             // take ownership of values with a move
-            let resolution = values.dim();
             TransformBlock {
                 values: values,
-                resolution: resolution,
                 _marker: std::marker::PhantomData,
             }
         }
     }
 
-    pub struct PixelBufferIterator<I, const BLOCK_LEN: usize, PixelType: HasPixelComponentType> {
-        inner: I,
+    pub struct PixelBufferIterator<'a, const BLOCK_LEN: usize> {
+        y_pixel_components: TransformBlockIterator<'a, BLOCK_LEN, YPixelComponentType>,
+        cb_pixel_components: TransformBlockIterator<'a, BLOCK_LEN, CbPixelComponentType>,
+        cr_pixel_components: TransformBlockIterator<'a, BLOCK_LEN, CrPixelComponentType>,
         pixel_buffer_resolution: (usize, usize),
-        _marker: std::marker::PhantomData<PixelType>,
     }
 
-    impl<I, const BLOCK_LEN: usize, PixelType: HasPixelComponentType>
-        PixelBufferIterator<I, BLOCK_LEN, PixelType>
-    where
-        I: Iterator<Item = TransformBlock<BLOCK_LEN, PixelType>>,
-    {
-        fn new(inner: I, pixel_buffer_resolution: (usize, usize)) -> Self {
+    impl<'a, const BLOCK_LEN: usize> PixelBufferIterator<'a, BLOCK_LEN> {
+        pub fn new(
+            y_pixel_components: TransformBlockIterator<'a, BLOCK_LEN, YPixelComponentType>,
+            cb_pixel_components: TransformBlockIterator<'a, BLOCK_LEN, CbPixelComponentType>,
+            cr_pixel_components: TransformBlockIterator<'a, BLOCK_LEN, CrPixelComponentType>,
+            pixel_buffer_resolution: (usize, usize),
+        ) -> Self {
             assert_eq!(pixel_buffer_resolution.0 % BLOCK_LEN, 0);
             assert_eq!(pixel_buffer_resolution.1 % BLOCK_LEN, 0);
+
             PixelBufferIterator {
-                inner: inner,
+                y_pixel_components: y_pixel_components,
+                cb_pixel_components: cb_pixel_components,
+                cr_pixel_components: cr_pixel_components,
                 pixel_buffer_resolution: pixel_buffer_resolution,
-                _marker: std::marker::PhantomData,
             }
         }
     }
 
-    impl<I, const BLOCK_LEN: usize, PixelType: HasPixelComponentType> Iterator
-        for PixelBufferIterator<I, BLOCK_LEN, PixelType>
-    where
-        I: Iterator<Item = TransformBlock<BLOCK_LEN, PixelType>>,
-    {
+    impl<'a, const BLOCK_LEN: usize> Iterator for PixelBufferIterator<'a, BLOCK_LEN> {
         type Item = PixelBuffer;
         fn next(&mut self) -> Option<Self::Item> {
-            let num_macro_blocks = BLOCK_LEN * BLOCK_LEN
-                / (self.pixel_buffer_resolution.0 * self.pixel_buffer_resolution.1);
-            let macro_blocks = self.inner.by_ref().take(num_macro_blocks);
-
-            assert_eq!(macro_blocks.count(), num_macro_blocks);
-            None
+            // will return optional if the iterators are exhausted.
+            PixelBuffer::from(
+                &mut self.y_pixel_components,
+                &mut self.cb_pixel_components,
+                &mut self.cr_pixel_components,
+                self.pixel_buffer_resolution,
+            )
+            .expect("Failed to create pixel buffer.")
         }
     }
 }
@@ -737,7 +875,7 @@ mod tests {
     use super::asset_reader::*;
     use super::asset_writer::*;
     use super::pixel_buffer::*;
-    use super::transform_block::*;
+    //     use super::transform_block::*;
     use super::*;
     use std::fs;
 
@@ -748,7 +886,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let mut iter = TransformBlockIterator::<8, YPixelComponentType>::new(pixel_buffer);
+        let mut iter = TransformBlockIterator::<8, YPixelComponentType>::new(&pixel_buffer);
         let block = iter.next().expect("No transform blocks produced.");
 
         assert_eq!(block.values.len(), 64);
@@ -761,7 +899,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let iter = TransformBlockIterator::<8, YPixelComponentType>::new(pixel_buffer);
+        let iter = TransformBlockIterator::<8, YPixelComponentType>::new(&pixel_buffer);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
@@ -774,7 +912,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let iter = TransformBlockIterator::<4, CbPixelComponentType>::new(pixel_buffer);
+        let iter = TransformBlockIterator::<4, CbPixelComponentType>::new(&pixel_buffer);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
@@ -787,7 +925,7 @@ mod tests {
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
             .unwrap();
-        let iter = TransformBlockIterator::<4, CrPixelComponentType>::new(pixel_buffer);
+        let iter = TransformBlockIterator::<4, CrPixelComponentType>::new(&pixel_buffer);
         let count = iter.fold(0, |acc, _| acc + 1);
 
         assert_eq!(count, 32400);
@@ -800,7 +938,7 @@ mod tests {
 
         let mut count = 0;
         for pixel_buffer in reader.pixel_buffer_iter() {
-            let iter = TransformBlockIterator::<8>::new(pixel_buffer, PixelComponentType::Y);
+            let iter = TransformBlockIterator::<8, YPixelComponentType>::new(&pixel_buffer);
             count = iter.fold(count, |acc, _| acc + 1);
         }
 
@@ -829,6 +967,69 @@ mod tests {
         for pixel_buffer in reader.pixel_buffer_iter() {
             writer
                 .append_pixel_buffer(pixel_buffer)
+                .expect("Failed to append pixel buffer");
+            writer
+                .wait_for_writer_to_be_ready()
+                .expect("Failed to become ready after writing some pixels.");
+        }
+        writer.finish_writing().expect("Failed to finish writing.");
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_reader_to_writer_1() {
+        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let output_file = "/tmp/sample-5s.mp4";
+
+        let writer_settings = AssetWritterSettings {
+            path: path::PathBuf::from(output_file),
+            codec: Codec::H264,
+            resolution: reader.resolution().expect("Failed to get resolution."),
+            frame_rate: reader.frame_rate().expect("Failed to get frame rate"),
+        };
+        let _ = fs::remove_file(output_file);
+        let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
+        writer.start_writing().expect("Failed to start writing");
+
+        writer
+            .wait_for_writer_to_be_ready()
+            .expect("Failed to become ready before writing.");
+
+        for pixel_buffer in reader.pixel_buffer_iter() {
+            const BLOCK_LEN: usize = 4;
+
+            // PixelBuffer -> TransformBlock
+            let y_components: TransformBlockIterator<BLOCK_LEN, YPixelComponentType> = pixel_buffer
+                .transform_block_iter()
+                .expect("Failed to get Y components.");
+            let cb_components: TransformBlockIterator<BLOCK_LEN, CbPixelComponentType> =
+                pixel_buffer
+                    .transform_block_iter()
+                    .expect("Failed to get Cb components.");
+            let cr_components: TransformBlockIterator<BLOCK_LEN, CrPixelComponentType> =
+                pixel_buffer
+                    .transform_block_iter()
+                    .expect("Failed to get Cr components.");
+
+            // TransformBlock -> PixelBuffer
+            let mut pixel_buffer_iter = transform_block::PixelBufferIterator::new(
+                y_components,
+                cb_components,
+                cr_components,
+                pixel_buffer.resolution(),
+            );
+
+            let new_pixel_buffer = pixel_buffer_iter
+                .next()
+                .expect("No pixel buffers generated.");
+
+            assert!(
+                pixel_buffer_iter.next().is_none(),
+                "More than one pixel buffer generated."
+            );
+
+            writer
+                .append_pixel_buffer(new_pixel_buffer)
                 .expect("Failed to append pixel buffer");
             writer
                 .wait_for_writer_to_be_ready()
