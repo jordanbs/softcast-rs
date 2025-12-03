@@ -881,7 +881,7 @@ mod tests {
 
     #[test]
     fn test_get_transform_block_0() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
         let pixel_buffer = reader
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn test_get_transform_block_1() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
         let pixel_buffer = reader
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_get_transform_block_2() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
         let pixel_buffer = reader
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_get_transform_block_3() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
         let pixel_buffer = reader
             .get_next_pixel_buffer()
             .expect("No pixel buffer.")
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_get_transform_block_4() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
 
         let mut count = 0;
         for pixel_buffer in reader.pixel_buffer_iter() {
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_writer_0() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
         let output_file = "/tmp/sample-5s.mp4";
 
         let writer_settings = AssetWritterSettings {
@@ -978,7 +978,7 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_writer_1() {
-        let mut reader = AssetReader::new("/Users/jordanbs/Downloads/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
         let output_file = "/tmp/sample-5s.mp4";
 
         let writer_settings = AssetWritterSettings {
