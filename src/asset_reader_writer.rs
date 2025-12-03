@@ -663,6 +663,56 @@ pub mod pixel_buffer {
             let height = CVPixelBufferGetHeight(&self.cv_image_buffer);
             (width, height)
         }
+
+        #[cfg(debug_assertions)]
+        fn dump_file(&self, prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
+            use std::fs;
+            use std::slice;
+            use std::sync::atomic;
+
+            unsafe {
+                let flags = CVPixelBufferLockFlags::ReadOnly;
+                CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
+
+                let y_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &self.cv_image_buffer,
+                    PixelComponentType::Y.plane_index(),
+                ) as *const u8;
+                let y_bytes_per_row = self.plane_data_len(PixelComponentType::Y);
+                let y_height = self.plane_height(PixelComponentType::Y);
+                let y_bytes: &[u8] = slice::from_raw_parts(y_ptr, y_bytes_per_row * y_height);
+
+                let cbcr_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &self.cv_image_buffer,
+                    PixelComponentType::Cb.plane_index(),
+                ) as *const u8;
+                let cbcr_bytes_per_row = self.plane_data_len(PixelComponentType::Cb);
+                let cbcr_height = self.plane_height(PixelComponentType::Cb);
+                let cbcr_bytes: &[u8] =
+                    slice::from_raw_parts(cbcr_ptr, cbcr_bytes_per_row * cbcr_height);
+
+                static Y_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+                static CBCR_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+
+                let y_path = format!(
+                    "/tmp/{}_Y_{:04}.out",
+                    prefix,
+                    Y_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
+                );
+                let cbcr_path = format!(
+                    "/tmp/{}_CbCr_{:04}.out",
+                    prefix,
+                    CBCR_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
+                );
+
+                fs::write(y_path, y_bytes)?;
+                fs::write(cbcr_path, cbcr_bytes)?;
+
+                CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
+            }
+
+            Ok(())
+        }
     }
 
     // only square blocks supported
@@ -731,6 +781,7 @@ pub mod pixel_buffer {
 
                 let plane_slice = std::slice::from_raw_parts(plane_ptr, plane_len);
 
+                // TODO: make this a memcpy.. and factor the routines and its inverse in a shared location
                 for plane_row in row_start..row_end {
                     for plane_column in (column_start..column_end).step_by(interleave_step) {
                         let plane_idx = plane_column + plane_row * plane_row_len;
