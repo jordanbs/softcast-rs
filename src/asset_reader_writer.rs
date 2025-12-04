@@ -489,10 +489,10 @@ pub mod pixel_buffer {
             let interleave_step = pixel_component_type.interleave_step();
 
             let cv_row_index = block_len * ((block_len * block_index) / plane_bytes_per_row);
-            let cv_row_offset =
-                plane_bytes_per_row * (cv_row_index + block_row_index + interleave_offset);
+            let cv_row_offset = plane_bytes_per_row * (cv_row_index + block_row_index);
 
-            let cv_column_index = (block_len * block_index * interleave_step) % plane_bytes_per_row;
+            let cv_column_index = (block_len * block_index * interleave_step + interleave_offset)
+                % plane_bytes_per_row;
             let cv_column_offset = cv_column_index;
 
             cv_row_offset + cv_column_offset
@@ -726,12 +726,7 @@ pub mod pixel_buffer {
                         let mut src_ptr = src_ptr_start; // shadow
                         let mut dst_ptr = dst_ptr_start; // shadow
 
-                        if interleaving_src {
-                            src_ptr = src_ptr.add(pixel_component_type.interleave_offset());
-                        } else {
-                            dst_ptr = dst_ptr.add(pixel_component_type.interleave_offset());
-                        }
-
+                        // offset is applied in block_index_to_cv_pixel_buffer_plane_offset
                         for _src_col_index in 0..block_len {
                             std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, 1);
 
@@ -1048,7 +1043,7 @@ mod tests {
     #[test]
     fn test_reader_to_writer_0() {
         let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
-        let output_file = "/tmp/sample-5s.mp4";
+        let output_file = "/tmp/sample-5s-0.mp4";
 
         let writer_settings = AssetWritterSettings {
             path: path::PathBuf::from(output_file),
@@ -1079,7 +1074,7 @@ mod tests {
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_writer_1() {
         let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4");
-        let output_file = "/tmp/bipbop-1920x1080-5s-3.mp4";
+        let output_file = "/tmp/bipbop-1920x1080-5s.mp4";
 
         let writer_settings = AssetWritterSettings {
             path: path::PathBuf::from(output_file),
@@ -1096,7 +1091,7 @@ mod tests {
             .expect("Failed to become ready before writing.");
 
         for pixel_buffer in reader.pixel_buffer_iter() {
-            const BLOCK_LEN: usize = 4;
+            const BLOCK_LEN: usize = 60;
 
             // PixelBuffer -> TransformBlock
             let y_components: TransformBlockIterator<BLOCK_LEN, YPixelComponentType> = pixel_buffer
@@ -1147,7 +1142,7 @@ mod tests {
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_writer_2() {
         let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
-        let output_file = "/tmp/sample-5s.mp4";
+        let output_file = "/tmp/sample-5s-1.mp4";
 
         let writer_settings = AssetWritterSettings {
             path: path::PathBuf::from(output_file),
