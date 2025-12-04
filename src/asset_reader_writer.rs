@@ -817,6 +817,82 @@ pub mod pixel_buffer {
         }
     }
 
+    impl PartialEq for PixelBuffer {
+        // A deep comparison. Useful for testing. Bad idea? Should I hide?
+        fn eq(&self, other: &Self) -> bool {
+            // cheap comparisons first
+            if self.cv_image_buffer == other.cv_image_buffer {
+                return true;
+            }
+
+            let l_cv_y_pixel_buffer_len = self.plane_row_len(PixelComponentType::Y)
+                * self.plane_height(PixelComponentType::Y);
+            let r_cv_y_pixel_buffer_len = other.plane_row_len(PixelComponentType::Y)
+                * other.plane_height(PixelComponentType::Y);
+            if l_cv_y_pixel_buffer_len != r_cv_y_pixel_buffer_len {
+                return false;
+            }
+
+            let l_cv_cbcr_pixel_buffer_len = self.plane_row_len(PixelComponentType::Cb)
+                * self.plane_height(PixelComponentType::Cb);
+            let r_cv_cbcr_pixel_buffer_len = other.plane_row_len(PixelComponentType::Cb)
+                * other.plane_height(PixelComponentType::Cb);
+            if l_cv_cbcr_pixel_buffer_len != r_cv_cbcr_pixel_buffer_len {
+                return false;
+            }
+            unsafe {
+                let flags = CVPixelBufferLockFlags::ReadOnly;
+                CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
+                CVPixelBufferLockBaseAddress(&other.cv_image_buffer, flags);
+
+                let l_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &self.cv_image_buffer,
+                    PixelComponentType::Y.plane_index(),
+                ) as *const u8;
+                let r_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &other.cv_image_buffer,
+                    PixelComponentType::Y.plane_index(),
+                ) as *const u8;
+                let l_cv_cbcr_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &self.cv_image_buffer,
+                    PixelComponentType::Cb.plane_index(),
+                ) as *const u8;
+                let r_cv_cbcr_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
+                    &other.cv_image_buffer,
+                    PixelComponentType::Cb.plane_index(),
+                ) as *const u8;
+
+                let l_y_slice =
+                    std::slice::from_raw_parts(l_cv_y_pixel_buffer_ptr, l_cv_y_pixel_buffer_len);
+                let r_y_slice =
+                    std::slice::from_raw_parts(r_cv_y_pixel_buffer_ptr, r_cv_y_pixel_buffer_len);
+                let l_cbcr_slice = std::slice::from_raw_parts(
+                    l_cv_cbcr_pixel_buffer_ptr,
+                    l_cv_cbcr_pixel_buffer_len,
+                );
+                let r_cbcr_slice = std::slice::from_raw_parts(
+                    r_cv_cbcr_pixel_buffer_ptr,
+                    r_cv_cbcr_pixel_buffer_len,
+                );
+
+                if l_y_slice.cmp(r_y_slice) != std::cmp::Ordering::Equal {
+                    CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
+                    CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
+                    return false;
+                }
+                if l_cbcr_slice.cmp(r_cbcr_slice) != std::cmp::Ordering::Equal {
+                    CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
+                    CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
+                    return false;
+                }
+
+                CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
+                CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
+                true
+            }
+        }
+    }
+
     // only square blocks supported
     pub struct TransformBlockIterator<'a, const BLOCK_LEN: usize, PixelType: HasPixelComponentType> {
         pixel_buffer: &'a PixelBuffer,
@@ -1204,5 +1280,88 @@ mod tests {
                 .expect("Failed to become ready after writing some pixels.");
         }
         writer.finish_writing().expect("Failed to finish writing.");
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_reader_to_transform_block_to_pb_exact_equality() {
+        let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4");
+
+        for pixel_buffer in reader.pixel_buffer_iter() {
+            const BLOCK_LEN: usize = 60;
+
+            // PixelBuffer -> TransformBlock
+            let y_components: TransformBlockIterator<BLOCK_LEN, YPixelComponentType> = pixel_buffer
+                .transform_block_iter()
+                .expect("Failed to get Y components.");
+            let cb_components: TransformBlockIterator<BLOCK_LEN, CbPixelComponentType> =
+                pixel_buffer
+                    .transform_block_iter()
+                    .expect("Failed to get Cb components.");
+            let cr_components: TransformBlockIterator<BLOCK_LEN, CrPixelComponentType> =
+                pixel_buffer
+                    .transform_block_iter()
+                    .expect("Failed to get Cr components.");
+
+            // TransformBlock -> PixelBuffer
+            let mut pixel_buffer_iter = transform_block::PixelBufferIterator::new(
+                y_components,
+                cb_components,
+                cr_components,
+                pixel_buffer.resolution(),
+            );
+
+            let new_pixel_buffer = pixel_buffer_iter
+                .next()
+                .expect("No pixel buffers generated.");
+
+            assert!(
+                pixel_buffer_iter.next().is_none(),
+                "More than one pixel buffer generated."
+            );
+
+            assert_eq!(pixel_buffer, new_pixel_buffer);
+        }
+    }
+
+    #[test]
+    fn test_reader_to_transform_block_to_pb_exact_equality_ok_for_debug() {
+        let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4");
+
+        let pixel_buffer = reader
+            .pixel_buffer_iter()
+            .next()
+            .expect("Failed to get a pixel buffer");
+        const BLOCK_LEN: usize = 60;
+
+        // PixelBuffer -> TransformBlock
+        let y_components: TransformBlockIterator<BLOCK_LEN, YPixelComponentType> = pixel_buffer
+            .transform_block_iter()
+            .expect("Failed to get Y components.");
+        let cb_components: TransformBlockIterator<BLOCK_LEN, CbPixelComponentType> = pixel_buffer
+            .transform_block_iter()
+            .expect("Failed to get Cb components.");
+        let cr_components: TransformBlockIterator<BLOCK_LEN, CrPixelComponentType> = pixel_buffer
+            .transform_block_iter()
+            .expect("Failed to get Cr components.");
+
+        // TransformBlock -> PixelBuffer
+        let mut pixel_buffer_iter = transform_block::PixelBufferIterator::new(
+            y_components,
+            cb_components,
+            cr_components,
+            pixel_buffer.resolution(),
+        );
+
+        let new_pixel_buffer = pixel_buffer_iter
+            .next()
+            .expect("No pixel buffers generated.");
+
+        assert!(
+            pixel_buffer_iter.next().is_none(),
+            "More than one pixel buffer generated."
+        );
+
+        assert_eq!(pixel_buffer, new_pixel_buffer);
     }
 }
