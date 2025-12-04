@@ -1142,4 +1142,72 @@ mod tests {
         }
         writer.finish_writing().expect("Failed to finish writing.");
     }
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_reader_to_writer_2() {
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
+        let output_file = "/tmp/sample-5s.mp4";
+
+        let writer_settings = AssetWritterSettings {
+            path: path::PathBuf::from(output_file),
+            codec: Codec::H264,
+            resolution: reader.resolution().expect("Failed to get resolution."),
+            frame_rate: reader.frame_rate().expect("Failed to get frame rate"),
+        };
+        let _ = fs::remove_file(output_file);
+        let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
+        writer.start_writing().expect("Failed to start writing");
+
+        writer
+            .wait_for_writer_to_be_ready()
+            .expect("Failed to become ready before writing.");
+
+        for pixel_buffer in reader.pixel_buffer_iter() {
+            const BLOCK_LEN: usize = 12;
+
+            // PixelBuffer -> TransformBlock
+            let y_components: TransformBlockIterator<BLOCK_LEN, YPixelComponentType> = pixel_buffer
+                .transform_block_iter()
+                .expect("Failed to get Y components.");
+            let cb_components: TransformBlockIterator<BLOCK_LEN, CbPixelComponentType> =
+                pixel_buffer
+                    .transform_block_iter()
+                    .expect("Failed to get Cb components.");
+            let cr_components: TransformBlockIterator<BLOCK_LEN, CrPixelComponentType> =
+                pixel_buffer
+                    .transform_block_iter()
+                    .expect("Failed to get Cr components.");
+
+            // TransformBlock -> PixelBuffer
+            let mut pixel_buffer_iter = transform_block::PixelBufferIterator::new(
+                y_components,
+                cb_components,
+                cr_components,
+                pixel_buffer.resolution(),
+            );
+
+            let new_pixel_buffer = pixel_buffer_iter
+                .next()
+                .expect("No pixel buffers generated.");
+
+            assert!(
+                pixel_buffer_iter.next().is_none(),
+                "More than one pixel buffer generated."
+            );
+
+            //             pixel_buffer.dump_file("i").expect("first dump file failed");
+            //             new_pixel_buffer
+            //                 .dump_file("o")
+            //                 .expect("second dump file failed");
+
+            writer
+                .append_pixel_buffer(new_pixel_buffer)
+                .expect("Failed to append pixel buffer");
+            writer
+                .wait_for_writer_to_be_ready()
+                .expect("Failed to become ready after writing some pixels.");
+        }
+        writer.finish_writing().expect("Failed to finish writing.");
+    }
 }
