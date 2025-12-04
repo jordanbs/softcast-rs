@@ -478,16 +478,21 @@ pub mod pixel_buffer {
             }
         }
 
-        fn block_index_to_cv_pixel_buffer_plane_offset(
+        pub fn block_index_to_cv_pixel_buffer_plane_offset(
             block_index: usize,
             block_row_index: usize,
             block_len: usize,
             plane_bytes_per_row: usize,
+            pixel_component_type: PixelComponentType,
         ) -> usize {
-            let cv_row_index = block_len * ((block_len * block_index) / plane_bytes_per_row);
-            let cv_row_offset = plane_bytes_per_row * (cv_row_index + block_row_index);
+            let interleave_offset = pixel_component_type.interleave_offset();
+            let interleave_step = pixel_component_type.interleave_step();
 
-            let cv_column_index = (block_len * block_index) % plane_bytes_per_row;
+            let cv_row_index = block_len * ((block_len * block_index) / plane_bytes_per_row);
+            let cv_row_offset =
+                plane_bytes_per_row * (cv_row_index + block_row_index + interleave_offset);
+
+            let cv_column_index = (block_len * block_index * interleave_step) % plane_bytes_per_row;
             let cv_column_offset = cv_column_index;
 
             cv_row_offset + cv_column_offset
@@ -511,6 +516,7 @@ pub mod pixel_buffer {
                 let plane_ptr = CVPixelBufferGetBaseAddressOfPlane(&dst, plane_index) as *mut u8;
                 let plane_bytes_per_row = CVPixelBufferGetBytesPerRowOfPlane(&dst, plane_index);
                 let plane_height = CVPixelBufferGetHeightOfPlane(&dst, plane_index);
+                let plane_data_len = plane_bytes_per_row * plane_height;
 
                 if plane_ptr.is_null() {
                     return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
@@ -535,53 +541,65 @@ pub mod pixel_buffer {
                     .into());
                 }
 
-                let num_blocks_needed =
-                    plane_bytes_per_row * plane_height / (BLOCK_LEN * BLOCK_LEN);
-                let mut total_blocks = 0;
+                let mut block_index = 0;
+                let mut prev_block_index = block_index;
+                let mut block_row_index = 0;
+                let mut dst_offset = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
+                    block_index,
+                    0,
+                    BLOCK_LEN,
+                    plane_bytes_per_row,
+                    PixelType::TYPE,
+                );
 
-                for (block_index, block) in src.by_ref().take(num_blocks_needed).enumerate() {
-                    for src_row_index in 0..BLOCK_LEN {
-                        let src_ptr_start = block
-                            .values
-                            .get_ptr([0, src_row_index])
-                            .ok_or("Could not get TransformBlock ptr.")?;
-
-                        let dst_offset = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
-                            block_index,
-                            src_row_index,
-                            BLOCK_LEN,
-                            plane_bytes_per_row,
-                        );
-
-                        unsafe {
-                            let dst_ptr_start = plane_ptr.add(dst_offset);
-                            PixelBuffer::copy_row(
-                                src_ptr_start,
-                                dst_ptr_start,
-                                false,
-                                BLOCK_LEN,
-                                PixelType::TYPE,
-                            );
-                        }
+                let mut block = match src.next() {
+                    Some(block) => block,
+                    None => {
+                        return Ok(false); // if no bytes were processed, the iterator is correctly exhausted
                     }
-                    total_blocks += 1;
-                }
-                // No TransformBlocks - signal the pixel buffer is empty.
-                if total_blocks == 0 {
-                    return Ok(false);
-                }
+                };
 
-                let expected_bytes =
-                    (plane_bytes_per_row * plane_height) / PixelType::TYPE.interleave_step();
-                if total_blocks * BLOCK_LEN * BLOCK_LEN != expected_bytes {
-                    let expected = expected_bytes / (BLOCK_LEN * BLOCK_LEN);
-                    return Err(format!(
-                        "Ran out of {:?} TransformBlocks. Expected {}. Got {}. ",
+                while dst_offset < plane_data_len {
+                    if prev_block_index != block_index {
+                        block = match src.next() {
+                            Some(block) => block,
+                            None => {
+                                return Err(
+                                    format!("Ran out of {:?} TransformBlocks. Expected {} bytes. Got {} bytes. ",
+                                        PixelType::TYPE, plane_data_len, dst_offset).into()
+                                    );
+                            }
+                        };
+                    }
+
+                    let src_ptr_start = block
+                        .values
+                        .get_ptr([block_row_index, 0])
+                        .ok_or("Could not get TransformBlock ptr.")?;
+
+                    unsafe {
+                        let dst_ptr_start = plane_ptr.add(dst_offset);
+                        PixelBuffer::copy_row(
+                            src_ptr_start,
+                            dst_ptr_start,
+                            false,
+                            BLOCK_LEN,
+                            PixelType::TYPE,
+                        );
+                    }
+
+                    prev_block_index = block_index;
+                    block_row_index += 1;
+                    block_index += block_row_index / BLOCK_LEN;
+                    block_row_index %= BLOCK_LEN;
+
+                    dst_offset = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
+                        block_index,
+                        block_row_index,
+                        BLOCK_LEN,
+                        plane_bytes_per_row,
                         PixelType::TYPE,
-                        expected,
-                        total_blocks,
-                    )
-                    .into());
+                    );
                 }
 
                 Ok(true)
@@ -641,7 +659,7 @@ pub mod pixel_buffer {
         }
 
         // CVPixelBuffer MUST be locked.
-        pub fn to_transform_block<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
+        fn to_transform_block<const BLOCK_LEN: usize, PixelType: HasPixelComponentType>(
             &self,
             block_index: usize,
         ) -> Result<TransformBlock<BLOCK_LEN, PixelType>, Box<dyn std::error::Error>> {
@@ -669,10 +687,11 @@ pub mod pixel_buffer {
                         block_row_index,
                         BLOCK_LEN,
                         plane_row_len,
+                        PixelType::TYPE,
                     );
                     let src_ptr_start = plane_ptr.add(src_offset_start);
                     let dst_ptr_start = block_ndarray
-                        .get_mut_ptr([0, block_row_index])
+                        .get_mut_ptr([block_row_index, 0])
                         .ok_or("Could not get mut ptr of ndarray.")?;
 
                     PixelBuffer::copy_row(
@@ -848,22 +867,6 @@ pub mod pixel_buffer {
                 self.locked_pixel_buffer_memory = false;
             }
         }
-
-        // the following could be static fns
-        //         fn interleave_offset(&self) -> usize {
-        //             PixelType::TYPE.interleave_offset()
-        //         }
-        fn interleave_step(&self) -> usize {
-            PixelType::TYPE.interleave_step()
-        }
-
-        fn plane_indexes_per_block(&self) -> usize {
-            BLOCK_LEN * BLOCK_LEN * self.interleave_step()
-        }
-        fn plane_indexes_per_pixel_buffer(&self) -> usize {
-            self.pixel_buffer.plane_height(PixelType::TYPE)
-                * self.pixel_buffer.plane_row_len(PixelType::TYPE)
-        }
     }
 
     impl<'a, const BLOCK_LEN: usize, PixelType: HasPixelComponentType> Iterator
@@ -872,8 +875,18 @@ pub mod pixel_buffer {
         type Item = TransformBlock<BLOCK_LEN, PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
-            let next_plane_index = self.current_block_index * self.plane_indexes_per_block();
-            if next_plane_index >= self.plane_indexes_per_pixel_buffer() {
+            let plane_bytes_per_row = self.pixel_buffer.plane_row_len(PixelType::TYPE);
+            let next_plane_ptr_offset = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
+                self.current_block_index,
+                0,
+                BLOCK_LEN,
+                plane_bytes_per_row,
+                PixelType::TYPE,
+            );
+            let bytes_per_plane =
+                self.pixel_buffer.plane_height(PixelType::TYPE) * plane_bytes_per_row;
+
+            if next_plane_ptr_offset >= bytes_per_plane {
                 // Completed this pixel buffer.
                 self.ensure_pixel_buffer_address_is_unlocked();
                 return None;
@@ -1002,7 +1015,7 @@ mod tests {
         let iter = TransformBlockIterator::<4, CbPixelComponentType>::new(&pixel_buffer);
         let count = iter.fold(0, |acc, _| acc + 1);
 
-        assert_eq!(count, 32400);
+        assert_eq!(count, 64800);
     }
 
     #[test]
@@ -1015,7 +1028,7 @@ mod tests {
         let iter = TransformBlockIterator::<4, CrPixelComponentType>::new(&pixel_buffer);
         let count = iter.fold(0, |acc, _| acc + 1);
 
-        assert_eq!(count, 32400);
+        assert_eq!(count, 64800);
     }
 
     #[test]
@@ -1063,10 +1076,10 @@ mod tests {
     }
 
     #[test]
-    //     #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_writer_1() {
         let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4");
-        let output_file = "/tmp/bipbop-1920x1080-5s.mp4";
+        let output_file = "/tmp/bipbop-1920x1080-5s-3.mp4";
 
         let writer_settings = AssetWritterSettings {
             path: path::PathBuf::from(output_file),
@@ -1115,10 +1128,10 @@ mod tests {
                 "More than one pixel buffer generated."
             );
 
-            pixel_buffer.dump_file("i").expect("first dump file failed");
-            new_pixel_buffer
-                .dump_file("o")
-                .expect("second dump file failed");
+            //             pixel_buffer.dump_file("i").expect("first dump file failed");
+            //             new_pixel_buffer
+            //                 .dump_file("o")
+            //                 .expect("second dump file failed");
 
             writer
                 .append_pixel_buffer(new_pixel_buffer)
