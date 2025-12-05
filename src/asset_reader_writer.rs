@@ -663,14 +663,26 @@ pub mod pixel_buffer {
             &self,
             block_index: usize,
         ) -> Result<TransformBlock<BLOCK_LEN, PixelType>, Box<dyn std::error::Error>> {
+            let mut arr = ndarray::Array2::zeros((BLOCK_LEN, BLOCK_LEN));
+            self.populate_2d_transform_block_array::<BLOCK_LEN, PixelType>(block_index, &mut arr)?;
+            let transform_block = TransformBlock::<BLOCK_LEN, PixelType>::new(arr);
+            Ok(transform_block)
+        }
+
+        fn populate_2d_transform_block_array<
+            const BLOCK_LEN: usize,
+            PixelType: HasPixelComponentType,
+        >(
+            &self,
+            block_index: usize,
+            dst: &mut ndarray::Array2<u8>,
+        ) -> Result<(), Box<dyn std::error::Error>> {
             let plane_index = PixelType::TYPE.plane_index();
             let plane_row_len = self.plane_row_len(PixelType::TYPE);
             let plane_height = self.plane_height(PixelType::TYPE);
 
             assert_eq!(plane_row_len % BLOCK_LEN, 0);
             assert_eq!(plane_height % BLOCK_LEN, 0);
-
-            let mut block_ndarray = ndarray::Array2::zeros((BLOCK_LEN, BLOCK_LEN));
 
             unsafe {
                 let plane_ptr =
@@ -690,7 +702,7 @@ pub mod pixel_buffer {
                         PixelType::TYPE,
                     );
                     let src_ptr_start = plane_ptr.add(src_offset_start);
-                    let dst_ptr_start = block_ndarray
+                    let dst_ptr_start = dst
                         .get_mut_ptr([block_row_index, 0])
                         .ok_or("Could not get mut ptr of ndarray.")?;
 
@@ -703,9 +715,7 @@ pub mod pixel_buffer {
                     );
                 }
             }
-
-            let transform_block = TransformBlock::<BLOCK_LEN, PixelType>::new(block_ndarray);
-            Ok(transform_block)
+            Ok(())
         }
         fn copy_row(
             src_ptr: *const u8,
