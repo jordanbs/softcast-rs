@@ -462,6 +462,7 @@ impl HasPixelComponentType for CrPixelComponentType {
 pub mod pixel_buffer {
     use super::*;
     use transform_block::*;
+    use transform_block_3d::*;
 
     // Holds a single frame
     #[derive(Debug)]
@@ -485,13 +486,30 @@ pub mod pixel_buffer {
             plane_bytes_per_row: usize,
             pixel_component_type: PixelComponentType,
         ) -> usize {
+            Self::block_index_to_cv_pixel_buffer_plane_offset_rectangular(
+                block_index,
+                block_row_index,
+                block_len,
+                block_len,
+                plane_bytes_per_row,
+                pixel_component_type,
+            )
+        }
+        pub fn block_index_to_cv_pixel_buffer_plane_offset_rectangular(
+            block_index: usize,
+            block_row_index: usize,
+            block_width: usize,
+            block_height: usize,
+            plane_bytes_per_row: usize,
+            pixel_component_type: PixelComponentType,
+        ) -> usize {
             let interleave_offset = pixel_component_type.interleave_offset();
             let interleave_step = pixel_component_type.interleave_step();
 
-            let cv_row_index = block_len * ((block_len * block_index) / plane_bytes_per_row);
+            let cv_row_index = block_height * ((block_width * block_index) / plane_bytes_per_row);
             let cv_row_offset = plane_bytes_per_row * (cv_row_index + block_row_index);
 
-            let cv_column_index = (block_len * block_index * interleave_step + interleave_offset)
+            let cv_column_index = (block_width * block_index * interleave_step + interleave_offset)
                 % plane_bytes_per_row;
             let cv_column_offset = cv_column_index;
 
@@ -664,25 +682,30 @@ pub mod pixel_buffer {
             block_index: usize,
         ) -> Result<TransformBlock<BLOCK_LEN, PixelType>, Box<dyn std::error::Error>> {
             let mut arr = ndarray::Array2::zeros((BLOCK_LEN, BLOCK_LEN));
-            self.populate_2d_transform_block_array::<BLOCK_LEN, PixelType>(block_index, &mut arr)?;
+            self.populate_2d_transform_block_array::<PixelType, _>(
+                block_index,
+                (BLOCK_LEN, BLOCK_LEN),
+                &mut arr,
+            )?;
             let transform_block = TransformBlock::<BLOCK_LEN, PixelType>::new(arr);
             Ok(transform_block)
         }
 
-        fn populate_2d_transform_block_array<
-            const BLOCK_LEN: usize,
-            PixelType: HasPixelComponentType,
-        >(
+        fn populate_2d_transform_block_array<PixelType: HasPixelComponentType, ArrayStorage>(
             &self,
             block_index: usize,
-            dst: &mut ndarray::Array2<u8>,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+            (block_width, block_height): (usize, usize),
+            dst: &mut ndarray::ArrayBase<ArrayStorage, ndarray::Ix2>,
+        ) -> Result<(), Box<dyn std::error::Error>>
+        where
+            ArrayStorage: ndarray::DataMut<Elem = u8>,
+        {
             let plane_index = PixelType::TYPE.plane_index();
             let plane_row_len = self.plane_row_len(PixelType::TYPE);
             let plane_height = self.plane_height(PixelType::TYPE);
 
-            assert_eq!(plane_row_len % BLOCK_LEN, 0);
-            assert_eq!(plane_height % BLOCK_LEN, 0);
+            assert_eq!(plane_row_len % block_width, 0);
+            assert_eq!(plane_height % block_height, 0);
 
             unsafe {
                 let plane_ptr =
@@ -693,14 +716,16 @@ pub mod pixel_buffer {
                     return Err("CVPixelBufferGetBaseAddressOfPlane returned NULL.".into());
                 }
 
-                for block_row_index in 0..BLOCK_LEN {
-                    let src_offset_start = PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset(
-                        block_index,
-                        block_row_index,
-                        BLOCK_LEN,
-                        plane_row_len,
-                        PixelType::TYPE,
-                    );
+                for block_row_index in 0..block_height {
+                    let src_offset_start =
+                        PixelBuffer::block_index_to_cv_pixel_buffer_plane_offset_rectangular(
+                            block_index,
+                            block_row_index,
+                            block_width,
+                            block_height,
+                            plane_row_len,
+                            PixelType::TYPE,
+                        );
                     let src_ptr_start = plane_ptr.add(src_offset_start);
                     let dst_ptr_start = dst
                         .get_mut_ptr([block_row_index, 0])
@@ -710,7 +735,7 @@ pub mod pixel_buffer {
                         src_ptr_start,
                         dst_ptr_start,
                         true,
-                        BLOCK_LEN,
+                        block_width,
                         PixelType::TYPE,
                     );
                 }
@@ -984,6 +1009,69 @@ pub mod pixel_buffer {
             Some(next_block)
         }
     }
+
+    pub struct TransformBlock3DIterator<
+        const LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        PixelBufferIterator,
+    >
+    where
+        PixelBufferIterator: Iterator<Item = PixelBuffer>,
+    {
+        pixel_buffer_iterator: PixelBufferIterator,
+        resolution: (usize, usize),
+        _marker: std::marker::PhantomData<PixelType>,
+    }
+
+    impl<const LENGTH: usize, PixelType: HasPixelComponentType, PixelBufferIterator>
+        TransformBlock3DIterator<LENGTH, PixelType, PixelBufferIterator>
+    where
+        PixelBufferIterator: Iterator<Item = PixelBuffer>,
+    {
+        fn new(pixel_buffer_iterator: PixelBufferIterator, resolution: (usize, usize)) -> Self {
+            TransformBlock3DIterator {
+                pixel_buffer_iterator: pixel_buffer_iterator,
+                resolution: resolution,
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<const LENGTH: usize, PixelType: HasPixelComponentType, PixelBufferIterator> Iterator
+        for TransformBlock3DIterator<LENGTH, PixelType, PixelBufferIterator>
+    where
+        PixelBufferIterator: Iterator<Item = PixelBuffer>,
+    {
+        type Item = TransformBlock3D<LENGTH, PixelType>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let (width, height) = self.resolution;
+
+            // Length must be the first dimension to afford contiguous memory regions per-frame.
+            let mut values_3d: ndarray::Array3<u8> =
+                ndarray::Array3::zeros((LENGTH, width, height));
+            while let Some((frame_idx, pixel_buffer)) = self
+                .pixel_buffer_iterator
+                .by_ref()
+                .take(LENGTH)
+                .enumerate()
+                .next()
+            {
+                let mut values_2d = values_3d.index_axis_mut(ndarray::Axis(0), frame_idx);
+                assert!(values_2d.is_standard_layout()); // standard_layout = contiguous memory layout
+
+                pixel_buffer
+                    .populate_2d_transform_block_array::<PixelType, _>(
+                        0,
+                        pixel_buffer.resolution(),
+                        &mut values_2d,
+                    )
+                    .expect("Failed to populate frame of 3D Transform Block.");
+            }
+
+            None
+        }
+    }
 }
 
 pub mod transform_block {
@@ -1047,6 +1135,29 @@ pub mod transform_block {
                 self.pixel_buffer_resolution,
             )
             .expect("Failed to create pixel buffer.")
+        }
+    }
+}
+
+mod transform_block_3d {
+    use super::*;
+
+    pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
+        pub values: ndarray::Array3<u8>,
+        _marker: std::marker::PhantomData<PixelType>,
+    }
+
+    impl<const LENGTH: usize, PixelType: HasPixelComponentType> TransformBlock3D<LENGTH, PixelType> {
+        pub(super) fn new(values: ndarray::Array3<u8>, resolution: (usize, usize)) -> Self {
+            assert_eq!(LENGTH, values.dim().0);
+            assert_eq!(resolution.0, values.dim().1);
+            assert_eq!(resolution.1, values.dim().2);
+
+            // take ownership of values with a move
+            TransformBlock3D {
+                values: values,
+                _marker: std::marker::PhantomData,
+            }
         }
     }
 }
