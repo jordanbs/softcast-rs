@@ -1060,11 +1060,7 @@ pub mod pixel_buffer {
         PixelBufferIterator: Iterator<Item = PixelBuffer>,
     {
         // Output all three TransformBlocks at once to linearly process frames
-        type Item = (
-            TransformBlock3D<LENGTH, YPixelComponentType>,
-            TransformBlock3D<LENGTH, CbPixelComponentType>,
-            TransformBlock3D<LENGTH, CrPixelComponentType>,
-        );
+        type Item = MacroBlock3D<LENGTH>;
 
         fn next(&mut self) -> Option<Self::Item> {
             let mut y_block = TransformBlock3D::new();
@@ -1094,7 +1090,11 @@ pub mod pixel_buffer {
                 return None;
             }
 
-            Some((y_block, cb_block, cr_block))
+            Some(MacroBlock3D {
+                y_components: y_block,
+                cb_components: cb_block,
+                cr_components: cr_block,
+            })
         }
     }
 }
@@ -1198,6 +1198,7 @@ mod transform_block_3d {
             }
             let values = self.values.as_mut().unwrap();
 
+            // Axis(0) is the length/depth dimension
             let mut values_2d = values.index_axis_mut(ndarray::Axis(0), frame_idx);
             assert!(values_2d.is_standard_layout()); // standard_layout = contiguous memory layout
 
@@ -1217,6 +1218,13 @@ mod transform_block_3d {
         pub fn len(&self) -> usize {
             self.len
         }
+    }
+
+    // 4:2:0
+    pub struct MacroBlock3D<const LENGTH: usize> {
+        pub y_components: TransformBlock3D<LENGTH, YPixelComponentType>,
+        pub cb_components: TransformBlock3D<LENGTH, CbPixelComponentType>,
+        pub cr_components: TransformBlock3D<LENGTH, CrPixelComponentType>,
     }
 }
 
@@ -1552,8 +1560,10 @@ mod tests {
         let num_frames_processed = reader
             .pixel_buffer_iter()
             .transform_blocks_3d_iterator::<GOP_SIZE>()
-            .fold(0, |acc, (y_block, cb_block, cr_block)| {
-                acc + y_block.len() + cb_block.len() + cr_block.len()
+            .fold(0, |acc, macro_block| {
+                acc + macro_block.y_components.len()
+                    + macro_block.cb_components.len()
+                    + macro_block.cr_components.len()
             });
         let num_frames_expected = 3 + (300 * 3);
         assert_eq!(num_frames_processed, num_frames_expected);
