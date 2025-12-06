@@ -200,10 +200,10 @@ pub mod asset_reader {
                 asset_reader: asset_reader,
             }
         }
-        pub fn transform_blocks_3d_iterator<const GOP_LENGTH: usize>(
+        pub fn macro_block_3d_iterator<const GOP_LENGTH: usize>(
             self,
-        ) -> TransformBlock3DIterator<GOP_LENGTH, Self> {
-            pixel_buffer::TransformBlock3DIterator::new(self)
+        ) -> MacroBlock3DIterator<GOP_LENGTH, Self> {
+            pixel_buffer::MacroBlock3DIterator::new(self)
         }
     }
 
@@ -1037,25 +1037,25 @@ pub mod pixel_buffer {
         }
     }
 
-    pub struct TransformBlock3DIterator<const LENGTH: usize, PixelBufferIterator>
+    pub struct MacroBlock3DIterator<const LENGTH: usize, PixelBufferIterator>
     where
         PixelBufferIterator: Iterator<Item = PixelBuffer>,
     {
         pixel_buffer_iterator: PixelBufferIterator,
     }
-    impl<const LENGTH: usize, PixelBufferIterator> TransformBlock3DIterator<LENGTH, PixelBufferIterator>
+    impl<const LENGTH: usize, PixelBufferIterator> MacroBlock3DIterator<LENGTH, PixelBufferIterator>
     where
         PixelBufferIterator: Iterator<Item = PixelBuffer>,
     {
         pub(super) fn new(pixel_buffer_iterator: PixelBufferIterator) -> Self {
-            TransformBlock3DIterator {
+            MacroBlock3DIterator {
                 pixel_buffer_iterator: pixel_buffer_iterator,
             }
         }
     }
 
     impl<const LENGTH: usize, PixelBufferIterator> Iterator
-        for TransformBlock3DIterator<LENGTH, PixelBufferIterator>
+        for MacroBlock3DIterator<LENGTH, PixelBufferIterator>
     where
         PixelBufferIterator: Iterator<Item = PixelBuffer>,
     {
@@ -1559,7 +1559,7 @@ mod tests {
 
         let num_frames_processed = reader
             .pixel_buffer_iter()
-            .transform_blocks_3d_iterator::<GOP_SIZE>()
+            .macro_block_3d_iterator::<GOP_SIZE>()
             .fold(0, |acc, macro_block| {
                 acc + macro_block.y_components.len()
                     + macro_block.cb_components.len()
