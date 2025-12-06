@@ -708,8 +708,9 @@ pub mod pixel_buffer {
                     .ok_or("Could not get TransformBlock ptr.")?;
                 let src_len = src.values.len();
 
-                let interleave_step = PixelType::TYPE.interleave_step();
-                let plane_index = PixelType::TYPE.plane_index();
+                let pixel_type = PixelType::TYPE;
+                let interleave_step = pixel_type.interleave_step();
+                let plane_index = pixel_type.plane_index();
 
                 let dst_ptr = CVPixelBufferGetBaseAddressOfPlane(dst, plane_index) as *mut u8;
                 let dst_len = CVPixelBufferGetBytesPerRowOfPlane(dst, plane_index)
@@ -721,16 +722,33 @@ pub mod pixel_buffer {
                         std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, src_len);
                     },
                     _ => {
-                        let dst_ptr_start =
-                            unsafe { dst_ptr.add(PixelType::TYPE.interleave_offset()) };
-                        let block_row_width = src.values.dim().0;
-                        PixelBuffer::copy_row(
-                            src_ptr,
-                            dst_ptr_start,
-                            false,
-                            block_row_width,
-                            PixelType::TYPE,
-                        );
+                        let (src_width, src_height) = src.values.dim();
+                        let src_bytes_per_row = src_width;
+                        let src_len = src_width * src_height;
+                        let dst_bytes_per_row = src_width * pixel_type.interleave_step();
+                        let dst_ptr_start = dst_ptr;
+                        let src_ptr_start = src
+                            .values
+                            .get_ptr([0, 0])
+                            .ok_or("Could not get values ptr.")?;
+
+                        let mut dst_offset = pixel_type.interleave_offset();
+                        let mut src_offset = 0;
+                        while dst_offset < dst_len {
+                            assert!(src_offset + src_bytes_per_row <= src_len);
+                            assert!(
+                                dst_offset + dst_bytes_per_row - pixel_type.interleave_offset()
+                                    <= dst_len
+                            );
+
+                            let src_ptr = unsafe { src_ptr_start.add(src_offset) };
+                            let dst_ptr = unsafe { dst_ptr_start.add(dst_offset) };
+
+                            PixelBuffer::copy_row(src_ptr, dst_ptr, false, src_width, pixel_type);
+
+                            src_offset += src_bytes_per_row;
+                            dst_offset += dst_bytes_per_row;
+                        }
                     }
                 }
                 Ok(())
@@ -846,7 +864,7 @@ pub mod pixel_buffer {
             }
             Ok(())
         }
-        fn copy_row(
+        pub(super) fn copy_row(
             src_ptr: *const u8,
             dst_ptr: *mut u8,
             interleaving_src: bool, // false to interleave dst
@@ -1149,19 +1167,17 @@ pub mod pixel_buffer {
             let mut cr_block = TransformBlock3D::new();
 
             let mut pixel_buffer_iterator_is_empty = true;
-            for (frame_idx, pixel_buffer) in
-                self.pixel_buffer_iterator.by_ref().take(LENGTH).enumerate()
-            {
+            for pixel_buffer in self.pixel_buffer_iterator.by_ref().take(LENGTH) {
                 pixel_buffer.lock_base_address(true);
 
                 y_block
-                    .populate_frame(&pixel_buffer, frame_idx)
+                    .populate_next_frame(&pixel_buffer)
                     .expect("Populating Y block failed.");
                 cb_block
-                    .populate_frame(&pixel_buffer, frame_idx)
+                    .populate_next_frame(&pixel_buffer)
                     .expect("Populating Cb block failed.");
                 cr_block
-                    .populate_frame(&pixel_buffer, frame_idx)
+                    .populate_next_frame(&pixel_buffer)
                     .expect("Populating Cr block failed.");
 
                 pixel_buffer.unlock_base_address(true);
@@ -1251,7 +1267,7 @@ pub mod transform_block_3d {
 
     pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
         pub(super) values: Option<ndarray::Array3<u8>>,
-        len: usize,
+        pub(super) len: usize,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
@@ -1263,13 +1279,12 @@ pub mod transform_block_3d {
                 _marker: std::marker::PhantomData,
             }
         }
-        pub(super) fn populate_frame(
+        pub(super) fn populate_next_frame(
             &mut self,
             pixel_buffer: &PixelBuffer,
-            frame_idx: usize,
         ) -> Result<(), Box<dyn std::error::Error>> {
-            // the previous frame must be filled
-            assert_eq!(self.len, frame_idx);
+            let frame_idx = self.len;
+            self.len += 1;
 
             if self.values.is_none() {
                 let block_width =
@@ -1283,17 +1298,65 @@ pub mod transform_block_3d {
             let mut values_2d = values.index_axis_mut(ndarray::Axis(0), frame_idx);
             assert!(values_2d.is_standard_layout()); // standard_layout = contiguous memory layout
 
-            let block_width =
-                pixel_buffer.plane_row_len(PixelType::TYPE) / PixelType::TYPE.interleave_step();
-            let block_height = pixel_buffer.plane_height(PixelType::TYPE);
+            let pixel_type = PixelType::TYPE;
 
-            self.len += 1;
+            let (dst_width, dst_height) = values_2d.dim();
+            let dst_len = dst_width * dst_height;
 
-            pixel_buffer.populate_2d_transform_block_array::<PixelType, _>(
-                0,
-                (block_width, block_height),
-                &mut values_2d,
-            )
+            pixel_buffer.lock_base_address(true);
+
+            let plane_index = pixel_type.plane_index();
+
+            let src_ptr =
+                CVPixelBufferGetBaseAddressOfPlane(&pixel_buffer.cv_image_buffer, plane_index)
+                    as *const u8;
+
+            let interleave_step = pixel_type.interleave_step();
+
+            match interleave_step {
+                1 => {
+                    let dst_ptr = values_2d
+                        .get_mut_ptr([0, 0])
+                        .ok_or("Failed to get mut_ptr.")?;
+                    unsafe { std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, dst_len) };
+                }
+                _ => {
+                    let src_bytes_per_row = pixel_buffer.plane_row_len(pixel_type);
+                    let src_height = pixel_buffer.plane_height(pixel_type);
+                    let src_len = src_bytes_per_row * src_height;
+                    let src_ptr_start = src_ptr;
+
+                    let dst_ptr_start = values_2d
+                        .get_mut_ptr([0, 0])
+                        .ok_or("Failed to get mut ptr")?;
+                    let dst_bytes_per_row = values_2d.dim().0;
+
+                    let mut dst_offset = 0;
+                    let mut src_offset = pixel_type.interleave_offset();
+
+                    let dst_len = values_2d.len();
+
+                    while dst_offset < dst_len {
+                        assert!(
+                            src_offset + src_bytes_per_row - pixel_type.interleave_offset()
+                                <= src_len
+                        );
+                        assert!(dst_offset + dst_bytes_per_row <= dst_len);
+
+                        let src_ptr = unsafe { src_ptr_start.add(src_offset) };
+                        let dst_ptr = unsafe { dst_ptr_start.add(dst_offset) };
+
+                        PixelBuffer::copy_row(src_ptr, dst_ptr, true, dst_width, pixel_type);
+
+                        src_offset += src_bytes_per_row;
+                        dst_offset += dst_bytes_per_row;
+                    }
+                }
+            }
+
+            pixel_buffer.unlock_base_address(true);
+
+            Ok(())
         }
 
         pub(super) fn frame_view(
@@ -1306,11 +1369,6 @@ pub mod transform_block_3d {
                 .ok_or("No values.")?
                 .index_axis(ndarray::Axis(0), frame_idx);
             Ok(FrameComponentView::new(arr))
-        }
-
-        // will be LENGTH or shorter
-        pub fn len(&self) -> usize {
-            self.len
         }
     }
 
@@ -1357,6 +1415,12 @@ pub mod transform_block_3d {
                     .current_macro_block
                     .insert(self.macro_block_3d_iterator.next()?),
             };
+            // A MacroBlock3D can be shorter than it's LENGTH
+            if self.frame_index == macro_block_3d.y_components.len {
+                self.frame_index = 0;
+                self.current_macro_block = None;
+                return self.next();
+            }
 
             let y_components = macro_block_3d
                 .y_components
@@ -1716,7 +1780,6 @@ mod tests {
         let new_pixel_buffer = pixel_buffer_iter
             .next()
             .expect("No pixel buffers generated.");
-
         assert!(
             pixel_buffer_iter.next().is_none(),
             "More than one pixel buffer generated."
@@ -1734,9 +1797,9 @@ mod tests {
             .pixel_buffer_iter()
             .macro_block_3d_iterator::<GOP_SIZE>()
             .fold(0, |acc, macro_block| {
-                acc + macro_block.y_components.len()
-                    + macro_block.cb_components.len()
-                    + macro_block.cr_components.len()
+                acc + macro_block.y_components.len
+                    + macro_block.cb_components.len
+                    + macro_block.cr_components.len
             });
         let num_frames_expected = 3 + (300 * 3);
         assert_eq!(num_frames_processed, num_frames_expected);
@@ -1780,10 +1843,14 @@ mod tests {
             .next()
             .expect("Failed to get pb1");
 
+        //         pb1.dump_file("o").expect("first dump file failed");
+
         let pb2 = reader_2
             .pixel_buffer_iter()
             .next()
             .expect("Failed to get pb2");
+
+        //         pb2.dump_file("i").expect("second dump file failed");
 
         assert_eq!(pb1, pb2);
     }
@@ -1793,7 +1860,7 @@ mod tests {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 
-        let output_path = "/tmp/sample-5s-3d_to_writer_0.mp4";
+        let output_path = "/tmp/bipbop-1920x1080-3d-5s.mp4";
         let _ = fs::remove_file(output_path);
         let writer_settings = AssetWritterSettings {
             path: path::PathBuf::from(output_path),
