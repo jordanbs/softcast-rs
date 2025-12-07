@@ -570,6 +570,7 @@ pub mod pixel_buffer {
 
                 let pixel_type = PixelType::TYPE;
                 let interleave_step = pixel_type.interleave_step();
+                let interleave_offset = pixel_type.interleave_offset();
                 let plane_index = pixel_type.plane_index();
 
                 let dst_ptr = CVPixelBufferGetBaseAddressOfPlane(dst, plane_index) as *mut u8;
@@ -577,40 +578,14 @@ pub mod pixel_buffer {
                     * CVPixelBufferGetHeightOfPlane(dst, plane_index);
                 assert_eq!(src_len * interleave_step, dst_len);
 
-                match interleave_step {
-                    1 => unsafe {
-                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, src_len);
-                    },
-                    _ => {
-                        let (src_width, src_height) = src.values.dim();
-                        let src_bytes_per_row = src_width;
-                        let src_len = src_width * src_height;
-                        let dst_bytes_per_row = src_width * pixel_type.interleave_step();
-                        let dst_ptr_start = dst_ptr;
-                        let src_ptr_start = src
-                            .values
-                            .get_ptr([0, 0])
-                            .ok_or("Could not get values ptr.")?;
-
-                        let mut dst_offset = pixel_type.interleave_offset();
-                        let mut src_offset = 0;
-                        while dst_offset < dst_len {
-                            assert!(src_offset + src_bytes_per_row <= src_len);
-                            assert!(
-                                dst_offset + dst_bytes_per_row - pixel_type.interleave_offset()
-                                    <= dst_len
-                            );
-
-                            let src_ptr = unsafe { src_ptr_start.add(src_offset) };
-                            let dst_ptr = unsafe { dst_ptr_start.add(dst_offset) };
-
-                            PixelBuffer::copy_row(src_ptr, dst_ptr, false, src_width, pixel_type);
-
-                            src_offset += src_bytes_per_row;
-                            dst_offset += dst_bytes_per_row;
-                        }
-                    }
-                }
+                PixelBuffer::copy_frame(
+                    src_ptr,
+                    dst_ptr,
+                    dst_len,
+                    false,
+                    interleave_offset,
+                    interleave_step,
+                );
                 Ok(())
             }
 
@@ -655,30 +630,32 @@ pub mod pixel_buffer {
             }
         }
 
-        pub(super) fn copy_row(
+        pub(super) fn copy_frame(
             src_ptr: *const u8,
             dst_ptr: *mut u8,
-            interleaving_src: bool, // false to interleave dst
-            row_width: usize,
-            pixel_component_type: PixelComponentType,
+            dst_len: usize,
+            interleave_src: bool,
+            interleave_offset: usize,
+            interleave_step: usize,
         ) {
-            let src_ptr_start = src_ptr;
-            let dst_ptr_start = dst_ptr;
-
             unsafe {
-                match pixel_component_type.interleave_step() {
-                    1 => {
-                        std::ptr::copy_nonoverlapping(src_ptr_start, dst_ptr_start, row_width);
-                    }
-                    interleave_step => {
-                        let mut src_ptr = src_ptr_start; // shadow
-                        let mut dst_ptr = dst_ptr_start; // shadow
+                match interleave_step {
+                    1 => std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, dst_len),
+                    _ => {
+                        let mut src_ptr = src_ptr;
+                        let mut dst_ptr = dst_ptr;
 
-                        // offset is applied in block_index_to_cv_pixel_buffer_plane_offset
-                        for _src_col_index in 0..row_width {
-                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, 1);
+                        if interleave_src {
+                            src_ptr = src_ptr.add(interleave_offset);
+                        } else {
+                            dst_ptr = dst_ptr.add(interleave_offset);
+                        }
 
-                            if interleaving_src {
+                        let dst_ptr_end = dst_ptr.add(dst_len);
+                        while dst_ptr < dst_ptr_end {
+                            *dst_ptr = *src_ptr;
+
+                            if interleave_src {
                                 src_ptr = src_ptr.add(interleave_step);
                                 dst_ptr = dst_ptr.add(1);
                             } else {
@@ -687,7 +664,7 @@ pub mod pixel_buffer {
                             }
                         }
                     }
-                };
+                }
             }
         }
 
@@ -948,48 +925,17 @@ pub mod transform_block_3d {
                 CVPixelBufferGetBaseAddressOfPlane(&pixel_buffer.cv_image_buffer, plane_index)
                     as *const u8;
 
-            let interleave_step = pixel_type.interleave_step();
-
-            match interleave_step {
-                1 => {
-                    let dst_ptr = values_2d
-                        .get_mut_ptr([0, 0])
-                        .ok_or("Failed to get mut_ptr.")?;
-                    unsafe { std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, dst_len) };
-                }
-                _ => {
-                    let src_bytes_per_row = pixel_buffer.plane_row_len(pixel_type);
-                    let src_height = pixel_buffer.plane_height(pixel_type);
-                    let src_len = src_bytes_per_row * src_height;
-                    let src_ptr_start = src_ptr;
-
-                    let dst_ptr_start = values_2d
-                        .get_mut_ptr([0, 0])
-                        .ok_or("Failed to get mut ptr")?;
-                    let dst_bytes_per_row = values_2d.dim().0;
-
-                    let mut dst_offset = 0;
-                    let mut src_offset = pixel_type.interleave_offset();
-
-                    let dst_len = values_2d.len();
-
-                    while dst_offset < dst_len {
-                        assert!(
-                            src_offset + src_bytes_per_row - pixel_type.interleave_offset()
-                                <= src_len
-                        );
-                        assert!(dst_offset + dst_bytes_per_row <= dst_len);
-
-                        let src_ptr = unsafe { src_ptr_start.add(src_offset) };
-                        let dst_ptr = unsafe { dst_ptr_start.add(dst_offset) };
-
-                        PixelBuffer::copy_row(src_ptr, dst_ptr, true, dst_width, pixel_type);
-
-                        src_offset += src_bytes_per_row;
-                        dst_offset += dst_bytes_per_row;
-                    }
-                }
-            }
+            let dst_ptr = values_2d
+                .get_mut_ptr([0, 0])
+                .ok_or("Failed to get mut_ptr.")?;
+            PixelBuffer::copy_frame(
+                src_ptr,
+                dst_ptr,
+                dst_len,
+                true,
+                pixel_type.interleave_offset(),
+                pixel_type.interleave_step(),
+            );
 
             pixel_buffer.unlock_base_address(true);
 
