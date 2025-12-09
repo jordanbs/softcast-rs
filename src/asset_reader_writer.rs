@@ -878,9 +878,10 @@ pub mod pixel_buffer {
 pub mod transform_block_3d {
     use super::*;
     use pixel_buffer::*;
+    use std::cell::OnceCell;
 
     pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
-        pub(super) values: Option<ndarray::Array3<u8>>,
+        pub values_cell: OnceCell<ndarray::Array3<u8>>,
         pub(super) len: usize,
         _marker: std::marker::PhantomData<PixelType>,
     }
@@ -888,11 +889,18 @@ pub mod transform_block_3d {
     impl<const LENGTH: usize, PixelType: HasPixelComponentType> TransformBlock3D<LENGTH, PixelType> {
         pub(super) fn new() -> Self {
             TransformBlock3D {
-                values: None,
+                values_cell: OnceCell::new(),
                 len: 0,
                 _marker: std::marker::PhantomData,
             }
         }
+
+        pub fn values(&self) -> &ndarray::Array3<u8> {
+            self.values_cell
+                .get()
+                .expect("Values not initialized. Must call populate_next_frame first.")
+        }
+
         pub(super) fn populate_next_frame(
             &mut self,
             pixel_buffer: &PixelBuffer,
@@ -900,13 +908,13 @@ pub mod transform_block_3d {
             let frame_idx = self.len;
             self.len += 1;
 
-            if self.values.is_none() {
+            let _ = self.values_cell.get_or_init(|| {
                 let block_width =
                     pixel_buffer.plane_row_len(PixelType::TYPE) / PixelType::TYPE.interleave_step();
                 let block_height = pixel_buffer.plane_height(PixelType::TYPE);
-                self.values = Some(ndarray::Array3::zeros((LENGTH, block_width, block_height)))
-            }
-            let values = self.values.as_mut().unwrap();
+                ndarray::Array3::zeros((LENGTH, block_width, block_height))
+            });
+            let values = self.values_cell.get_mut().unwrap(); // get_mut_or_init is nightly-only.
 
             // Axis(0) is the length/depth dimension
             let mut values_2d = values.index_axis_mut(ndarray::Axis(0), frame_idx);
@@ -946,11 +954,7 @@ pub mod transform_block_3d {
             &self,
             frame_idx: usize,
         ) -> Result<FrameComponentView<'_, PixelType>, Box<dyn std::error::Error>> {
-            let arr = self
-                .values
-                .as_ref()
-                .ok_or("No values.")?
-                .index_axis(ndarray::Axis(0), frame_idx);
+            let arr = self.values().index_axis(ndarray::Axis(0), frame_idx);
             Ok(FrameComponentView::new(arr))
         }
     }
@@ -1123,9 +1127,9 @@ mod tests {
             cr_components,
         } = macro_block_3d; // demonstrating moving the components
 
-        assert_ne!(y_components.values.unwrap().len(), 0);
-        assert_ne!(cb_components.values.unwrap().len(), 0);
-        assert_ne!(cr_components.values.unwrap().len(), 0);
+        assert_ne!(y_components.values().len(), 0);
+        assert_ne!(cb_components.values().len(), 0);
+        assert_ne!(cr_components.values().len(), 0);
     }
 
     #[test]
