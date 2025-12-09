@@ -464,7 +464,27 @@ impl HasPixelComponentType for CrPixelComponentType {
     const TYPE: PixelComponentType = PixelComponentType::Cr;
 }
 
+trait As<Dst>
+where
+    Dst: Copy,
+{
+    fn as_(&self) -> Dst;
+}
+
+impl As<u8> for f64 {
+    fn as_(&self) -> u8 {
+        *self as u8
+    }
+}
+
+impl As<f64> for u8 {
+    fn as_(&self) -> f64 {
+        *self as f64
+    }
+}
+
 pub mod pixel_buffer {
+    use super::As;
     use super::*;
     use transform_block_3d::*;
 
@@ -630,39 +650,37 @@ pub mod pixel_buffer {
             }
         }
 
-        pub(super) fn copy_frame(
-            src_ptr: *const u8,
-            dst_ptr: *mut u8,
+        pub(super) fn copy_frame<SrcType, DstType>(
+            src_ptr: *const SrcType,
+            dst_ptr: *mut DstType,
             dst_len: usize,
             interleave_src: bool,
             interleave_offset: usize,
             interleave_step: usize,
-        ) {
+        ) where
+            DstType: Copy,
+            SrcType: As<DstType>,
+        {
             unsafe {
-                match interleave_step {
-                    1 => std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, dst_len),
-                    _ => {
-                        let mut src_ptr = src_ptr;
-                        let mut dst_ptr = dst_ptr;
+                let mut src_ptr = src_ptr;
+                let mut dst_ptr = dst_ptr;
 
-                        if interleave_src {
-                            src_ptr = src_ptr.add(interleave_offset);
-                        } else {
-                            dst_ptr = dst_ptr.add(interleave_offset);
-                        }
+                if interleave_src {
+                    src_ptr = src_ptr.add(interleave_offset);
+                } else {
+                    dst_ptr = dst_ptr.add(interleave_offset);
+                }
 
-                        let dst_ptr_end = dst_ptr.add(dst_len);
-                        while dst_ptr < dst_ptr_end {
-                            *dst_ptr = *src_ptr;
+                let dst_ptr_end = dst_ptr.add(dst_len);
+                while dst_ptr < dst_ptr_end {
+                    *dst_ptr = (*src_ptr).as_();
 
-                            if interleave_src {
-                                src_ptr = src_ptr.add(interleave_step);
-                                dst_ptr = dst_ptr.add(1);
-                            } else {
-                                src_ptr = src_ptr.add(1);
-                                dst_ptr = dst_ptr.add(interleave_step);
-                            }
-                        }
+                    if interleave_src {
+                        src_ptr = src_ptr.add(interleave_step);
+                        dst_ptr = dst_ptr.add(1);
+                    } else {
+                        src_ptr = src_ptr.add(1);
+                        dst_ptr = dst_ptr.add(interleave_step);
                     }
                 }
             }
@@ -881,7 +899,7 @@ pub mod transform_block_3d {
     use std::cell::OnceCell;
 
     pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
-        pub values_cell: OnceCell<ndarray::Array3<u8>>,
+        pub values_cell: OnceCell<ndarray::Array3<f64>>,
         pub(super) len: usize,
         _marker: std::marker::PhantomData<PixelType>,
     }
@@ -895,7 +913,7 @@ pub mod transform_block_3d {
             }
         }
 
-        pub fn values(&self) -> &ndarray::Array3<u8> {
+        pub fn values(&self) -> &ndarray::Array3<f64> {
             self.values_cell
                 .get()
                 .expect("Values not initialized. Must call populate_next_frame first.")
@@ -1037,11 +1055,11 @@ pub mod transform_block_3d {
     }
 
     pub(super) struct FrameComponentView<'a, PixelType: HasPixelComponentType> {
-        pub(super) values: ndarray::ArrayView2<'a, u8>,
+        pub(super) values: ndarray::ArrayView2<'a, f64>,
         _marker: std::marker::PhantomData<PixelType>,
     }
     impl<'a, PixelType: HasPixelComponentType> FrameComponentView<'a, PixelType> {
-        fn new(values: ndarray::ArrayView2<'a, u8>) -> Self {
+        fn new(values: ndarray::ArrayView2<'a, f64>) -> Self {
             assert!(values.is_standard_layout());
 
             FrameComponentView {
