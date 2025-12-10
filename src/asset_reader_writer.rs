@@ -471,15 +471,15 @@ where
     fn as_(&self) -> Dst;
 }
 
-impl As<u8> for f64 {
+impl As<u8> for f32 {
     fn as_(&self) -> u8 {
         *self as u8
     }
 }
 
-impl As<f64> for u8 {
-    fn as_(&self) -> f64 {
-        *self as f64
+impl As<f32> for u8 {
+    fn as_(&self) -> f32 {
+        *self as f32
     }
 }
 
@@ -899,7 +899,7 @@ pub mod transform_block_3d {
     use std::cell::OnceCell;
 
     pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
-        pub values_cell: OnceCell<ndarray::Array3<f64>>,
+        pub values_cell: OnceCell<ndarray::Array3<f32>>,
         pub(super) len: usize,
         _marker: std::marker::PhantomData<PixelType>,
     }
@@ -913,9 +913,15 @@ pub mod transform_block_3d {
             }
         }
 
-        pub fn values(&self) -> &ndarray::Array3<f64> {
+        pub fn values(&self) -> &ndarray::Array3<f32> {
             self.values_cell
                 .get()
+                .expect("Values not initialized. Must call populate_next_frame first.")
+        }
+
+        pub fn consume_values(self) -> ndarray::Array3<f32> {
+            self.values_cell
+                .into_inner()
                 .expect("Values not initialized. Must call populate_next_frame first.")
         }
 
@@ -1055,11 +1061,11 @@ pub mod transform_block_3d {
     }
 
     pub(super) struct FrameComponentView<'a, PixelType: HasPixelComponentType> {
-        pub(super) values: ndarray::ArrayView2<'a, f64>,
+        pub(super) values: ndarray::ArrayView2<'a, f32>,
         _marker: std::marker::PhantomData<PixelType>,
     }
     impl<'a, PixelType: HasPixelComponentType> FrameComponentView<'a, PixelType> {
-        fn new(values: ndarray::ArrayView2<'a, f64>) -> Self {
+        fn new(values: ndarray::ArrayView2<'a, f32>) -> Self {
             assert!(values.is_standard_layout());
 
             FrameComponentView {
