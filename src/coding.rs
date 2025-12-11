@@ -37,7 +37,7 @@ impl<const LENGTH: usize, PixelType: HasPixelComponentType>
 
         for (axis_idx, axis_len) in [(0, length), (1, width), (2, height)] {
             let handler = ndrustfft::DctHandler::new(axis_len);
-            ndrustfft::nddct2(&output_a, &mut output_b, &handler, axis_idx);
+            ndrustfft::nddct2_par(&output_a, &mut output_b, &handler, axis_idx);
 
             std::mem::swap(&mut output_a, &mut output_b);
         }
@@ -51,7 +51,41 @@ fn max_factor_at_or_below(limit: usize, value: usize) -> usize {
     (1..=limit).rev().find(|i| value % i == 0).unwrap()
 }
 
+impl<const LENGTH: usize, PixelType: HasPixelComponentType>
+    transform_block_3d::TransformBlock3D<LENGTH, PixelType>
+{
+    pub fn into_dct(self) -> TransformBlock3DDCT {
+        TransformBlock3DDCT::from(self)
+    }
+}
+
+impl<const LENGTH: usize, PixelType: HasPixelComponentType> From<TransformBlock3DDCT>
+    for transform_block_3d::TransformBlock3D<LENGTH, PixelType>
+{
+    fn from(transform_block_dct: TransformBlock3DDCT) -> Self {
+        let dct_values = transform_block_dct.consume_values();
+        let (length, width, height) = dct_values.dim();
+        assert_eq!(length, LENGTH);
+
+        let mut output_a = dct_values;
+        let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
+
+        for (axis_idx, axis_len) in [(0, length), (1, width), (2, height)] {
+            let handler = ndrustfft::DctHandler::new(axis_len);
+            ndrustfft::nddct3_par(&output_a, &mut output_b, &handler, axis_idx); // dct3 is the inverse of dct2
+
+            std::mem::swap(&mut output_a, &mut output_b);
+        }
+
+        transform_block_3d::TransformBlock3D::with_values(output_a)
+    }
+}
+
 impl TransformBlock3DDCT {
+    pub fn consume_values(self) -> ndarray::Array3<f32> {
+        self.values
+    }
+
     pub fn chunks_iter(&mut self) -> impl Iterator<Item = ChunkedTransformBlock3D<'_>> {
         const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 44, 30);
         let (length, width, height) = self.values.dim();
@@ -106,9 +140,12 @@ impl<'a> ChunkedTransformBlock3D<'a> {
 mod tests {
     use super::*;
     use asset_reader::*;
+    use asset_writer::*;
+    use pixel_buffer::*;
+    use std::fs;
+    use std::path;
 
     #[test]
-    //     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_print_3d_dct() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
@@ -116,8 +153,7 @@ mod tests {
         let transform_block_3d_dct: TransformBlock3DDCT = reader
             .pixel_buffer_iter()
             .macro_block_3d_iterator::<18>()
-            .map(|macro_block| macro_block.y_components)
-            .map(|transform_block| TransformBlock3DDCT::from(transform_block))
+            .map(|macro_block| macro_block.y_components.into_dct())
             .next()
             .expect("No DCT performed.");
 
@@ -125,6 +161,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_print_chunk_means() {
         let path = "sample-media/sample-5s.mp4";
         let mut reader = AssetReader::new(path);
@@ -132,13 +169,67 @@ mod tests {
         let mut transform_block_3d_dct: TransformBlock3DDCT = reader
             .pixel_buffer_iter()
             .macro_block_3d_iterator::<4>()
-            .map(|macro_block| macro_block.y_components)
-            .map(|transform_block| TransformBlock3DDCT::from(transform_block))
+            .map(|macro_block| macro_block.y_components.into_dct())
             .next()
             .expect("No DCT performed.");
 
         for ChunkedTransformBlock3D { values: _, mean } in transform_block_3d_dct.chunks_iter() {
             eprintln!("mean:{}", mean);
         }
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_reader_to_transform_block_3d_dct_to_writer() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
+        let _ = fs::remove_file(output_path);
+        let writer_settings = AssetWritterSettings {
+            path: path::PathBuf::from(output_path),
+            codec: Codec::H264,
+            resolution: reader.resolution().expect("Failed to get resolution."),
+            frame_rate: reader.frame_rate().expect("Failed to get frame rate"),
+        };
+        let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
+        writer.start_writing().expect("Failed to start writing");
+
+        const LENGTH: usize = 8;
+        let macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let mut pixel_buffers_consumed = 0;
+
+        for macro_block in macro_block_3d_iterator {
+            let y_dct = macro_block.y_components.into_dct();
+            let cb_dct = macro_block.cb_components.into_dct();
+            let cr_dct = macro_block.cr_components.into_dct();
+
+            let y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
+            let cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
+            let cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
+
+            let new_macro_block = MacroBlock3D {
+                y_components,
+                cb_components,
+                cr_components,
+            };
+
+            let pixel_buffer_iterator = [new_macro_block].into_iter().pixel_buffer_iter();
+
+            for pixel_buffer in pixel_buffer_iterator {
+                pixel_buffers_consumed += 1;
+
+                writer
+                    .append_pixel_buffer(pixel_buffer)
+                    .expect("Failed to append pixel buffer");
+                writer
+                    .wait_for_writer_to_be_ready()
+                    .expect("Failed to become ready after writing some pixels.");
+            }
+        }
+        writer.finish_writing().expect("Failed to finish writing.");
+        assert_eq!(pixel_buffers_consumed, 301);
     }
 }

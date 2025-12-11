@@ -248,7 +248,7 @@ pub mod asset_writer {
                 AVAssetWriterInputPixelBufferAdaptor,
             >,
         ) -> Self {
-            let tiemscale = settings.frame_rate as i32;
+            let timescale = settings.frame_rate as i32;
             AssetWriter {
                 //                 settings: settings,
                 av_asset_writer: av_asset_writer,
@@ -257,7 +257,7 @@ pub mod asset_writer {
                     av_asset_writer_input_pixel_buffer_adaptor,
                 frame_index: 0,
                 started_writing: false,
-                timescale: tiemscale as i32,
+                timescale: timescale as i32,
             }
         }
 
@@ -331,7 +331,7 @@ pub mod asset_writer {
             // TODO: very lame to use sleep here... should be using KVO to monitor this property
             // TODO: use -requestMediaDataWhenReadyOnQueue:usingBlock:
             unsafe {
-                const TIMEOUT: Duration = Duration::from_secs(1);
+                const TIMEOUT: Duration = Duration::from_secs(5);
                 const WAIT_INTERVAL: Duration = Duration::from_millis(16); // a 60fps frame
                 let start = SystemTime::now();
                 while (self.av_asset_writer.status() == AVAssetWriterStatus::Unknown
@@ -844,10 +844,6 @@ pub mod pixel_buffer {
                 pixel_buffer_iterator: pixel_buffer_iterator,
             }
         }
-
-        pub fn pixel_buffer_iter(self) -> transform_block_3d::PixelBufferIterator<LENGTH, Self> {
-            transform_block_3d::PixelBufferIterator::new(self)
-        }
     }
 
     impl<const LENGTH: usize, PixelBufferIterator> Iterator
@@ -909,6 +905,18 @@ pub mod transform_block_3d {
             TransformBlock3D {
                 values_cell: OnceCell::new(),
                 len: 0,
+                _marker: std::marker::PhantomData,
+            }
+        }
+        pub fn with_values(values: ndarray::Array3<f32>) -> Self {
+            assert_eq!(values.dim().0, LENGTH);
+
+            let once_cell = OnceCell::new();
+            once_cell.set(values).expect("Failed to set once_cell");
+
+            TransformBlock3D {
+                values_cell: once_cell,
+                len: LENGTH,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -1057,6 +1065,20 @@ pub mod transform_block_3d {
             }
 
             Some(pixel_buffer)
+        }
+    }
+
+    pub trait PixelBufferIterExt<const MACRO_BLOCK_LEN: usize>:
+        Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>> + Sized
+    {
+        fn pixel_buffer_iter(self) -> PixelBufferIterator<MACRO_BLOCK_LEN, Self>;
+    }
+    impl<const MACRO_BLOCK_LEN: usize, I> PixelBufferIterExt<MACRO_BLOCK_LEN> for I
+    where
+        I: Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>>,
+    {
+        fn pixel_buffer_iter(self) -> PixelBufferIterator<MACRO_BLOCK_LEN, Self> {
+            PixelBufferIterator::new(self)
         }
     }
 
