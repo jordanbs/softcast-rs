@@ -36,7 +36,8 @@ impl<const LENGTH: usize, PixelType: HasPixelComponentType>
         let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
         for (axis_idx, axis_len) in [(0, length), (1, width), (2, height)] {
-            let handler = ndrustfft::DctHandler::new(axis_len);
+            let handler =
+                ndrustfft::DctHandler::new(axis_len).normalization(ndrustfft::Normalization::None);
             ndrustfft::nddct2_par(&output_a, &mut output_b, &handler, axis_idx);
 
             std::mem::swap(&mut output_a, &mut output_b);
@@ -71,11 +72,15 @@ impl<const LENGTH: usize, PixelType: HasPixelComponentType> From<TransformBlock3
         let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
         for (axis_idx, axis_len) in [(0, length), (1, width), (2, height)] {
-            let handler = ndrustfft::DctHandler::new(axis_len);
+            let handler =
+                ndrustfft::DctHandler::new(axis_len).normalization(ndrustfft::Normalization::None);
             ndrustfft::nddct3_par(&output_a, &mut output_b, &handler, axis_idx); // dct3 is the inverse of dct2
 
             std::mem::swap(&mut output_a, &mut output_b);
         }
+
+        let scale = 0.125 * (length * width * height) as f32; //  dimensions / (2^num_dimensions)
+        output_a.mapv_inplace(|value| value / scale);
 
         transform_block_3d::TransformBlock3D::with_values(output_a)
     }
@@ -230,6 +235,49 @@ mod tests {
             }
         }
         writer.finish_writing().expect("Failed to finish writing.");
-        assert_eq!(pixel_buffers_consumed, 301);
+        assert_eq!(pixel_buffers_consumed, 301 + LENGTH - (301 % LENGTH)); // TODO: No mechanism to signal empty frames.
+    }
+
+    #[test]
+    fn test_reader_to_dct2_inverse_equality() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
+        let _ = fs::remove_file(output_path);
+
+        const LENGTH: usize = 2;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+        let MacroBlock3D {
+            y_components: original_y_components,
+            cb_components: original_cb_components,
+            cr_components: original_cr_components,
+        } = macro_block.clone();
+
+        let y_dct = macro_block.y_components.into_dct();
+        let cb_dct = macro_block.cb_components.into_dct();
+        let cr_dct = macro_block.cr_components.into_dct();
+
+        let mut new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
+        let mut new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
+        let mut new_cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
+
+        // get rid of floating point errors. For radio-derived values, we do not want to round.
+        new_y_components = TransformBlock3D::<LENGTH, YPixelComponentType>::with_values(
+            new_y_components.values().mapv(|value| value.round()),
+        );
+        new_cb_components = TransformBlock3D::<LENGTH, CbPixelComponentType>::with_values(
+            new_cb_components.values().mapv(|value| value.round()),
+        );
+        new_cr_components = TransformBlock3D::<LENGTH, CrPixelComponentType>::with_values(
+            new_cr_components.values().mapv(|value| value.round()),
+        );
+
+        assert_eq!(original_y_components, new_y_components);
+        assert_eq!(original_cb_components, new_cb_components);
+        assert_eq!(original_cr_components, new_cr_components);
     }
 }

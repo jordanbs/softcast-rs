@@ -450,8 +450,11 @@ pub trait HasPixelComponentType {
     const TYPE: PixelComponentType;
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct YPixelComponentType;
+#[derive(Debug, Clone, PartialEq)]
 pub struct CbPixelComponentType;
+#[derive(Debug, Clone, PartialEq)]
 pub struct CrPixelComponentType;
 
 impl HasPixelComponentType for YPixelComponentType {
@@ -894,6 +897,7 @@ pub mod transform_block_3d {
     use pixel_buffer::*;
     use std::cell::OnceCell;
 
+    #[derive(Debug, Clone, PartialEq)]
     pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values_cell: OnceCell<ndarray::Array3<f32>>,
         pub(super) len: usize,
@@ -992,6 +996,7 @@ pub mod transform_block_3d {
     }
 
     // 4:2:0
+    #[derive(Clone)]
     pub struct MacroBlock3D<const LENGTH: usize> {
         pub y_components: TransformBlock3D<LENGTH, YPixelComponentType>,
         pub cb_components: TransformBlock3D<LENGTH, CbPixelComponentType>,
