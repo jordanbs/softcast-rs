@@ -106,7 +106,6 @@ impl TransformBlock3DDCT {
         let chunk_dimensions = (chunk_length, chunk_width, chunk_height);
 
         // must preflight mutatation of the 3D DCT, because we are going to be giving out immutable borrows.
-        let mut chunked_transform_blocks = Vec::with_capacity(num_chunks);
         let mut means = Vec::with_capacity(num_chunks);
 
         for mut chunk in self.values.exact_chunks_mut(chunk_dimensions) {
@@ -118,14 +117,13 @@ impl TransformBlock3DDCT {
         }
 
         // two passes necessary due to the impossibility to coerce 'chunks' in the previous loop to an immutable borrow
-        for (chunk, mean) in self
+        let chunked_transform_blocks = self
             .values
             .exact_chunks(chunk_dimensions)
             .into_iter()
             .zip(means.into_iter())
-        {
-            chunked_transform_blocks.push(ChunkedTransformBlock3D::new(chunk, mean));
-        }
+            .map(|(chunk, mean)| ChunkedTransformBlock3D::new(chunk, mean));
+
         chunked_transform_blocks.into_iter()
     }
 }
