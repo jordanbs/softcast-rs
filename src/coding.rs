@@ -202,9 +202,14 @@ pub mod chunked_dct_block {
         I: Iterator<Item = ChunkedDCTBlock<'a, PixelType>>,
     {
         fn new(chunked_dct_block_iter: I, frame_resolution: (usize, usize)) -> Self {
+            let pixel_type = PixelType::TYPE;
+            let component_frame_resolution = (
+                frame_resolution.0 / pixel_type.interleave_step(),
+                frame_resolution.1 / pixel_type.vertical_subsampling(),
+            );
             TransformBlock3DDCTIter {
                 chunked_dct_block_iter: chunked_dct_block_iter,
-                frame_resolution: frame_resolution,
+                frame_resolution: component_frame_resolution,
             }
         }
     }
@@ -324,14 +329,17 @@ mod tests {
         let path = "sample-media/sample-5s.mp4";
         let mut reader = AssetReader::new(path);
 
-        let mut transform_block_3d_dct: TransformBlock3DDCT = reader
+        let mut transform_block_3d_dct: TransformBlock3DDCT<4, YPixelComponentType> = reader
             .pixel_buffer_iter()
-            .macro_block_3d_iterator::<4>()
+            .macro_block_3d_iterator()
             .map(|macro_block| macro_block.y_components.into_dct())
             .next()
             .expect("No DCT performed.");
 
-        for ChunkedDCTBlock { values: _, mean } in transform_block_3d_dct.chunks_iter() {
+        for ChunkedDCTBlock {
+            values: _, mean, ..
+        } in transform_block_3d_dct.chunks_iter()
+        {
             eprintln!("mean:{}", mean);
         }
     }

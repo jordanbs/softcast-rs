@@ -438,7 +438,13 @@ impl PixelComponentType {
             PixelComponentType::Cr => 1,
         }
     }
-    fn interleave_step(&self) -> usize {
+    pub fn interleave_step(&self) -> usize {
+        match self {
+            PixelComponentType::Y => 1,
+            PixelComponentType::Cb | PixelComponentType::Cr => 2,
+        }
+    }
+    pub fn vertical_subsampling(&self) -> usize {
         match self {
             PixelComponentType::Y => 1,
             PixelComponentType::Cb | PixelComponentType::Cr => 2,
