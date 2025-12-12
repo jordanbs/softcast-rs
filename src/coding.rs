@@ -90,6 +90,7 @@ pub mod transform_block_3d_dct {
 
             let scale = 0.125 * (length * width * height) as f32; //  dimensions / (2^num_dimensions)
             output_a.mapv_inplace(|value| value / scale);
+            output_a.mapv_inplace(|value| value.round());
 
             transform_block_3d::TransformBlock3D::with_values(output_a)
         }
@@ -422,20 +423,9 @@ mod tests {
         let cb_dct = macro_block.cb_components.into_dct();
         let cr_dct = macro_block.cr_components.into_dct();
 
-        let mut new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
-        let mut new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
-        let mut new_cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
-
-        // get rid of floating point errors. For radio-derived values, we do not want to round.
-        new_y_components = TransformBlock3D::<LENGTH, YPixelComponentType>::with_values(
-            new_y_components.values().mapv(|value| value.round()),
-        );
-        new_cb_components = TransformBlock3D::<LENGTH, CbPixelComponentType>::with_values(
-            new_cb_components.values().mapv(|value| value.round()),
-        );
-        new_cr_components = TransformBlock3D::<LENGTH, CrPixelComponentType>::with_values(
-            new_cr_components.values().mapv(|value| value.round()),
-        );
+        let new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
+        let new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
+        let new_cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
 
         assert_eq!(original_y_components, new_y_components);
         assert_eq!(original_cb_components, new_cb_components);
