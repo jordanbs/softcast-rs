@@ -47,6 +47,11 @@ pub mod transform_block_3d_dct {
 
                 std::mem::swap(&mut output_a, &mut output_b);
             }
+            // experimental compression.. see how it affects the final video
+            //             output_a.mapv_inplace(|value| match value {
+            //                 value if value.abs() < 1000000.0 => 0.0, // 10 works...
+            //                 _ => value,
+            //             });
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
                 values: output_a,
@@ -572,5 +577,90 @@ mod tests {
         assert_eq!(original_y_components, new_y_components);
         assert_eq!(original_cb_components, new_cb_components);
         assert_eq!(original_cr_components, new_cr_components);
+    }
+
+    #[test]
+    //     #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_count_zero_valued_chunk() {
+        let path1 = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path2 = "sample-media/sample-5s.mp4";
+
+        fn print_zero_values(path: &'static str) {
+            let mut reader = AssetReader::new(path);
+
+            const LENGTH: usize = 30;
+            let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+                reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+            let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+            let MacroBlock3D {
+                y_components,
+                cb_components,
+                cr_components,
+            } = macro_block;
+
+            fn count_zero_values<PixelType: HasPixelComponentType>(
+                transform_block_3d_dct: &mut TransformBlock3DDCT<LENGTH, PixelType>,
+            ) -> (usize, usize, f32, f32) {
+                transform_block_3d_dct.chunks_iter().fold(
+                    (0, 0, 0f32, 0f32),
+                    |(zero_values, total_values, max_variance, max_value), chunk| {
+                        let zero_values = zero_values
+                            + match chunk.values.sum() {
+                                value if value.abs() < 10.0 => 1, // TODO: RMS of energy to figure out a decent threshold.
+                                _ => 0,
+                            };
+                        let total_values = total_values + 1;
+                        let max_variance = max_variance.max(chunk.values.var(3.0));
+                        let max_value =
+                            max_value.max(chunk.values.iter().copied().reduce(f32::max).unwrap());
+                        (zero_values, total_values, max_variance, max_value)
+                    },
+                )
+            }
+
+            let mut y_components_dct = y_components.into_dct();
+            let mut cb_components_dct = cb_components.into_dct();
+            let mut cr_components_dct = cr_components.into_dct();
+
+            let (y_zero_values, y_total_values, y_max_variance, y_max_value) =
+                count_zero_values(&mut y_components_dct);
+            let (cb_zero_values, cb_total_values, cb_max_variance, cb_max_value) =
+                count_zero_values(&mut cb_components_dct);
+            let (cr_zero_values, cr_total_values, cr_max_variance, cr_max_value) =
+                count_zero_values(&mut cr_components_dct);
+
+            eprintln!(
+                "y_zero_values:{} total_values:{} {:.3}% max_σ:{} max_value:{}",
+                y_zero_values,
+                y_total_values,
+                100.0 * y_zero_values as f64 / y_total_values as f64,
+                f32::sqrt(y_max_variance),
+                y_max_value
+            );
+            eprintln!(
+                "cb_zero_values:{} total_values:{} {:.3}% max_σ:{} max_value:{}",
+                cb_zero_values,
+                cb_total_values,
+                100.0 * cb_zero_values as f64 / cb_total_values as f64,
+                f32::sqrt(cb_max_variance),
+                cb_max_value
+            );
+            eprintln!(
+                "cr_zero_values:{} total_values:{} {:.3}% max_σ:{} max_value:{}",
+                cr_zero_values,
+                cr_total_values,
+                100.0 * cr_zero_values as f64 / cr_total_values as f64,
+                f32::sqrt(cr_max_variance),
+                cr_max_value
+            );
+        }
+
+        eprintln!("BipBop");
+        print_zero_values(path1);
+        eprintln!();
+        eprintln!("sample-5s");
+        print_zero_values(path2);
     }
 }

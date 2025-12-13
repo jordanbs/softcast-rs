@@ -1002,7 +1002,7 @@ pub mod transform_block_3d {
     }
 
     // 4:2:0
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct MacroBlock3D<const LENGTH: usize> {
         pub y_components: TransformBlock3D<LENGTH, YPixelComponentType>,
         pub cb_components: TransformBlock3D<LENGTH, CbPixelComponentType>,
