@@ -307,10 +307,12 @@ pub mod chunked_dct_block {
 mod tests {
     use super::*;
     use asset_reader::*;
+    #[cfg(not(debug_assertions))]
     use asset_writer::*;
     use chunked_dct_block::*;
     use pixel_buffer::*;
     use std::fs;
+    #[cfg(not(debug_assertions))]
     use std::path;
     use transform_block_3d_dct::*;
 
@@ -439,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    //     #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_chunked_dct_blocks_to_writer() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
@@ -463,32 +465,36 @@ mod tests {
         let mut pixel_buffers_consumed = 0;
 
         for macro_block in macro_block_3d_iterator {
-            let mut y_dct_in = macro_block.y_components.into_dct();
-            let y_dct_chunks: Vec<_> = y_dct_in.chunks_iter().collect();
-            let mut cb_dct_in = macro_block.cb_components.into_dct();
-            let cb_dct_chunks: Vec<_> = cb_dct_in.chunks_iter().collect();
-            let mut cr_dct_in = macro_block.cr_components.into_dct();
-            let cr_dct_chunks: Vec<_> = cr_dct_in.chunks_iter().collect();
-
             // and back again
 
             let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
-            let mut y_dct_iter = y_dct_chunks
-                .into_iter()
+
+            let MacroBlock3D {
+                y_components,
+                cb_components,
+                cr_components,
+            } = macro_block;
+
+            let mut y_dct = y_components.into_dct();
+            let mut cb_dct = cb_components.into_dct();
+            let mut cr_dct = cr_components.into_dct();
+
+            let mut y_dct_iter = y_dct
+                .chunks_iter()
                 .into_transform_block_3d_dct_iter(frame_resolution);
             let y_dct = y_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
             assert!(y_dct_iter.next().is_none());
 
-            let mut cb_dct_iter = cb_dct_chunks
-                .into_iter()
+            let mut cb_dct_iter = cb_dct
+                .chunks_iter()
                 .into_transform_block_3d_dct_iter(frame_resolution);
-            let cb_dct = cb_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
+            let cb_dct = cb_dct_iter.next().expect("Failed to recreate Cb 3D DCT.");
             assert!(cb_dct_iter.next().is_none());
 
-            let mut cr_dct_iter = cr_dct_chunks
-                .into_iter()
+            let mut cr_dct_iter = cr_dct
+                .chunks_iter()
                 .into_transform_block_3d_dct_iter(frame_resolution);
-            let cr_dct = cr_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
+            let cr_dct = cr_dct_iter.next().expect("Failed to recreate Cr 3D DCT.");
             assert!(cr_dct_iter.next().is_none());
 
             let new_macro_block = MacroBlock3D::<LENGTH> {
