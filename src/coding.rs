@@ -101,7 +101,9 @@ pub mod transform_block_3d_dct {
             self.values
         }
 
-        pub fn chunks_iter(&mut self) -> impl Iterator<Item = ChunkedDCTBlock<'_, PixelType>> {
+        pub fn chunks_iter(
+            &mut self,
+        ) -> impl Iterator<Item = ChunkedDCTBlock<'_, LENGTH, PixelType>> {
             const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 44, 30);
             let (length, width, height) = self.values.dim();
             let chunk_length =
@@ -141,16 +143,15 @@ pub mod transform_block_3d_dct {
         }
 
         pub(super) fn from_chunked_dct_blocks(
-            chunks: &[ChunkedDCTBlock<'_, PixelType>],
-            dct_length: usize,
+            chunks: &[ChunkedDCTBlock<'_, LENGTH, PixelType>],
             frame_resolution: (usize, usize),
         ) -> Self {
             let mut values =
-                ndarray::Array3::zeros((dct_length, frame_resolution.0, frame_resolution.1));
+                ndarray::Array3::zeros((LENGTH, frame_resolution.0, frame_resolution.1));
             let chunk_dimensions = chunks.first().expect("chunks is empty").values.dim();
 
             assert_eq!(
-                dct_length * frame_resolution.0 * frame_resolution.1,
+                LENGTH * frame_resolution.0 * frame_resolution.1,
                 chunks.len() * chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2
             );
 
@@ -160,6 +161,8 @@ pub mod transform_block_3d_dct {
                 .zip(chunks)
             {
                 dst.assign(&src.values);
+
+                dst.iter_mut().for_each(|value| *value += src.mean);
             }
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
@@ -174,13 +177,15 @@ pub mod chunked_dct_block {
     use super::transform_block_3d_dct::*;
     use super::*;
 
-    pub struct ChunkedDCTBlock<'a, PixelType: HasPixelComponentType> {
+    pub struct ChunkedDCTBlock<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ndarray::ArrayView3<'a, f32>,
         pub mean: f32,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
-    impl<'a, PixelType: HasPixelComponentType> ChunkedDCTBlock<'a, PixelType> {
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
+        ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>
+    {
         pub(super) fn new(values: ndarray::ArrayView3<'a, f32>, mean: f32) -> Self {
             ChunkedDCTBlock {
                 values,
@@ -190,17 +195,22 @@ pub mod chunked_dct_block {
         }
     }
 
-    pub struct TransformBlock3DDCTIter<'a, const LENGTH: usize, PixelType: HasPixelComponentType, I>
+    pub struct TransformBlock3DDCTIter<
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I,
+    >
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, PixelType>>,
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
         chunked_dct_block_iter: I,
         frame_resolution: (usize, usize),
     }
-    impl<'a, const LENGTH: usize, PixelType: HasPixelComponentType, I>
-        TransformBlock3DDCTIter<'a, LENGTH, PixelType, I>
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+        TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, PixelType>>,
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
         fn new(chunked_dct_block_iter: I, frame_resolution: (usize, usize)) -> Self {
             let pixel_type = PixelType::TYPE;
@@ -215,18 +225,18 @@ pub mod chunked_dct_block {
         }
     }
 
-    impl<'a, const LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
-        for TransformBlock3DDCTIter<'a, LENGTH, PixelType, I>
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
+        for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, PixelType>>,
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
-        type Item = TransformBlock3DDCT<LENGTH, PixelType>;
+        type Item = TransformBlock3DDCT<DCT_LENGTH, PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
             use std::cell::OnceCell;
 
             let num_transform_block_3d_dct_values =
-                LENGTH * self.frame_resolution.0 * self.frame_resolution.1;
+                DCT_LENGTH * self.frame_resolution.0 * self.frame_resolution.1;
             let chunks_needed = OnceCell::new();
             let chunk_dim = OnceCell::new();
             let mut chunks_to_consume = OnceCell::new();
@@ -249,7 +259,7 @@ pub mod chunked_dct_block {
                 let chunks_needed = chunks_needed.get_or_init(|| {
                     let num_chunk_values =
                         chunk.values.dim().0 * chunk.values.dim().1 * chunk.values.dim().2;
-                    assert_eq!(LENGTH % chunk.values.dim().0, 0);
+                    assert_eq!(DCT_LENGTH % chunk.values.dim().0, 0);
                     assert_eq!(self.frame_resolution.0 % chunk.values.dim().1, 0);
                     assert_eq!(self.frame_resolution.1 % chunk.values.dim().2, 0);
                     assert_eq!(num_transform_block_3d_dct_values % num_chunk_values, 0);
@@ -263,7 +273,6 @@ pub mod chunked_dct_block {
                 if *chunks_needed == chunks_to_consume.len() {
                     let transform_block_3d_dct = TransformBlock3DDCT::from_chunked_dct_blocks(
                         chunks_to_consume,
-                        LENGTH,
                         self.frame_resolution,
                     );
                     return Some(transform_block_3d_dct);
@@ -272,26 +281,23 @@ pub mod chunked_dct_block {
         }
     }
 
-    pub trait ChunkedDCTBlockIterExt<
-        'a,
-        const MACRO_BLOCK_LEN: usize,
-        PixelType: HasPixelComponentType,
-    >: Iterator<Item = ChunkedDCTBlock<'a, PixelType>> + Sized
+    pub trait ChunkedDCTBlockIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+        Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>> + Sized
     {
         fn into_transform_block_3d_dct_iter(
             self,
             frame_resolution: (usize, usize),
-        ) -> TransformBlock3DDCTIter<'a, MACRO_BLOCK_LEN, PixelType, Self>;
+        ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self>;
     }
-    impl<'a, const MACRO_BLOCK_LEN: usize, PixelType: HasPixelComponentType, I>
-        ChunkedDCTBlockIterExt<'a, MACRO_BLOCK_LEN, PixelType> for I
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+        ChunkedDCTBlockIterExt<'a, DCT_LENGTH, PixelType> for I
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, PixelType>>,
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
         fn into_transform_block_3d_dct_iter(
             self,
             frame_resolution: (usize, usize),
-        ) -> TransformBlock3DDCTIter<'a, MACRO_BLOCK_LEN, PixelType, Self> {
+        ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self> {
             TransformBlock3DDCTIter::new(self, frame_resolution)
         }
     }
@@ -467,34 +473,19 @@ mod tests {
             // and back again
 
             let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
-            let mut y_dct_iter: chunked_dct_block::TransformBlock3DDCTIter<
-                '_,
-                LENGTH,
-                YPixelComponentType,
-                std::vec::IntoIter<ChunkedDCTBlock<'_, YPixelComponentType>>, // lame that I have to type this
-            > = y_dct_chunks
+            let mut y_dct_iter = y_dct_chunks
                 .into_iter()
                 .into_transform_block_3d_dct_iter(frame_resolution);
             let y_dct = y_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
             assert!(y_dct_iter.next().is_none());
 
-            let mut cb_dct_iter: chunked_dct_block::TransformBlock3DDCTIter<
-                '_,
-                LENGTH,
-                CbPixelComponentType,
-                std::vec::IntoIter<ChunkedDCTBlock<'_, CbPixelComponentType>>,
-            > = cb_dct_chunks
+            let mut cb_dct_iter = cb_dct_chunks
                 .into_iter()
                 .into_transform_block_3d_dct_iter(frame_resolution);
             let cb_dct = cb_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
             assert!(cb_dct_iter.next().is_none());
 
-            let mut cr_dct_iter: chunked_dct_block::TransformBlock3DDCTIter<
-                '_,
-                LENGTH,
-                CrPixelComponentType,
-                std::vec::IntoIter<ChunkedDCTBlock<'_, CrPixelComponentType>>,
-            > = cr_dct_chunks
+            let mut cr_dct_iter = cr_dct_chunks
                 .into_iter()
                 .into_transform_block_3d_dct_iter(frame_resolution);
             let cr_dct = cr_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
@@ -521,5 +512,59 @@ mod tests {
         }
         writer.finish_writing().expect("Failed to finish writing.");
         assert_eq!(pixel_buffers_consumed, 301 + LENGTH - (301 % LENGTH)); // TODO: No mechanism to signal empty frames.
+    }
+
+    #[test]
+    fn test_reader_to_chunked_dct_inverse_equality() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        let frame_resolution = reader.resolution().expect("Failed to get resolution.");
+        let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
+
+        let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
+        let _ = fs::remove_file(output_path);
+
+        const LENGTH: usize = 2;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let MacroBlock3D {
+            y_components: original_y_components,
+            cb_components: original_cb_components,
+            cr_components: original_cr_components,
+        } = macro_block.clone();
+
+        let mut y_dct = macro_block.y_components.into_dct();
+        let mut cb_dct = macro_block.cb_components.into_dct();
+        let mut cr_dct = macro_block.cr_components.into_dct();
+
+        let new_y_components = y_dct
+            .chunks_iter()
+            .into_transform_block_3d_dct_iter(frame_resolution)
+            .next()
+            .expect("Failed to produce a Y 3D DCT")
+            .into();
+
+        let new_cb_components = cb_dct
+            .chunks_iter()
+            .into_transform_block_3d_dct_iter(frame_resolution)
+            .next()
+            .expect("Failed to produce a Cb 3D DCT")
+            .into();
+
+        let new_cr_components = cr_dct
+            .chunks_iter()
+            .into_transform_block_3d_dct_iter(frame_resolution)
+            .next()
+            .expect("Failed to produce a Cr 3D DCT")
+            .into();
+
+        // check the original pixel values, which will have floating point errors rounded
+        assert_eq!(original_y_components, new_y_components);
+        assert_eq!(original_cb_components, new_cb_components);
+        assert_eq!(original_cr_components, new_cr_components);
     }
 }
