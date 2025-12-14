@@ -47,6 +47,11 @@ pub mod transform_block_3d_dct {
 
                 std::mem::swap(&mut output_a, &mut output_b);
             }
+
+            // normalize
+            let scale = 1f32 / (16 * length * height * width) as f32;
+            output_a.mapv_inplace(|value| value * scale);
+
             // experimental compression.. see how it affects the final video
             //             output_a.mapv_inplace(|value| match value {
             //                 value if value.abs() < 1000000.0 => 0.0, // 10 works...
@@ -84,6 +89,10 @@ pub mod transform_block_3d_dct {
 
             let mut output_a = dct_values;
             let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
+
+            // de-normalize
+            let scale = (16 * length * height * width) as f32;
+            output_a.mapv_inplace(|value| value * scale);
 
             for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
