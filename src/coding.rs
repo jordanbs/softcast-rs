@@ -34,13 +34,13 @@ pub mod transform_block_3d_dct {
     {
         fn from(transform_block: TransformBlock3D<LENGTH, PixelType>) -> Self {
             let input_values = transform_block.consume_values();
-            let (length, width, height) = input_values.dim();
+            let (length, height, width) = input_values.dim();
             assert_eq!(length, LENGTH);
 
             let mut output_a = input_values;
             let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
-            for (axis_idx, axis_len) in [(0, length), (1, width), (2, height)] {
+            for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
                     .normalization(ndrustfft::Normalization::None);
                 ndrustfft::nddct2_par(&output_a, &mut output_b, &handler, axis_idx);
@@ -79,13 +79,13 @@ pub mod transform_block_3d_dct {
     {
         fn from(transform_block_dct: TransformBlock3DDCT<LENGTH, PixelType>) -> Self {
             let dct_values = transform_block_dct.consume_values();
-            let (length, width, height) = dct_values.dim();
+            let (length, height, width) = dct_values.dim();
             assert_eq!(length, LENGTH);
 
             let mut output_a = dct_values;
             let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
-            for (axis_idx, axis_len) in [(0, length), (1, width), (2, height)] {
+            for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
                     .normalization(ndrustfft::Normalization::None);
                 ndrustfft::nddct3_par(&output_a, &mut output_b, &handler, axis_idx); // dct3 is the inverse of dct2
@@ -109,14 +109,14 @@ pub mod transform_block_3d_dct {
         pub fn chunks_iter(
             &mut self,
         ) -> impl Iterator<Item = ChunkedDCTBlock<'_, LENGTH, PixelType>> {
-            const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 44, 30);
-            let (length, width, height) = self.values.dim();
+            const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 30, 44);
+            let (length, height, width) = self.values.dim();
             let chunk_length =
                 max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.0, length);
             let chunk_width =
-                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.1, width);
+                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.1, height);
             let chunk_height =
-                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.2, height);
+                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.2, width);
 
             let chunk_size = chunk_width * chunk_height * chunk_length;
             assert!(chunk_size > 0);
@@ -151,12 +151,13 @@ pub mod transform_block_3d_dct {
             chunks: &[ChunkedDCTBlock<'_, LENGTH, PixelType>],
             frame_resolution: (usize, usize),
         ) -> Self {
-            let mut values =
-                ndarray::Array3::zeros((LENGTH, frame_resolution.0, frame_resolution.1));
+            let (dct_length, dct_height, dct_width) =
+                (LENGTH, frame_resolution.1, frame_resolution.0);
+            let mut values = ndarray::Array3::zeros((dct_length, dct_height, dct_width));
             let chunk_dimensions = chunks.first().expect("chunks is empty").values.dim();
 
             assert_eq!(
-                LENGTH * frame_resolution.0 * frame_resolution.1,
+                dct_length * dct_height * dct_width,
                 chunks.len() * chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2
             );
 
@@ -218,10 +219,11 @@ pub mod chunked_dct_block {
         I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
         fn new(chunked_dct_block_iter: I, frame_resolution: (usize, usize)) -> Self {
+            let (frame_width, frame_height) = frame_resolution;
             let pixel_type = PixelType::TYPE;
             let component_frame_resolution = (
-                frame_resolution.0 / pixel_type.interleave_step(),
-                frame_resolution.1 / pixel_type.vertical_subsampling(),
+                frame_width / pixel_type.interleave_step(),
+                frame_height / pixel_type.vertical_subsampling(),
             );
             TransformBlock3DDCTIter {
                 chunked_dct_block_iter: chunked_dct_block_iter,
@@ -265,8 +267,8 @@ pub mod chunked_dct_block {
                     let num_chunk_values =
                         chunk.values.dim().0 * chunk.values.dim().1 * chunk.values.dim().2;
                     assert_eq!(DCT_LENGTH % chunk.values.dim().0, 0);
-                    assert_eq!(self.frame_resolution.0 % chunk.values.dim().1, 0);
-                    assert_eq!(self.frame_resolution.1 % chunk.values.dim().2, 0);
+                    assert_eq!(self.frame_resolution.0 % chunk.values.dim().2, 0); // width
+                    assert_eq!(self.frame_resolution.1 % chunk.values.dim().1, 0); // height
                     assert_eq!(num_transform_block_3d_dct_values % num_chunk_values, 0);
                     num_transform_block_3d_dct_values / num_chunk_values
                 });

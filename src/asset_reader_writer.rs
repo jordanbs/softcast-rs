@@ -581,7 +581,7 @@ pub mod pixel_buffer {
                 Ok(())
             }
 
-            let (width, height) = y_components.values.dim();
+            let (height, width) = y_components.values.dim();
             let cv_pixel_buffer = Self::new_cv_pixel_buffer(width, height)?;
 
             unsafe {
@@ -753,6 +753,8 @@ pub mod pixel_buffer {
                 CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
                 CVPixelBufferLockBaseAddress(&other.cv_image_buffer, flags);
 
+                // TODO: factor into a shared fn.
+
                 let l_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
                     &self.cv_image_buffer,
                     PixelComponentType::Y.plane_index(),
@@ -917,7 +919,8 @@ pub mod transform_block_3d {
                 let block_width =
                     pixel_buffer.plane_row_len(PixelType::TYPE) / PixelType::TYPE.interleave_step();
                 let block_height = pixel_buffer.plane_height(PixelType::TYPE);
-                ndarray::Array3::zeros((LENGTH, block_width, block_height))
+                // length, height, width to match the memory layout of CVPixelBuffer
+                ndarray::Array3::zeros((LENGTH, block_height, block_width))
             });
             let values = self.values_cell.get_mut().unwrap(); // get_mut_or_init is nightly-only.
 
@@ -927,7 +930,7 @@ pub mod transform_block_3d {
 
             let pixel_type = PixelType::TYPE;
 
-            let (dst_width, dst_height) = values_2d.dim();
+            let (dst_height, dst_width) = values_2d.dim();
             let dst_len = dst_width * dst_height;
 
             pixel_buffer.lock_base_address(true);
