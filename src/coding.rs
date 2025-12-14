@@ -29,6 +29,18 @@ pub mod transform_block_3d_dct {
         _marker: std::marker::PhantomData<PixelType>,
     }
 
+    fn forwards_scale_factor(idx: usize, axis_len: usize) -> f32 {
+        let n = axis_len as f32;
+        match idx {
+            0 => 1.0 / (2.0 * n.sqrt()),
+            _ => 1.0 / (2.0 * n).sqrt(),
+        }
+    }
+
+    fn backwards_scale_factor(idx: usize, axis_len: usize) -> f32 {
+        1.0 / forwards_scale_factor(idx, axis_len)
+    }
+
     impl<const LENGTH: usize, PixelType: HasPixelComponentType>
         From<TransformBlock3D<LENGTH, PixelType>> for TransformBlock3DDCT<LENGTH, PixelType>
     {
@@ -48,15 +60,14 @@ pub mod transform_block_3d_dct {
                 std::mem::swap(&mut output_a, &mut output_b);
             }
 
-            // normalize
-            let scale = 1f32 / (16 * length * height * width) as f32;
-            output_a.mapv_inplace(|value| value * scale);
+            // manual orthonormal normalization
+            for ((i, j, k), value) in output_a.indexed_iter_mut() {
+                let i_scale = forwards_scale_factor(i, length);
+                let j_scale = forwards_scale_factor(j, height);
+                let k_scale = forwards_scale_factor(k, width);
 
-            // experimental compression.. see how it affects the final video
-            //             output_a.mapv_inplace(|value| match value {
-            //                 value if value.abs() < 1000000.0 => 0.0, // 10 works...
-            //                 _ => value,
-            //             });
+                *value *= i_scale * j_scale * k_scale;
+            }
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
                 values: output_a,
@@ -90,9 +101,14 @@ pub mod transform_block_3d_dct {
             let mut output_a = dct_values;
             let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
-            // de-normalize
-            let scale = (16 * length * height * width) as f32;
-            output_a.mapv_inplace(|value| value * scale);
+            // de-normalize (orthonormal)
+            for ((i, j, k), value) in output_a.indexed_iter_mut() {
+                let i_scale = backwards_scale_factor(i, length);
+                let j_scale = backwards_scale_factor(j, height);
+                let k_scale = backwards_scale_factor(k, width);
+
+                *value *= i_scale * j_scale * k_scale;
+            }
 
             for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
@@ -102,7 +118,8 @@ pub mod transform_block_3d_dct {
                 std::mem::swap(&mut output_a, &mut output_b);
             }
 
-            let scale = 0.125 * (length * width * height) as f32; //  dimensions / (2^num_dimensions)
+            // rustdct applies a 2n scale factor per dimension
+            let scale = 0.125 * (length * width * height) as f32;
             output_a.mapv_inplace(|value| value / scale);
             output_a.mapv_inplace(|value| value.round());
 
@@ -447,6 +464,18 @@ mod tests {
         let cb_dct = macro_block.cb_components.into_dct();
         let cr_dct = macro_block.cr_components.into_dct();
 
+        eprintln!(
+            "max:{} {:?}",
+            y_dct
+                .values
+                .map(|v| v.abs())
+                .iter()
+                .copied()
+                .reduce(f32::max)
+                .unwrap(),
+            y_dct
+        );
+
         let new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
         let new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
         let new_cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
@@ -619,7 +648,7 @@ mod tests {
                     |(zero_values, total_values, max_variance, max_value), chunk| {
                         let zero_values = zero_values
                             + match chunk.values.sum() {
-                                value if value.abs() < 10.0 => 1, // TODO: RMS of energy to figure out a decent threshold.
+                                value if value.abs() < 0.01 => 1, // TODO: RMS of energy to figure out a decent threshold.
                                 _ => 0,
                             };
                         let total_values = total_values + 1;
