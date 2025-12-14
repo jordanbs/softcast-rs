@@ -580,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    //     #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_count_zero_valued_chunk() {
         let path1 = "sample-media/bipbop-1920x1080-5s.mp4";
         let path2 = "sample-media/sample-5s.mp4";

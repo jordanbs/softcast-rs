@@ -438,13 +438,13 @@ impl PixelComponentType {
             PixelComponentType::Cr => 1,
         }
     }
-    pub fn interleave_step(&self) -> usize {
+    pub(super) fn interleave_step(&self) -> usize {
         match self {
             PixelComponentType::Y => 1,
             PixelComponentType::Cb | PixelComponentType::Cr => 2,
         }
     }
-    pub fn vertical_subsampling(&self) -> usize {
+    pub(super) fn vertical_subsampling(&self) -> usize {
         match self {
             PixelComponentType::Y => 1,
             PixelComponentType::Cb | PixelComponentType::Cr => 2,
@@ -510,43 +510,6 @@ pub mod pixel_buffer {
             PixelBuffer {
                 cv_image_buffer: cv_image_buffer,
             }
-        }
-
-        pub fn block_index_to_cv_pixel_buffer_plane_offset(
-            block_index: usize,
-            block_row_index: usize,
-            block_len: usize,
-            plane_bytes_per_row: usize,
-            pixel_component_type: PixelComponentType,
-        ) -> usize {
-            Self::block_index_to_cv_pixel_buffer_plane_offset_rectangular(
-                block_index,
-                block_row_index,
-                block_len,
-                block_len,
-                plane_bytes_per_row,
-                pixel_component_type,
-            )
-        }
-        pub fn block_index_to_cv_pixel_buffer_plane_offset_rectangular(
-            block_index: usize,
-            block_row_index: usize,
-            block_width: usize,
-            block_height: usize,
-            plane_bytes_per_row: usize,
-            pixel_component_type: PixelComponentType,
-        ) -> usize {
-            let interleave_offset = pixel_component_type.interleave_offset();
-            let interleave_step = pixel_component_type.interleave_step();
-
-            let cv_row_index = block_height * ((block_width * block_index) / plane_bytes_per_row);
-            let cv_row_offset = plane_bytes_per_row * (cv_row_index + block_row_index);
-
-            let cv_column_index = (block_width * block_index * interleave_step + interleave_offset)
-                % plane_bytes_per_row;
-            let cv_column_offset = cv_column_index;
-
-            cv_row_offset + cv_column_offset
         }
 
         fn new_cv_pixel_buffer(
