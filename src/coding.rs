@@ -132,6 +132,32 @@ pub mod transform_block_3d_dct {
             self.values
         }
 
+        fn power_scale(
+            chunk_dimensions: (usize, usize, usize),
+            chunk_energy: f32,
+            chunk_energies: &[f32],
+            sqrt_p_over_sum_sqrt_energies: &std::cell::OnceCell<f32>,
+        ) -> f32 {
+            // must check that return value is normal
+
+            // average transmit power per chunk = 1
+            let power_budget =
+                (chunk_dimensions.0 + chunk_dimensions.1 + chunk_dimensions.2) as f32;
+
+            // skip math if energy is 0
+            if chunk_energy.abs() < f32::EPSILON {
+                return f32::NAN;
+            }
+
+            // scale each chunk by g_i = λ_i^(-0.25)*√(P/Σ_i(√λ_i))
+            let sqrt_p_over_sum_sqrt_energies = sqrt_p_over_sum_sqrt_energies.get_or_init(|| {
+                let sum_sqrt_energies: f32 = chunk_energies.iter().map(|&λ| f32::sqrt(λ)).sum();
+                f32::sqrt(power_budget / sum_sqrt_energies)
+            });
+
+            chunk_energy.powf(-0.25) * sqrt_p_over_sum_sqrt_energies
+        }
+
         pub fn chunks_iter(
             &mut self,
         ) -> impl Iterator<Item = ChunkedDCTBlock<'_, LENGTH, PixelType>> {
@@ -153,13 +179,30 @@ pub mod transform_block_3d_dct {
 
             // must preflight mutatation of the 3D DCT, because we are going to be giving out immutable borrows.
             let mut means = Vec::with_capacity(num_chunks);
+            let mut energies = Vec::with_capacity(num_chunks);
 
             for mut chunk in self.values.exact_chunks_mut(chunk_dimensions) {
                 let mean = chunk.mean().unwrap(); // chunk should always be nonempty
 
                 chunk.iter_mut().for_each(|value| *value -= mean); // Softcast specifies a zero-mean distribution
 
+                // compute energy/variance after mean has been substracted, since we have to take the mean anyway
+                let energy = chunk.iter().map(|value| *value * *value).sum();
+
+                energies.push(energy);
                 means.push(mean);
+            }
+
+            let compute_cache = std::cell::OnceCell::new();
+            for (&energy, mut chunk) in energies
+                .iter()
+                .zip(self.values.exact_chunks_mut(chunk_dimensions))
+            {
+                let power_scale =
+                    Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
+                if power_scale.is_normal() {
+                    chunk.iter_mut().for_each(|value| *value *= power_scale);
+                }
             }
 
             // two passes necessary due to the impossibility to coerce 'chunks' in the previous loop to an immutable borrow
@@ -168,9 +211,12 @@ pub mod transform_block_3d_dct {
                 .exact_chunks(chunk_dimensions)
                 .into_iter()
                 .zip(means.into_iter())
-                .map(|(chunk, mean)| ChunkedDCTBlock::new(chunk, mean));
+                .zip(energies.into_iter())
+                .map(|((chunk, mean), energy)| ChunkedDCTBlock::new(chunk, mean, energy));
 
-            chunked_transform_blocks.into_iter()
+            // TODO: Add option to sort chunks by energy, for compression
+
+            chunked_transform_blocks
         }
 
         pub(super) fn from_chunked_dct_blocks(
@@ -187,6 +233,9 @@ pub mod transform_block_3d_dct {
                 chunks.len() * chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2
             );
 
+            let chunk_energies: Box<[f32]> = chunks.iter().map(|chunk| chunk.energy).collect();
+            let compute_cache = std::cell::OnceCell::new();
+
             for (mut dst, src) in values
                 .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
@@ -194,6 +243,15 @@ pub mod transform_block_3d_dct {
             {
                 dst.assign(&src.values);
 
+                let power_scale = Self::power_scale(
+                    chunk_dimensions,
+                    src.energy,
+                    &chunk_energies,
+                    &compute_cache,
+                );
+                if power_scale.is_normal() {
+                    dst.iter_mut().for_each(|value| *value /= power_scale);
+                }
                 dst.iter_mut().for_each(|value| *value += src.mean);
             }
 
@@ -212,16 +270,18 @@ pub mod chunked_dct_block {
     pub struct ChunkedDCTBlock<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ndarray::ArrayView3<'a, f32>,
         pub mean: f32,
+        pub energy: f32,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
         ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>
     {
-        pub(super) fn new(values: ndarray::ArrayView3<'a, f32>, mean: f32) -> Self {
+        pub(super) fn new(values: ndarray::ArrayView3<'a, f32>, mean: f32, energy: f32) -> Self {
             ChunkedDCTBlock {
                 values,
                 mean,
+                energy,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -567,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_chunked_dct_inverse_equality() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/sample-5s.mp4";
         let mut reader = AssetReader::new(path);
 
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
@@ -592,12 +652,17 @@ mod tests {
         let mut cb_dct = macro_block.cb_components.into_dct();
         let mut cr_dct = macro_block.cr_components.into_dct();
 
-        let new_y_components = y_dct
+        //         let original_y_dct = y_dct.clone();
+
+        let new_y_dct = y_dct
             .chunks_iter()
             .into_transform_block_3d_dct_iter(frame_resolution)
             .next()
-            .expect("Failed to produce a Y 3D DCT")
-            .into();
+            .expect("Failed to produce a Y 3D DCT");
+
+        //         assert_eq!(original_y_dct, new_y_dct);
+
+        let new_y_components = new_y_dct.into();
 
         let new_cb_components = cb_dct
             .chunks_iter()
