@@ -140,9 +140,11 @@ pub mod transform_block_3d_dct {
         ) -> f32 {
             // must check that return value is normal
 
+            let num_chunks = chunk_energies.len();
+
             // average transmit power per chunk = 1
-            let power_budget =
-                (chunk_dimensions.0 + chunk_dimensions.1 + chunk_dimensions.2) as f32;
+            let power_budget = num_chunks as f32
+                / (chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2) as f32;
 
             // skip math if energy is 0
             if chunk_energy.abs() < f32::EPSILON {
@@ -187,7 +189,8 @@ pub mod transform_block_3d_dct {
                 chunk.iter_mut().for_each(|value| *value -= mean); // Softcast specifies a zero-mean distribution
 
                 // compute energy/variance after mean has been substracted, since we have to take the mean anyway
-                let energy = chunk.iter().map(|value| *value * *value).sum();
+                let energy =
+                    chunk.iter().map(|value| value * value).sum::<f32>() / chunk.len() as f32;
 
                 energies.push(energy);
                 means.push(mean);
