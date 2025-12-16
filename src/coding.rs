@@ -61,13 +61,18 @@ pub mod transform_block_3d_dct {
             }
 
             // manual orthonormal normalization
-            for ((i, j, k), value) in output_a.indexed_iter_mut() {
-                let i_scale = forwards_scale_factor(i, length);
-                let j_scale = forwards_scale_factor(j, height);
-                let k_scale = forwards_scale_factor(k, width);
-
-                *value *= i_scale * j_scale * k_scale;
-            }
+            let i_scales: Box<[f32]> = (0..length)
+                .map(|i| forwards_scale_factor(i, length))
+                .collect();
+            let j_scales: Box<[f32]> = (0..height)
+                .map(|j| forwards_scale_factor(j, height))
+                .collect();
+            let k_scales: Box<[f32]> = (0..width)
+                .map(|i| forwards_scale_factor(i, width))
+                .collect();
+            output_a
+                .indexed_iter_mut()
+                .for_each(|((i, j, k), value)| *value *= i_scales[i] * j_scales[j] * k_scales[k]);
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
                 values: output_a,
@@ -101,14 +106,18 @@ pub mod transform_block_3d_dct {
             let mut output_a = dct_values;
             let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
-            // de-normalize (orthonormal)
-            for ((i, j, k), value) in output_a.indexed_iter_mut() {
-                let i_scale = backwards_scale_factor(i, length);
-                let j_scale = backwards_scale_factor(j, height);
-                let k_scale = backwards_scale_factor(k, width);
-
-                *value *= i_scale * j_scale * k_scale;
-            }
+            let i_scales: Box<[f32]> = (0..length)
+                .map(|i| backwards_scale_factor(i, length))
+                .collect();
+            let j_scales: Box<[f32]> = (0..height)
+                .map(|j| backwards_scale_factor(j, height))
+                .collect();
+            let k_scales: Box<[f32]> = (0..width)
+                .map(|i| backwards_scale_factor(i, width))
+                .collect();
+            output_a
+                .indexed_iter_mut()
+                .for_each(|((i, j, k), value)| *value *= i_scales[i] * j_scales[j] * k_scales[k]);
 
             for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
@@ -249,13 +258,12 @@ pub mod transform_block_3d_dct {
             let chunk_energies: Box<[f32]> = chunks.iter().map(|chunk| chunk.energy).collect();
             let compute_cache = std::cell::OnceCell::new();
 
+            // Could be optimized by iterating over dst or src in memory order.
             for (mut dst, src) in values
                 .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
                 .zip(chunks)
             {
-                dst.assign(&src.values);
-
                 let power_scale = Self::power_scale(
                     chunk_dimensions,
                     src.energy,
@@ -263,8 +271,10 @@ pub mod transform_block_3d_dct {
                     &compute_cache,
                 );
                 if power_scale.is_normal() {
+                    dst.assign(&src.values);
                     dst.iter_mut().for_each(|value| *value /= power_scale);
-                }
+                } // else assume all zeros
+
                 dst.iter_mut().for_each(|value| *value += src.mean);
             }
 
@@ -640,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_chunked_dct_inverse_equality() {
-        let path = "sample-media/sample-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
