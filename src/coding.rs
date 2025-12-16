@@ -208,6 +208,16 @@ pub mod transform_block_3d_dct {
                 }
             }
 
+            //          TODO: Make distortion iterator
+            //             {
+            //                 use rand::Rng;
+            //                 let mut rng = rand::rng();
+            //                 for value in self.values.iter_mut() {
+            //                     let distortion = rng.random_range(-10.0..10.1);
+            //                     *value += distortion;
+            //                 }
+            //             }
+
             // two passes necessary due to the impossibility to coerce 'chunks' in the previous loop to an immutable borrow
             let chunked_transform_blocks = self
                 .values
