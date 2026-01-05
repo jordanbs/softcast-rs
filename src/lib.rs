@@ -16,4 +16,4 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod asset_reader_writer;
-pub mod coding;
+pub mod source_coding;
