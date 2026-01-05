@@ -15,6 +15,22 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod asset_reader_writer;
-pub mod channel_coding;
-pub mod source_coding;
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn link_liquid_dsp() {
+        use liquid_dsp_sys;
+
+        unsafe {
+            let ofdm_frame = liquid_dsp_sys::ofdmflexframegen_create(
+                64,
+                16,
+                4,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+
+            eprintln!("{:?}", ofdm_frame);
+        }
+    }
+}

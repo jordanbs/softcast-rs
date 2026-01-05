@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+liquid-dsp-sys = "0.1.0"
 ndarray = "0.17.1"
 ndrustfft = "0.6.0"
 objc2 = "0.6.3"
