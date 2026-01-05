@@ -158,6 +158,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c93832659e9f381785e2a45d1cf328882a9d64108972847d1a06fab18b22d5"
 dependencies = [
  "bindgen",
+ "num-complex",
 ]
 
 [[package]]
@@ -618,6 +619,7 @@ dependencies = [
  "liquid-dsp-sys",
  "ndarray",
  "ndrustfft",
+ "num-complex",
  "objc2",
  "objc2-av-foundation",
  "objc2-core-foundation",
