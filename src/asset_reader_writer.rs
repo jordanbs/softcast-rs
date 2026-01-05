@@ -1,4 +1,4 @@
-// Copyright 2025 Jordan Schneider
+// Copyright 2025-2026 Jordan Schneider
 //
 // This file is part of softcast-rs.
 //
