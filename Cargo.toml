@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 liquid-dsp-sys = { version = "0.1.0", features = ["num_complex"] }
 ndarray = "0.17.1"
-ndrustfft = "0.6.0"
+ndrustfft = { git = "https://github.com/preiter93/ndrustfft", rev = "0a27cfd"} # TODO: change to 0.6.2
 num-complex = "0.4.6"
 objc2 = "0.6.3"
 objc2-av-foundation = { version = "0.3.2", features = ["objc2-core-media"] }

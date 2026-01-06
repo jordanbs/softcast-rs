@@ -45,20 +45,16 @@ pub mod transform_block_3d_dct {
         From<TransformBlock3D<LENGTH, PixelType>> for TransformBlock3DDCT<LENGTH, PixelType>
     {
         fn from(transform_block: TransformBlock3D<LENGTH, PixelType>) -> Self {
-            let input_values = transform_block.consume_values();
-            let (length, height, width) = input_values.dim();
+            let mut component_values = transform_block.consume_values();
+            let (length, height, width) = component_values.dim();
             assert_eq!(length, LENGTH);
-
-            let mut output_a = input_values;
-            let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
             for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
                     .normalization(ndrustfft::Normalization::None);
-                ndrustfft::nddct2_par(&output_a, &mut output_b, &handler, axis_idx);
-
-                std::mem::swap(&mut output_a, &mut output_b);
+                ndrustfft::nddct2_inplace_par(&mut component_values, &handler, axis_idx);
             }
+            let mut dct_values = component_values; // move
 
             // manual orthonormal normalization
             let i_scales: Box<[f32]> = (0..length)
@@ -70,12 +66,12 @@ pub mod transform_block_3d_dct {
             let k_scales: Box<[f32]> = (0..width)
                 .map(|i| forwards_scale_factor(i, width))
                 .collect();
-            output_a
+            dct_values
                 .indexed_iter_mut()
                 .for_each(|((i, j, k), value)| *value *= i_scales[i] * j_scales[j] * k_scales[k]);
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
-                values: output_a,
+                values: dct_values,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -99,12 +95,9 @@ pub mod transform_block_3d_dct {
         for transform_block_3d::TransformBlock3D<LENGTH, PixelType>
     {
         fn from(transform_block_dct: TransformBlock3DDCT<LENGTH, PixelType>) -> Self {
-            let dct_values = transform_block_dct.consume_values();
+            let mut dct_values = transform_block_dct.consume_values();
             let (length, height, width) = dct_values.dim();
             assert_eq!(length, LENGTH);
-
-            let mut output_a = dct_values;
-            let mut output_b = ndarray::Array3::zeros(output_a.raw_dim());
 
             let i_scales: Box<[f32]> = (0..length)
                 .map(|i| backwards_scale_factor(i, length))
@@ -115,24 +108,23 @@ pub mod transform_block_3d_dct {
             let k_scales: Box<[f32]> = (0..width)
                 .map(|i| backwards_scale_factor(i, width))
                 .collect();
-            output_a
+            dct_values
                 .indexed_iter_mut()
                 .for_each(|((i, j, k), value)| *value *= i_scales[i] * j_scales[j] * k_scales[k]);
 
             for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
                     .normalization(ndrustfft::Normalization::None);
-                ndrustfft::nddct3_par(&output_a, &mut output_b, &handler, axis_idx); // dct3 is the inverse of dct2
-
-                std::mem::swap(&mut output_a, &mut output_b);
+                ndrustfft::nddct3_inplace_par(&mut dct_values, &handler, axis_idx);
             }
+            let mut component_values = dct_values; // move
 
             // rustdct applies a 2n scale factor per dimension
             let scale = 0.125 * (length * width * height) as f32;
-            output_a.mapv_inplace(|value| value / scale);
-            output_a.mapv_inplace(|value| value.round());
+            component_values.mapv_inplace(|value| value / scale);
+            component_values.mapv_inplace(|value| value.round());
 
-            transform_block_3d::TransformBlock3D::with_values(output_a)
+            transform_block_3d::TransformBlock3D::with_values(component_values)
         }
     }
 
@@ -192,6 +184,9 @@ pub mod transform_block_3d_dct {
             let mut means = Vec::with_capacity(num_chunks);
             let mut energies = Vec::with_capacity(num_chunks);
 
+            // TODO: iterating over the standard memory layout and using a compute cache for mean and variance
+            //       would likely constitute a performance win.
+            // TODO: iterate in parallel with rayon
             for mut chunk in self.values.exact_chunks_mut(chunk_dimensions) {
                 let mean = chunk.mean().unwrap(); // chunk should always be nonempty
 
