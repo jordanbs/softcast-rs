@@ -21,35 +21,19 @@ use hadamard_block::*;
 
 pub mod hadamard_block {
     use super::*;
-    use fwht;
-
-    #[derive(Debug)]
-    pub struct Slice<const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
-        pub values: ndarray::Array1<f32>,
-        _marker: std::marker::PhantomData<PixelType>,
-    }
-
-    impl<const GOP_LENGTH: usize, PixelType: HasPixelComponentType> Slice<GOP_LENGTH, PixelType> {
-        pub fn new(values: ndarray::Array1<f32>) -> Self {
-            Self {
-                values,
-                _marker: std::marker::PhantomData,
-            }
-        }
-    }
 
     pub enum ViewOrOwnedArray3<'a> {
         View(ndarray::ArrayViewMut3<'a, f32>),
         Owned(ndarray::Array3<f32>),
     }
 
-    pub struct Slice2<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
+    pub struct Slice<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ViewOrOwnedArray3<'a>,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
-        Slice2<'a, GOP_LENGTH, PixelType>
+        Slice<'a, GOP_LENGTH, PixelType>
     {
         pub fn new(values: ViewOrOwnedArray3<'a>) -> Self {
             Self {
@@ -64,6 +48,7 @@ pub mod hadamard_block {
         I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
         chunked_dct_block_iter: std::iter::Peekable<I>,
+        inner_slice_iter: std::vec::IntoIter<hadamard_block::Slice<'a, DCT_LENGTH, PixelType>>,
         chunks_per_gop: usize,
     }
 
@@ -75,6 +60,7 @@ pub mod hadamard_block {
         pub fn new(chunked_dct_block_iter: I, chunks_per_gop: usize) -> Self {
             SliceIter {
                 chunked_dct_block_iter: chunked_dct_block_iter.peekable(),
+                inner_slice_iter: vec![].into_iter(),
                 chunks_per_gop: chunks_per_gop,
             }
         }
@@ -84,63 +70,38 @@ pub mod hadamard_block {
     where
         I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
-        type Item = Box<[Slice<DCT_LENGTH, PixelType>]>;
+        type Item = Slice<'a, DCT_LENGTH, PixelType>;
 
-        // TODO: This should all be done without copying (currently has two copies!), likely involving a
-        // custom implementation of fwht and mutable access to chunks.
         fn next(&mut self) -> Option<Self::Item> {
-            let hadamard_len = 2usize.pow(((self.chunks_per_gop as f32).log2()).ceil() as u32);
+            loop {
+                if let Some(slice) = self.inner_slice_iter.next() {
+                    return Some(slice);
+                }
 
-            let first_chunk = self.chunked_dct_block_iter.peek().unwrap(); // TODO: don't unwrap
-
-            let chunk_len = first_chunk.values.len();
-            let mut hadamard_rvalues = ndarray::Array2::zeros((chunk_len, hadamard_len));
-
-            // copy each column to apply a hadamard to smear the energy across chunks
-            for (row, index_in_chunk) in ndarray::indices_of(&first_chunk.values)
-                .into_iter()
-                .enumerate()
-            {
-                // copy
-                self.chunked_dct_block_iter
+                let chunks: Box<_> = self
+                    .chunked_dct_block_iter
                     .by_ref()
                     .take(self.chunks_per_gop)
-                    .map(|chunk| chunk.values[index_in_chunk])
-                    .enumerate()
-                    .for_each(|(col, value)| hadamard_rvalues[(row, col)] = value);
+                    .collect();
+
+                if chunks.is_empty() {
+                    return None;
+                }
+                assert!(
+                    chunks.len() == self.chunks_per_gop,
+                    "Not enough chunks for a GOP."
+                );
+
+                let slices = fwht_chunks(chunks).expect("Failed to create slices.");
+                self.inner_slice_iter = slices.into_iter();
             }
-
-            // now compute the hadamards
-            for col in 0..self.chunks_per_gop {
-                let mut hadamard_rvalues_column =
-                    hadamard_rvalues.index_axis_mut(ndarray::Axis(0), col);
-                fwht::fwht_slice(
-                    hadamard_rvalues_column
-                        .as_slice_mut()
-                        .expect("not contiguous"),
-                )
-                .expect("fwht failed.");
-
-                // scale by 1/√n
-                hadamard_rvalues_column
-                    .iter_mut()
-                    .for_each(|value| *value *= 1f32 / (self.chunks_per_gop as f32).sqrt());
-            }
-
-            let slices: Vec<Slice<DCT_LENGTH, PixelType>> = hadamard_rvalues
-                .outer_iter()
-                .map(|hadamard_rrow| hadamard_rrow.to_owned()) // copy
-                .map(|hadamard_rrow_owned| Slice::new(hadamard_rrow_owned))
-                .collect();
-
-            Some(slices.into())
         }
     }
 }
 
 fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
     chunks: Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>,
-) -> Result<Box<[Slice2<'a, DCT_LENGTH, PixelType>]>, &'static str> {
+) -> Result<Box<[Slice<'a, DCT_LENGTH, PixelType>]>, &'static str> {
     // adapted from fwht crate, with the intention of avoiding copies
     let mut chunks = chunks;
     let first_chunk = chunks.first().expect("no chunks");
@@ -188,11 +149,11 @@ fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
 
     let mut slices = Vec::with_capacity(hadamard_len);
     for chunk in chunks {
-        let slice = Slice2::new(ViewOrOwnedArray3::View(chunk.values));
+        let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values));
         slices.push(slice);
     }
     for padding_chunk in padding_chunks {
-        let slice = Slice2::new(ViewOrOwnedArray3::Owned(padding_chunk));
+        let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk));
         slices.push(slice);
     }
 

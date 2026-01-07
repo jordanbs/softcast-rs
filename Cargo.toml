@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-fwht = { version = "0.1.0", features = ["ndarray"] }
 liquid-dsp-sys = { version = "0.1.0", features = ["num_complex"] }
 ndarray = "0.17.1"
 ndrustfft = "0.6.2"
