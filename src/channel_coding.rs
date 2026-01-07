@@ -245,6 +245,7 @@ pub mod fwht {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use num_complex::Complex32;
 
     #[test]
@@ -293,5 +294,98 @@ mod tests {
                 );
             }
         }
+    }
+
+    impl fwht::ValuesProvider for ndarray::Array3<f32> {
+        fn values(&self) -> ndarray::ArrayView3<'_, f32> {
+            self.view()
+        }
+        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
+            self.view_mut()
+        }
+    }
+
+    #[test]
+    fn test_fwht_basic() {
+        let mut data: Box<[_]> = vec![
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+        ]
+        .into();
+
+        data[0][(0, 0, 0)] = 1f32;
+        data[1][(0, 0, 0)] = 2f32;
+        data[2][(0, 0, 0)] = 3f32;
+        data[3][(0, 0, 0)] = 4f32;
+
+        data[0][(0, 0, 1)] = 5f32;
+        data[1][(0, 0, 1)] = 6f32;
+        data[2][(0, 0, 1)] = 7f32;
+        data[3][(0, 0, 1)] = 8f32;
+
+        fwht::fwht(&mut data, &mut vec![]);
+
+        assert_eq!(data[0][(0, 0, 0)], 5f32);
+        assert_eq!(data[1][(0, 0, 0)], -1f32);
+        assert_eq!(data[2][(0, 0, 0)], -2f32);
+        assert_eq!(data[3][(0, 0, 0)], 0f32);
+
+        assert_eq!(data[0][(0, 0, 1)], 13f32);
+        assert_eq!(data[1][(0, 0, 1)], -1f32);
+        assert_eq!(data[2][(0, 0, 1)], -2f32);
+        assert_eq!(data[3][(0, 0, 1)], 0f32);
+    }
+
+    #[test]
+    fn test_fwht_padding() {
+        let mut data: Box<[_]> = vec![
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+        ]
+        .into();
+
+        data[0][(0, 0, 0)] = 1f32;
+        data[1][(0, 0, 0)] = 2f32;
+        data[2][(0, 0, 0)] = 3f32;
+        data[3][(0, 0, 0)] = 4f32;
+        data[4][(0, 0, 0)] = 5f32;
+
+        data[0][(0, 0, 1)] = 6f32;
+        data[1][(0, 0, 1)] = 7f32;
+        data[2][(0, 0, 1)] = 8f32;
+        data[3][(0, 0, 1)] = 9f32;
+        data[4][(0, 0, 1)] = 10f32;
+
+        let mut padding = vec![
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+            ndarray::Array3::<f32>::zeros((1, 1, 2)),
+        ];
+        fwht::fwht(&mut data, &mut padding);
+
+        assert!((data[0][(0, 0, 0)] - 5.3033).abs() < 0.001);
+        assert!((data[1][(0, 0, 0)] - 1.0607).abs() < 0.001);
+        assert!((data[2][(0, 0, 0)] - 0.3536).abs() < 0.001);
+        assert!((data[3][(0, 0, 0)] - 1.7678).abs() < 0.001);
+        assert!((data[4][(0, 0, 0)] - 1.7678).abs() < 0.001);
+
+        assert!((padding[0][(0, 0, 0)] - -2.4749).abs() < 0.001);
+        assert!((padding[1][(0, 0, 0)] - -3.1820).abs() < 0.001);
+        assert!((padding[2][(0, 0, 0)] - -1.7678).abs() < 0.001);
+
+        assert!((data[0][(0, 0, 1)] - 14.1421).abs() < 0.001);
+        assert!((data[1][(0, 0, 1)] - 2.8284).abs() < 0.001);
+        assert!((data[2][(0, 0, 1)] - 2.1213).abs() < 0.001);
+        assert!((data[3][(0, 0, 1)] - 3.5355).abs() < 0.001);
+        assert!((data[4][(0, 0, 1)] - 7.0711).abs() < 0.001);
+
+        assert!((padding[0][(0, 0, 1)] - -4.2426).abs() < 0.001);
+        assert!((padding[1][(0, 0, 1)] - -4.9497).abs() < 0.001);
+        assert!((padding[2][(0, 0, 1)] - -3.5355).abs() < 0.001);
     }
 }
