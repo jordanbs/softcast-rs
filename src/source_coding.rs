@@ -295,7 +295,7 @@ pub mod chunked_dct_block {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
         ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>
     {
-        pub(super) fn new(values: ndarray::ArrayViewMut3<'a, f32>, mean: f32, energy: f32) -> Self {
+        pub fn new(values: ndarray::ArrayViewMut3<'a, f32>, mean: f32, energy: f32) -> Self {
             ChunkedDCTBlock {
                 values,
                 mean,

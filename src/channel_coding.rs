@@ -21,6 +21,7 @@ use hadamard_block::*;
 
 pub mod hadamard_block {
     use super::*;
+    use fwht;
 
     pub enum ViewOrOwnedArray3<'a> {
         View(ndarray::ArrayViewMut3<'a, f32>),
@@ -92,79 +93,154 @@ pub mod hadamard_block {
                     "Not enough chunks for a GOP."
                 );
 
-                let slices = fwht_chunks(chunks).expect("Failed to create slices.");
+                let slices = fwht::fwht_chunks(chunks).expect("Failed to create slices.");
                 self.inner_slice_iter = slices.into_iter();
             }
         }
     }
 }
 
-fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
-    chunks: Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>,
-) -> Result<Box<[Slice<'a, DCT_LENGTH, PixelType>]>, &'static str> {
-    // adapted from fwht crate, with the intention of avoiding copies
-    let mut chunks = chunks;
-    let first_chunk = chunks.first().expect("no chunks");
+pub mod fwht {
+    use super::*;
 
-    // add padding so each fwht is a power of two
-    let hadamard_len = 2usize.pow(((chunks.len() as f32).log2()).ceil() as u32);
+    pub(super) trait ValuesProvider {
+        fn values(&self) -> ndarray::ArrayView3<'_, f32>;
+        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32>;
+    }
 
-    let num_padding_rows = hadamard_len - chunks.len();
-    let mut padding_chunks =
-        vec![ndarray::Array3::<f32>::zeros(first_chunk.values.raw_dim()); num_padding_rows];
-
-    for index_in_chunk in ndarray::indices_of(&first_chunk.values) {
-        let mut h = 1;
-        while h < hadamard_len {
-            for i in (0..hadamard_len).step_by(h * 2) {
-                for j in i..i + h {
-                    let x = if j < chunks.len() {
-                        chunks[j].values[index_in_chunk]
-                    } else {
-                        padding_chunks[j - chunks.len()][index_in_chunk]
-                    };
-
-                    let y = if j + h < chunks.len() {
-                        chunks[j + h].values[index_in_chunk]
-                    } else {
-                        padding_chunks[j + h - chunks.len()][index_in_chunk]
-                    };
-
-                    if j < chunks.len() {
-                        chunks[j].values[index_in_chunk] = x + y
-                    } else {
-                        padding_chunks[j - chunks.len()][index_in_chunk] = x + y
-                    };
-
-                    if j + h < chunks.len() {
-                        chunks[j + h].values[index_in_chunk] = x - y
-                    } else {
-                        padding_chunks[j + h - chunks.len()][index_in_chunk] = x - y
-                    };
-                }
-            }
-            h *= 2;
+    impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> ValuesProvider
+        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+    {
+        fn values(&self) -> ndarray::ArrayView3<'_, f32> {
+            self.values.view()
+        }
+        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
+            self.values.view_mut()
         }
     }
-    let orthonormalization_factor = 1f32 / (hadamard_len as f32).sqrt();
-    chunks
-        .iter_mut()
-        .for_each(|chunk| *chunk.values *= orthonormalization_factor);
-    padding_chunks
-        .iter_mut()
-        .for_each(|padding_chunk| *padding_chunk *= orthonormalization_factor);
 
-    let mut slices = Vec::with_capacity(hadamard_len);
-    for chunk in chunks {
-        let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values));
-        slices.push(slice);
-    }
-    for padding_chunk in padding_chunks {
-        let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk));
-        slices.push(slice);
+    impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> ValuesProvider
+        for Slice<'_, DCT_LENGTH, PixelType>
+    {
+        fn values(&self) -> ndarray::ArrayView3<'_, f32> {
+            match &self.values {
+                ViewOrOwnedArray3::View(view) => view.into(),
+                ViewOrOwnedArray3::Owned(owned) => owned.view(),
+            }
+        }
+        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
+            match &mut self.values {
+                ViewOrOwnedArray3::View(view) => view.into(),
+                ViewOrOwnedArray3::Owned(owned) => owned.view_mut(),
+            }
+        }
     }
 
-    Ok(slices.into())
+    // MARK: could be performed more naturally with the entire 3d dct
+    pub(super) fn fwht(
+        data: &mut Box<[impl ValuesProvider]>,
+        padding: &mut Vec<ndarray::Array3<f32>>,
+    ) {
+        let first_chunk = data.first().expect("no data");
+        let indicies_iter = ndarray::indices_of(&first_chunk.values());
+        let hadamard_len = data.len() + padding.len();
+
+        assert!(hadamard_len.is_power_of_two());
+
+        for index_in_chunk in indicies_iter {
+            let mut h = 1;
+            while h < hadamard_len {
+                for i in (0..hadamard_len).step_by(h * 2) {
+                    for j in i..i + h {
+                        let x = if j < data.len() {
+                            data[j].values()[index_in_chunk]
+                        } else {
+                            padding[j - data.len()][index_in_chunk]
+                        };
+
+                        let y = if j + h < data.len() {
+                            data[j + h].values()[index_in_chunk]
+                        } else {
+                            padding[j + h - data.len()][index_in_chunk]
+                        };
+
+                        if j < data.len() {
+                            data[j].values_mut()[index_in_chunk] = x + y
+                        } else {
+                            padding[j - data.len()][index_in_chunk] = x + y
+                        };
+
+                        if j + h < data.len() {
+                            data[j + h].values_mut()[index_in_chunk] = x - y
+                        } else {
+                            padding[j + h - data.len()][index_in_chunk] = x - y
+                        };
+                    }
+                }
+                h *= 2;
+            }
+        }
+        let orthonormalization_factor = 1f32 / (hadamard_len as f32).sqrt();
+        data.iter_mut()
+            .for_each(|data_row| *data_row.values_mut() *= orthonormalization_factor);
+        padding
+            .iter_mut()
+            .for_each(|padding_row| *padding_row *= orthonormalization_factor);
+    }
+
+    pub fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
+        chunks: Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>,
+    ) -> Result<Box<[Slice<'a, DCT_LENGTH, PixelType>]>, &'static str> {
+        // adapted from fwht crate, with the intention of avoiding copies
+        let mut chunks = chunks;
+
+        // add padding so each fwht is a power of two
+        let hadamard_len = 2usize.pow(((chunks.len() as f32).log2()).ceil() as u32);
+
+        let num_padding_rows = hadamard_len - chunks.len();
+        let chunk_dim = chunks.first().expect("no data").values().raw_dim();
+        let mut padding_chunks = vec![ndarray::Array3::<f32>::zeros(chunk_dim); num_padding_rows];
+
+        fwht(&mut chunks, &mut padding_chunks);
+
+        let mut slices = Vec::with_capacity(hadamard_len);
+        for chunk in chunks {
+            let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values));
+            slices.push(slice);
+        }
+        for padding_chunk in padding_chunks {
+            let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk));
+            slices.push(slice);
+        }
+
+        Ok(slices.into())
+    }
+
+    pub fn fwht_slices<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
+        slices: Box<[Slice<'a, DCT_LENGTH, PixelType>]>,
+        num_padding_rows: usize,
+    ) -> Result<Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>, &'static str> {
+        let mut slices = slices;
+
+        fwht(&mut slices, &mut vec![]);
+
+        let mut chunks = Vec::with_capacity(slices.len() - num_padding_rows);
+        for slice in slices {
+            // consume slice.values
+            let values = match slice.values {
+                ViewOrOwnedArray3::View(view) => view,
+                ViewOrOwnedArray3::Owned(_) => {
+                    panic!("slice not expected to own its data.")
+                }
+            };
+
+            let chunk: ChunkedDCTBlock<'a, DCT_LENGTH, PixelType> =
+                ChunkedDCTBlock::new(values, 0f32, 0f32); // TODO: get mean and energy
+            chunks.push(chunk);
+        }
+
+        Ok(chunks.into())
+    }
 }
 
 #[cfg(test)]
