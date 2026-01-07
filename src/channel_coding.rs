@@ -372,4 +372,73 @@ mod tests {
         assert!((padding[1][(0, 0, 1)] - -4.9497).abs() < 0.001);
         assert!((padding[2][(0, 0, 1)] - -3.5355).abs() < 0.001);
     }
+
+    #[test]
+    fn test_fwht_inverse() {
+        let mut data: Box<[_]> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 4].into();
+
+        data[0][(0, 0, 0)] = 1f32;
+        data[1][(0, 0, 0)] = 2f32;
+        data[2][(0, 0, 0)] = 3f32;
+        data[3][(0, 0, 0)] = 4f32;
+
+        data[0][(0, 0, 1)] = 5f32;
+        data[1][(0, 0, 1)] = 6f32;
+        data[2][(0, 0, 1)] = 7f32;
+        data[3][(0, 0, 1)] = 8f32;
+
+        fwht::fwht(&mut data, &mut vec![].into());
+        fwht::fwht(&mut data, &mut vec![].into());
+
+        assert_eq!(data[0][(0, 0, 0)], 1f32);
+        assert_eq!(data[1][(0, 0, 0)], 2f32);
+        assert_eq!(data[2][(0, 0, 0)], 3f32);
+        assert_eq!(data[3][(0, 0, 0)], 4f32);
+
+        assert_eq!(data[0][(0, 0, 1)], 5f32);
+        assert_eq!(data[1][(0, 0, 1)], 6f32);
+        assert_eq!(data[2][(0, 0, 1)], 7f32);
+        assert_eq!(data[3][(0, 0, 1)], 8f32);
+    }
+
+    #[test]
+    fn test_fwht_inverse_padding() {
+        let mut data: Box<[_]> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 5].into();
+
+        data[0][(0, 0, 0)] = 1f32;
+        data[1][(0, 0, 0)] = 2f32;
+        data[2][(0, 0, 0)] = 3f32;
+        data[3][(0, 0, 0)] = 4f32;
+        data[4][(0, 0, 0)] = 5f32;
+
+        data[0][(0, 0, 1)] = 6f32;
+        data[1][(0, 0, 1)] = 7f32;
+        data[2][(0, 0, 1)] = 8f32;
+        data[3][(0, 0, 1)] = 9f32;
+        data[4][(0, 0, 1)] = 10f32;
+
+        let mut padding: Box<_> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 3].into();
+        fwht::fwht(&mut data, &mut padding);
+        fwht::fwht(&mut data, &mut padding);
+
+        assert!((data[0][(0, 0, 0)] - 1f32).abs() < 0.001);
+        assert!((data[1][(0, 0, 0)] - 2f32).abs() < 0.001);
+        assert!((data[2][(0, 0, 0)] - 3f32).abs() < 0.001);
+        assert!((data[3][(0, 0, 0)] - 4f32).abs() < 0.001);
+        assert!((data[4][(0, 0, 0)] - 5f32).abs() < 0.001);
+
+        assert!((padding[0][(0, 0, 0)] - 0f32).abs() < 0.001);
+        assert!((padding[1][(0, 0, 0)] - 0f32).abs() < 0.001);
+        assert!((padding[2][(0, 0, 0)] - 0f32).abs() < 0.001);
+
+        assert!((data[0][(0, 0, 1)] - 6f32).abs() < 0.001);
+        assert!((data[1][(0, 0, 1)] - 7f32).abs() < 0.001);
+        assert!((data[2][(0, 0, 1)] - 8f32).abs() < 0.001);
+        assert!((data[3][(0, 0, 1)] - 9f32).abs() < 0.001);
+        assert!((data[4][(0, 0, 1)] - 10f32).abs() < 0.001);
+
+        assert!((padding[0][(0, 0, 1)] - 0f32).abs() < 0.001);
+        assert!((padding[1][(0, 0, 1)] - 0f32).abs() < 0.001);
+        assert!((padding[2][(0, 0, 1)] - 0f32).abs() < 0.001);
+    }
 }
