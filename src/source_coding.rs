@@ -225,7 +225,7 @@ pub mod transform_block_3d_dct {
             // two passes necessary due to the impossibility to coerce 'chunks' in the previous loop to an immutable borrow
             let chunked_transform_blocks = self
                 .values
-                .exact_chunks(chunk_dimensions)
+                .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
                 .zip(means.into_iter())
                 .zip(energies.into_iter())
@@ -286,7 +286,7 @@ pub mod chunked_dct_block {
     use super::*;
 
     pub struct ChunkedDCTBlock<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
-        pub values: ndarray::ArrayView3<'a, f32>,
+        pub values: ndarray::ArrayViewMut3<'a, f32>,
         pub mean: f32,
         pub energy: f32,
         _marker: std::marker::PhantomData<PixelType>,
@@ -295,7 +295,7 @@ pub mod chunked_dct_block {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
         ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>
     {
-        pub(super) fn new(values: ndarray::ArrayView3<'a, f32>, mean: f32, energy: f32) -> Self {
+        pub(super) fn new(values: ndarray::ArrayViewMut3<'a, f32>, mean: f32, energy: f32) -> Self {
             ChunkedDCTBlock {
                 values,
                 mean,

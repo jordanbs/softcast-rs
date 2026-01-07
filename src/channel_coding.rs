@@ -17,6 +17,7 @@
 
 use crate::asset_reader_writer::*;
 use crate::source_coding::chunked_dct_block::*;
+use hadamard_block::*;
 
 pub mod hadamard_block {
     use super::*;
@@ -24,12 +25,33 @@ pub mod hadamard_block {
 
     #[derive(Debug)]
     pub struct Slice<const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
-        values: ndarray::Array1<f32>,
+        pub values: ndarray::Array1<f32>,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<const GOP_LENGTH: usize, PixelType: HasPixelComponentType> Slice<GOP_LENGTH, PixelType> {
         pub fn new(values: ndarray::Array1<f32>) -> Self {
+            Self {
+                values,
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    pub enum ViewOrOwnedArray3<'a> {
+        View(ndarray::ArrayViewMut3<'a, f32>),
+        Owned(ndarray::Array3<f32>),
+    }
+
+    pub struct Slice2<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
+        pub values: ViewOrOwnedArray3<'a>,
+        _marker: std::marker::PhantomData<PixelType>,
+    }
+
+    impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
+        Slice2<'a, GOP_LENGTH, PixelType>
+    {
+        pub fn new(values: ViewOrOwnedArray3<'a>) -> Self {
             Self {
                 values,
                 _marker: std::marker::PhantomData,
@@ -114,6 +136,67 @@ pub mod hadamard_block {
             Some(slices.into())
         }
     }
+}
+
+fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
+    chunks: Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>,
+) -> Result<Box<[Slice2<'a, DCT_LENGTH, PixelType>]>, &'static str> {
+    // adapted from fwht crate, with the intention of avoiding copies
+    let mut chunks = chunks;
+    let first_chunk = chunks.first().expect("no chunks");
+
+    // add padding so each fwht is a power of two
+    let hadamard_len = 2usize.pow(((chunks.len() as f32).log2()).ceil() as u32);
+
+    let num_padding_rows = hadamard_len - chunks.len();
+    let mut padding_chunks =
+        vec![ndarray::Array3::<f32>::zeros(first_chunk.values.raw_dim()); num_padding_rows];
+
+    for index_in_chunk in ndarray::indices_of(&first_chunk.values) {
+        let mut h = 1;
+        while h < hadamard_len {
+            for i in (0..hadamard_len).step_by(h * 2) {
+                for j in i..i + h {
+                    let x = if j < chunks.len() {
+                        chunks[j].values[index_in_chunk]
+                    } else {
+                        padding_chunks[j - chunks.len()][index_in_chunk]
+                    };
+
+                    let y = if j + h < chunks.len() {
+                        chunks[j + h].values[index_in_chunk]
+                    } else {
+                        padding_chunks[j + h - chunks.len()][index_in_chunk]
+                    };
+
+                    if j < chunks.len() {
+                        chunks[j].values[index_in_chunk] = x + y
+                    } else {
+                        padding_chunks[j - chunks.len()][index_in_chunk] = x + y
+                    };
+
+                    if j + h < chunks.len() {
+                        chunks[j + h].values[index_in_chunk] = x - y
+                    } else {
+                        padding_chunks[j + h - chunks.len()][index_in_chunk] = x - y
+                    };
+                }
+            }
+            h *= 2;
+        }
+    }
+
+    let mut slices = Vec::with_capacity(hadamard_len);
+    for chunk in chunks {
+        let slice = Slice2::new(ViewOrOwnedArray3::View(chunk.values));
+        slices.push(slice);
+    }
+    for padding_chunk in padding_chunks {
+        let slice = Slice2::new(ViewOrOwnedArray3::Owned(padding_chunk));
+        slices.push(slice);
+    }
+
+    Ok(slices.into())
 }
 
 #[cfg(test)]
