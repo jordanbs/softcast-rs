@@ -139,7 +139,7 @@ pub mod fwht {
     // MARK: could be performed more naturally with the entire 3d dct
     pub(super) fn fwht(
         data: &mut Box<[impl ValuesProvider]>,
-        padding: &mut Vec<ndarray::Array3<f32>>,
+        padding: &mut Box<[ndarray::Array3<f32>]>,
     ) {
         let first_chunk = data.first().expect("no data");
         let indicies_iter = ndarray::indices_of(&first_chunk.values());
@@ -199,7 +199,8 @@ pub mod fwht {
 
         let num_padding_rows = hadamard_len - chunks.len();
         let chunk_dim = chunks.first().expect("no data").values().raw_dim();
-        let mut padding_chunks = vec![ndarray::Array3::<f32>::zeros(chunk_dim); num_padding_rows];
+        let mut padding_chunks: Box<_> =
+            vec![ndarray::Array3::<f32>::zeros(chunk_dim); num_padding_rows].into();
 
         fwht(&mut chunks, &mut padding_chunks);
 
@@ -222,7 +223,7 @@ pub mod fwht {
     ) -> Result<Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>, &'static str> {
         let mut slices = slices;
 
-        fwht(&mut slices, &mut vec![]);
+        fwht(&mut slices, &mut vec![].into());
 
         let mut chunks = Vec::with_capacity(slices.len() - num_padding_rows);
         for slice in slices {
@@ -307,13 +308,7 @@ mod tests {
 
     #[test]
     fn test_fwht_basic() {
-        let mut data: Box<[_]> = vec![
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-        ]
-        .into();
+        let mut data: Box<[_]> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 4].into();
 
         data[0][(0, 0, 0)] = 1f32;
         data[1][(0, 0, 0)] = 2f32;
@@ -325,7 +320,7 @@ mod tests {
         data[2][(0, 0, 1)] = 7f32;
         data[3][(0, 0, 1)] = 8f32;
 
-        fwht::fwht(&mut data, &mut vec![]);
+        fwht::fwht(&mut data, &mut vec![].into());
 
         assert_eq!(data[0][(0, 0, 0)], 5f32);
         assert_eq!(data[1][(0, 0, 0)], -1f32);
@@ -340,14 +335,7 @@ mod tests {
 
     #[test]
     fn test_fwht_padding() {
-        let mut data: Box<[_]> = vec![
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-        ]
-        .into();
+        let mut data: Box<[_]> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 5].into();
 
         data[0][(0, 0, 0)] = 1f32;
         data[1][(0, 0, 0)] = 2f32;
@@ -361,11 +349,7 @@ mod tests {
         data[3][(0, 0, 1)] = 9f32;
         data[4][(0, 0, 1)] = 10f32;
 
-        let mut padding = vec![
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-            ndarray::Array3::<f32>::zeros((1, 1, 2)),
-        ];
+        let mut padding: Box<_> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 3].into();
         fwht::fwht(&mut data, &mut padding);
 
         assert!((data[0][(0, 0, 0)] - 5.3033).abs() < 0.001);
