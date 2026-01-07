@@ -146,6 +146,13 @@ fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
             h *= 2;
         }
     }
+    let orthonormalization_factor = 1f32 / (hadamard_len as f32).sqrt();
+    chunks
+        .iter_mut()
+        .for_each(|chunk| *chunk.values *= orthonormalization_factor);
+    padding_chunks
+        .iter_mut()
+        .for_each(|padding_chunk| *padding_chunk *= orthonormalization_factor);
 
     let mut slices = Vec::with_capacity(hadamard_len);
     for chunk in chunks {
