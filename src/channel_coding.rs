@@ -15,6 +15,107 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::asset_reader_writer::*;
+use crate::source_coding::chunked_dct_block::*;
+
+pub mod hadamard_block {
+    use super::*;
+    use fwht;
+
+    #[derive(Debug)]
+    pub struct Slice<const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
+        values: ndarray::Array1<f32>,
+        _marker: std::marker::PhantomData<PixelType>,
+    }
+
+    impl<const GOP_LENGTH: usize, PixelType: HasPixelComponentType> Slice<GOP_LENGTH, PixelType> {
+        pub fn new(values: ndarray::Array1<f32>) -> Self {
+            Self {
+                values,
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    pub struct SliceIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+    where
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+    {
+        chunked_dct_block_iter: std::iter::Peekable<I>,
+        chunks_per_gop: usize,
+    }
+
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+        SliceIter<'a, DCT_LENGTH, PixelType, I>
+    where
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+    {
+        pub fn new(chunked_dct_block_iter: I, chunks_per_gop: usize) -> Self {
+            SliceIter {
+                chunked_dct_block_iter: chunked_dct_block_iter.peekable(),
+                chunks_per_gop: chunks_per_gop,
+            }
+        }
+    }
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
+        for SliceIter<'a, DCT_LENGTH, PixelType, I>
+    where
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+    {
+        type Item = Box<[Slice<DCT_LENGTH, PixelType>]>;
+
+        // TODO: This should all be done without copying (currently has two copies!), likely involving a
+        // custom implementation of fwht and mutable access to chunks.
+        fn next(&mut self) -> Option<Self::Item> {
+            let hadamard_len = 2usize.pow(((self.chunks_per_gop as f32).log2()).ceil() as u32);
+
+            let first_chunk = self.chunked_dct_block_iter.peek().unwrap(); // TODO: don't unwrap
+
+            let chunk_len = first_chunk.values.len();
+            let mut hadamard_rvalues = ndarray::Array2::zeros((chunk_len, hadamard_len));
+
+            // copy each column to apply a hadamard to smear the energy across chunks
+            for (row, index_in_chunk) in ndarray::indices_of(&first_chunk.values)
+                .into_iter()
+                .enumerate()
+            {
+                // copy
+                self.chunked_dct_block_iter
+                    .by_ref()
+                    .take(self.chunks_per_gop)
+                    .map(|chunk| chunk.values[index_in_chunk])
+                    .enumerate()
+                    .for_each(|(col, value)| hadamard_rvalues[(row, col)] = value);
+            }
+
+            // now compute the hadamards
+            for col in 0..self.chunks_per_gop {
+                let mut hadamard_rvalues_column =
+                    hadamard_rvalues.index_axis_mut(ndarray::Axis(0), col);
+                fwht::fwht_slice(
+                    hadamard_rvalues_column
+                        .as_slice_mut()
+                        .expect("not contiguous"),
+                )
+                .expect("fwht failed.");
+
+                // scale by 1/√n
+                hadamard_rvalues_column
+                    .iter_mut()
+                    .for_each(|value| *value *= 1f32 / (self.chunks_per_gop as f32).sqrt());
+            }
+
+            let slices: Vec<Slice<DCT_LENGTH, PixelType>> = hadamard_rvalues
+                .outer_iter()
+                .map(|hadamard_rrow| hadamard_rrow.to_owned()) // copy
+                .map(|hadamard_rrow_owned| Slice::new(hadamard_rrow_owned))
+                .collect();
+
+            Some(slices.into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use num_complex::Complex32;
