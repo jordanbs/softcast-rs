@@ -53,7 +53,7 @@ pub mod hadamard_block {
         I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
     {
         chunked_dct_block_iter: std::iter::Peekable<I>,
-        inner_slice_iter: std::vec::IntoIter<hadamard_block::Slice<'a, DCT_LENGTH, PixelType>>,
+        inner_slice_iter: std::vec::IntoIter<Slice<'a, DCT_LENGTH, PixelType>>,
         chunks_per_gop: usize,
     }
 
@@ -92,13 +92,65 @@ pub mod hadamard_block {
                 if chunks.is_empty() {
                     return None;
                 }
-                assert!(
-                    chunks.len() == self.chunks_per_gop,
+                assert_eq!(
+                    chunks.len(),
+                    self.chunks_per_gop,
                     "Not enough chunks for a GOP."
                 );
 
                 let slices = fwht::fwht_chunks(chunks).expect("Failed to create slices.");
                 self.inner_slice_iter = slices.into_iter();
+            }
+        }
+    }
+
+    pub struct ChunkedDCTBlockIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+    where
+        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+    {
+        slice_iter: std::iter::Peekable<I>,
+        inner_chunk_iter: std::vec::IntoIter<ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        chunks_per_gop: usize,
+    }
+
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+        ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, I>
+    where
+        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+    {
+        pub fn new(slice_iter: I, chunks_per_gop: usize) -> Self {
+            ChunkedDCTBlockIter {
+                slice_iter: slice_iter.peekable(),
+                inner_chunk_iter: vec![].into_iter(),
+                chunks_per_gop: chunks_per_gop,
+            }
+        }
+    }
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
+        for ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, I>
+    where
+        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+    {
+        type Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                if let Some(chunk) = self.inner_chunk_iter.next() {
+                    return Some(chunk);
+                }
+
+                let hadamard_len = self.chunks_per_gop.next_power_of_two();
+
+                let slices: Box<_> = self.slice_iter.by_ref().take(hadamard_len).collect();
+
+                if slices.is_empty() {
+                    return None;
+                }
+                assert_eq!(slices.len(), hadamard_len, "Not enough slices.");
+
+                let chunks = fwht::fwht_slices(slices, hadamard_len - self.chunks_per_gop)
+                    .expect("Failed to create chunks.");
+                self.inner_chunk_iter = chunks.into_iter();
             }
         }
     }
@@ -199,7 +251,7 @@ pub mod fwht {
         let mut chunks = chunks;
 
         // add padding so each fwht is a power of two
-        let hadamard_len = 2usize.pow(((chunks.len() as f32).log2()).ceil() as u32);
+        let hadamard_len = chunks.len().next_power_of_two();
 
         let num_padding_rows = hadamard_len - chunks.len();
         let chunk_dim = chunks.first().expect("no data").values().raw_dim();
