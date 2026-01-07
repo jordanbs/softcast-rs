@@ -30,15 +30,19 @@ pub mod hadamard_block {
 
     pub struct Slice<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ViewOrOwnedArray3<'a>,
+        pub chunk_mean: f32,
+        pub chunk_energy: f32,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
         Slice<'a, GOP_LENGTH, PixelType>
     {
-        pub fn new(values: ViewOrOwnedArray3<'a>) -> Self {
+        pub fn new(values: ViewOrOwnedArray3<'a>, chunk_mean: f32, chunk_energy: f32) -> Self {
             Self {
                 values,
+                chunk_mean,
+                chunk_energy,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -206,11 +210,15 @@ pub mod fwht {
 
         let mut slices = Vec::with_capacity(hadamard_len);
         for chunk in chunks {
-            let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values));
+            let slice = Slice::new(
+                ViewOrOwnedArray3::View(chunk.values),
+                chunk.mean,
+                chunk.energy,
+            );
             slices.push(slice);
         }
         for padding_chunk in padding_chunks {
-            let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk));
+            let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk), 0f32, 0f32);
             slices.push(slice);
         }
 
@@ -231,12 +239,12 @@ pub mod fwht {
             let values = match slice.values {
                 ViewOrOwnedArray3::View(view) => view,
                 ViewOrOwnedArray3::Owned(_) => {
-                    panic!("slice not expected to own its data.")
+                    panic!("slice not expected to own its data in decode.")
                 }
             };
 
             let chunk: ChunkedDCTBlock<'a, DCT_LENGTH, PixelType> =
-                ChunkedDCTBlock::new(values, 0f32, 0f32); // TODO: get mean and energy
+                ChunkedDCTBlock::new(values, slice.chunk_mean, slice.chunk_energy);
             chunks.push(chunk);
         }
 
