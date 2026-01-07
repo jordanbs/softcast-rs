@@ -242,7 +242,7 @@ pub mod transform_block_3d_dct {
         ) -> Self {
             let (dct_length, dct_height, dct_width) =
                 (LENGTH, frame_resolution.1, frame_resolution.0);
-            let mut values = ndarray::Array3::zeros((dct_length, dct_height, dct_width));
+            let mut values = ndarray::Array3::zeros((dct_length, dct_height, dct_width)); // TODO: eliminiate copy
             let chunk_dimensions = chunks.first().expect("chunks is empty").values.dim();
 
             assert_eq!(
