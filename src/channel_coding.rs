@@ -46,6 +46,20 @@ pub mod slice {
                 _marker: std::marker::PhantomData,
             }
         }
+
+        pub fn values(&self) -> ndarray::ArrayView3<'_, f32> {
+            match &self.values {
+                ViewOrOwnedArray3::View(view) => view.into(),
+                ViewOrOwnedArray3::Owned(owned) => owned.view(),
+            }
+        }
+
+        pub fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
+            match &mut self.values {
+                ViewOrOwnedArray3::View(view) => view.into(),
+                ViewOrOwnedArray3::Owned(owned) => owned.view_mut(),
+            }
+        }
     }
 
     pub struct SliceIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
@@ -202,76 +216,133 @@ pub mod fwht {
     use super::*;
 
     pub(super) trait ValuesProvider {
-        fn values(&self) -> ndarray::ArrayView3<'_, f32>;
-        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32>;
+        fn value_at(&self, idx: usize) -> f32;
+        fn value_at_mut(&mut self, idx: usize) -> &mut f32;
+        fn values_len(&self) -> usize;
+    }
+
+    trait To3Dim {
+        fn to_3dim_index(self, dim: (usize, usize, usize)) -> (usize, usize, usize);
+    }
+    impl To3Dim for usize {
+        fn to_3dim_index(self, dim: (usize, usize, usize)) -> (usize, usize, usize) {
+            let i = self / (dim.1 * dim.2);
+            let j = (self % (dim.1 * dim.2)) / dim.2;
+            let k = (self % (dim.1 * dim.2)) % dim.2;
+            (i, j, k)
+        }
     }
 
     impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> ValuesProvider
         for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
     {
-        fn values(&self) -> ndarray::ArrayView3<'_, f32> {
-            self.values.view()
+        fn value_at(&self, idx: usize) -> f32 {
+            let idx = idx.to_3dim_index(self.values.dim());
+            self.values[idx]
         }
-        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
-            self.values.view_mut()
+        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
+            let idx = idx.to_3dim_index(self.values.dim());
+            &mut self.values[idx]
+        }
+        fn values_len(&self) -> usize {
+            self.values.len()
         }
     }
-
     impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> ValuesProvider
         for Slice<'_, DCT_LENGTH, PixelType>
     {
-        fn values(&self) -> ndarray::ArrayView3<'_, f32> {
-            match &self.values {
-                ViewOrOwnedArray3::View(view) => view.into(),
-                ViewOrOwnedArray3::Owned(owned) => owned.view(),
+        fn value_at(&self, idx: usize) -> f32 {
+            let idx = idx.to_3dim_index(self.values().dim());
+            self.values()[idx]
+        }
+        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
+            let idx = idx.to_3dim_index(self.values().dim());
+            match &mut self.values {
+                ViewOrOwnedArray3::View(view) => &mut view[idx],
+                ViewOrOwnedArray3::Owned(owned) => &mut owned[idx],
             }
         }
-        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
-            match &mut self.values {
-                ViewOrOwnedArray3::View(view) => view.into(),
-                ViewOrOwnedArray3::Owned(owned) => owned.view_mut(),
-            }
+        fn values_len(&self) -> usize {
+            self.values().len()
+        }
+    }
+    impl fwht::ValuesProvider for ndarray::Array3<f32> {
+        fn value_at(&self, idx: usize) -> f32 {
+            let idx = idx.to_3dim_index(self.dim());
+            self[idx]
+        }
+        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
+            let idx = idx.to_3dim_index(self.dim());
+            &mut self[idx]
+        }
+        fn values_len(&self) -> usize {
+            self.len()
+        }
+    }
+    impl fwht::ValuesProvider for [f32] {
+        fn value_at(&self, idx: usize) -> f32 {
+            self[idx]
+        }
+        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
+            &mut self[idx]
+        }
+        fn values_len(&self) -> usize {
+            self.len()
+        }
+    }
+
+    impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> std::ops::MulAssign<f32>
+        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+    {
+        fn mul_assign(&mut self, rhs: f32) {
+            self.values.mul_assign(rhs);
+        }
+    }
+    impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> std::ops::MulAssign<f32>
+        for Slice<'_, DCT_LENGTH, PixelType>
+    {
+        fn mul_assign(&mut self, rhs: f32) {
+            self.values_mut().mul_assign(rhs);
         }
     }
 
     // MARK: could be performed more naturally with the entire 3d dct
     pub(super) fn fwht(
-        data: &mut Box<[impl ValuesProvider]>,
-        padding: &mut Box<[ndarray::Array3<f32>]>,
+        data: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32>]>,
+        padding: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32>]>,
     ) {
-        let first_chunk = data.first().expect("no data");
-        let indicies_iter = ndarray::indices_of(&first_chunk.values());
+        let num_columns = data.first().expect("no_data").values_len();
         let hadamard_len = data.len() + padding.len();
 
         assert!(hadamard_len.is_power_of_two());
 
-        for index_in_chunk in indicies_iter {
+        for index_in_chunk in 0..num_columns {
             let mut h = 1;
             while h < hadamard_len {
                 for i in (0..hadamard_len).step_by(h * 2) {
                     for j in i..i + h {
                         let x = if j < data.len() {
-                            data[j].values()[index_in_chunk]
+                            data[j].value_at(index_in_chunk)
                         } else {
-                            padding[j - data.len()][index_in_chunk]
+                            padding[j - data.len()].value_at(index_in_chunk)
                         };
 
                         let y = if j + h < data.len() {
-                            data[j + h].values()[index_in_chunk]
+                            data[j + h].value_at(index_in_chunk)
                         } else {
-                            padding[j + h - data.len()][index_in_chunk]
+                            padding[j + h - data.len()].value_at(index_in_chunk)
                         };
 
                         if j < data.len() {
-                            data[j].values_mut()[index_in_chunk] = x + y
+                            *data[j].value_at_mut(index_in_chunk) = x + y
                         } else {
-                            padding[j - data.len()][index_in_chunk] = x + y
+                            *padding[j - data.len()].value_at_mut(index_in_chunk) = x + y
                         };
 
                         if j + h < data.len() {
-                            data[j + h].values_mut()[index_in_chunk] = x - y
+                            *data[j + h].value_at_mut(index_in_chunk) = x - y
                         } else {
-                            padding[j + h - data.len()][index_in_chunk] = x - y
+                            *padding[j + h - data.len()].value_at_mut(index_in_chunk) = x - y
                         };
                     }
                 }
@@ -280,7 +351,7 @@ pub mod fwht {
         }
         let orthonormalization_factor = 1f32 / (hadamard_len as f32).sqrt();
         data.iter_mut()
-            .for_each(|data_row| *data_row.values_mut() *= orthonormalization_factor);
+            .for_each(|data_row| *data_row *= orthonormalization_factor);
         padding
             .iter_mut()
             .for_each(|padding_row| *padding_row *= orthonormalization_factor);
@@ -296,11 +367,13 @@ pub mod fwht {
         let hadamard_len = chunks.len().next_power_of_two();
 
         let num_padding_rows = hadamard_len - chunks.len();
-        let chunk_dim = chunks.first().expect("no data").values().raw_dim();
+        let chunk_dim = chunks.first().expect("no data").values.raw_dim();
         let mut padding_chunks: Box<_> =
             vec![ndarray::Array3::<f32>::zeros(chunk_dim); num_padding_rows].into();
 
         fwht(&mut chunks, &mut padding_chunks);
+
+        // metadata
 
         let mut slices = Vec::with_capacity(hadamard_len);
         for chunk in chunks {
@@ -325,7 +398,8 @@ pub mod fwht {
     ) -> Result<Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>, &'static str> {
         let mut slices = slices;
 
-        fwht(&mut slices, &mut vec![].into());
+        let mut empty: Box<[ndarray::Array3<f32>]> = vec![].into();
+        fwht(&mut slices, &mut empty);
 
         let mut chunks = Vec::with_capacity(slices.len() - num_padding_rows);
         for slice in slices {
@@ -403,15 +477,6 @@ mod tests {
         }
     }
 
-    impl fwht::ValuesProvider for ndarray::Array3<f32> {
-        fn values(&self) -> ndarray::ArrayView3<'_, f32> {
-            self.view()
-        }
-        fn values_mut(&mut self) -> ndarray::ArrayViewMut3<'_, f32> {
-            self.view_mut()
-        }
-    }
-
     #[test]
     fn test_fwht_basic() {
         let mut data: Box<[_]> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 4].into();
@@ -426,7 +491,8 @@ mod tests {
         data[2][(0, 0, 1)] = 7f32;
         data[3][(0, 0, 1)] = 8f32;
 
-        fwht::fwht(&mut data, &mut vec![].into());
+        let mut empty: Box<[ndarray::Array3<f32>]> = vec![].into();
+        fwht::fwht(&mut data, &mut empty);
 
         assert_eq!(data[0][(0, 0, 0)], 5f32);
         assert_eq!(data[1][(0, 0, 0)], -1f32);
@@ -493,8 +559,9 @@ mod tests {
         data[2][(0, 0, 1)] = 7f32;
         data[3][(0, 0, 1)] = 8f32;
 
-        fwht::fwht(&mut data, &mut vec![].into());
-        fwht::fwht(&mut data, &mut vec![].into());
+        let mut empty: Box<[ndarray::Array3<f32>]> = vec![].into();
+        fwht::fwht(&mut data, &mut empty);
+        fwht::fwht(&mut data, &mut empty);
 
         assert_eq!(data[0][(0, 0, 0)], 1f32);
         assert_eq!(data[1][(0, 0, 0)], 2f32);
