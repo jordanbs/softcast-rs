@@ -17,9 +17,9 @@
 
 use crate::asset_reader_writer::*;
 use crate::source_coding::chunked_dct_block::*;
-use hadamard_block::*;
+use slice::*;
 
-pub mod hadamard_block {
+pub mod slice {
     use super::*;
     use fwht;
 
@@ -152,6 +152,48 @@ pub mod hadamard_block {
                     .expect("Failed to create chunks.");
                 self.inner_chunk_iter = chunks.into_iter();
             }
+        }
+    }
+
+    pub trait ChunkedDCTBlockIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+        Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>> + Sized
+    {
+        fn into_slice_iter(
+            self,
+            chunks_per_gop: usize,
+        ) -> SliceIter<'a, DCT_LENGTH, PixelType, Self>;
+    }
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+        ChunkedDCTBlockIterExt<'a, DCT_LENGTH, PixelType> for I
+    where
+        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+    {
+        fn into_slice_iter(
+            self,
+            chunks_per_gop: usize,
+        ) -> SliceIter<'a, DCT_LENGTH, PixelType, Self> {
+            SliceIter::new(self, chunks_per_gop)
+        }
+    }
+
+    pub trait SliceIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+        Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>> + Sized
+    {
+        fn into_chunks_iter(
+            self,
+            chunks_per_gop: usize,
+        ) -> ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, Self>;
+    }
+    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+        SliceIterExt<'a, DCT_LENGTH, PixelType> for I
+    where
+        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+    {
+        fn into_chunks_iter(
+            self,
+            chunks_per_gop: usize,
+        ) -> ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, Self> {
+            ChunkedDCTBlockIter::new(self, chunks_per_gop)
         }
     }
 }
@@ -307,6 +349,10 @@ pub mod fwht {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asset_reader_writer::pixel_buffer::*;
+    use crate::asset_reader_writer::transform_block_3d::*;
+    use crate::channel_coding::slice::{ChunkedDCTBlockIterExt, SliceIterExt};
+    use asset_reader::*;
     use num_complex::Complex32;
 
     #[test]
@@ -500,5 +546,68 @@ mod tests {
         assert!((padding[0][(0, 0, 1)] - 0f32).abs() < 0.001);
         assert!((padding[1][(0, 0, 1)] - 0f32).abs() < 0.001);
         assert!((padding[2][(0, 0, 1)] - 0f32).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_reader_to_slice_inverse_equality() {
+        use crate::source_coding::chunked_dct_block::ChunkedDCTBlockIterExt; // idk why this only works here..
+
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        let frame_resolution = reader.resolution().expect("Failed to get resolution.");
+        let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
+
+        const LENGTH: usize = 2;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let MacroBlock3D {
+            y_components: original_y_components,
+            cb_components: original_cb_components,
+            cr_components: original_cr_components,
+        } = macro_block.clone();
+
+        let mut y_dct = macro_block.y_components.into_dct();
+        let mut cb_dct = macro_block.cb_components.into_dct();
+        let mut cr_dct = macro_block.cr_components.into_dct();
+
+        //         let original_y_dct = y_dct.clone();
+        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let new_y_dct = y_slices
+            .into_iter()
+            .into_chunks_iter(LENGTH)
+            .into_transform_block_3d_dct_iter(frame_resolution)
+            .next()
+            .expect("Failed to produce a Y 3D DCT");
+
+        //         assert_eq!(original_y_dct, new_y_dct);
+
+        let new_y_components = new_y_dct.into();
+
+        let cb_slices: Box<_> = cb_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let new_cb_components = cb_slices
+            .into_iter()
+            .into_chunks_iter(LENGTH)
+            .into_transform_block_3d_dct_iter(frame_resolution)
+            .next()
+            .expect("Failed to produce a Cb 3D DCT")
+            .into();
+
+        let cr_slices: Box<_> = cr_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let new_cr_components = cr_slices
+            .into_iter()
+            .into_chunks_iter(LENGTH)
+            .into_transform_block_3d_dct_iter(frame_resolution)
+            .next()
+            .expect("Failed to produce a Cr 3D DCT")
+            .into();
+
+        // check the original pixel values, which will have floating point errors rounded
+        assert_eq!(original_y_components, new_y_components);
+        assert_eq!(original_cb_components, new_cb_components);
+        assert_eq!(original_cr_components, new_cr_components);
     }
 }
