@@ -266,7 +266,7 @@ pub mod fwht {
             self.values().len()
         }
     }
-    impl fwht::ValuesProvider for ndarray::Array3<f32> {
+    impl ValuesProvider for ndarray::Array3<f32> {
         fn value_at(&self, idx: usize) -> f32 {
             let idx = idx.to_3dim_index(self.dim());
             self[idx]
@@ -279,7 +279,7 @@ pub mod fwht {
             self.len()
         }
     }
-    impl fwht::ValuesProvider for [f32] {
+    impl ValuesProvider for [f32] {
         fn value_at(&self, idx: usize) -> f32 {
             self[idx]
         }
