@@ -21,15 +21,12 @@ use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
 // TODO: consider using protobuf or similar for metadata binary format
-pub struct CompressedMetadata {
-    pub data: Box<[u8]>,
-}
 
 // No iterator here, since we don't want to hold a borrow on the slices or any
 // intermediary arrays.
 pub fn compress_metadata<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
     slices: &[Slice<'_, DCT_LENGTH, PixelType>],
-) -> Result<CompressedMetadata, Box<dyn std::error::Error>> {
+) -> Result<Box<[u8]>, Box<dyn std::error::Error>> {
     let mut metadata = Vec::with_capacity(2 * slices.len());
     slices
         .iter()
@@ -44,9 +41,7 @@ pub fn compress_metadata<'a, const DCT_LENGTH: usize, PixelType: HasPixelCompone
 
     let compressed_metadata = zstd::stream::encode_all(std::io::Cursor::new(metadata), 1)?;
 
-    Ok(CompressedMetadata {
-        data: compressed_metadata.into(),
-    })
+    Ok(compressed_metadata.into())
 }
 
 pub struct Metadata {
@@ -55,9 +50,9 @@ pub struct Metadata {
 }
 
 pub fn decompress_metadata(
-    compressed_metadata: CompressedMetadata,
+    compressed_metadata: Box<[u8]>,
 ) -> Result<Box<[Metadata]>, Box<dyn std::error::Error>> {
-    let data = zstd::stream::decode_all(std::io::Cursor::new(compressed_metadata.data))?;
+    let data = zstd::stream::decode_all(std::io::Cursor::new(compressed_metadata))?;
     assert_eq!(data.len() % size_of::<f32>(), 0); // divisible by 4
 
     // could get rid of this copy
@@ -99,6 +94,11 @@ mod tests {
 
         let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
         let y_compressed_metadata = compress_metadata(&y_slices).expect("y_metadata failed");
+        eprintln!(
+            "orig_size:{} compressed size:{}",
+            y_slices.len() * 2 * 4,
+            y_compressed_metadata.len()
+        );
         let y_decompressed_metadata =
             decompress_metadata(y_compressed_metadata).expect("y_metadata decompression failed");
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
