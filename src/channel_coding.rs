@@ -330,7 +330,6 @@ mod fwht {
     {
     }
 
-    // MARK: could be performed more naturally with the entire 3d dct
     pub(super) fn fwht(
         data: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32> + Send + Sync]>,
         padding: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32> + Send + Sync]>,
