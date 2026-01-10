@@ -22,8 +22,6 @@ use ndrustfft;
 pub mod transform_block_3d_dct {
     use super::*;
     use chunked_dct_block::*;
-    use ndarray::parallel::prelude::*;
-    use rayon::prelude::*;
 
     #[derive(Debug)]
     pub struct TransformBlock3DDCT<const LENGTH: usize, PixelType: HasPixelComponentType> {
@@ -139,7 +137,7 @@ pub mod transform_block_3d_dct {
             chunk_dimensions: (usize, usize, usize),
             chunk_energy: f32,
             chunk_energies: &[f32],
-            sqrt_p_over_sum_sqrt_energies: &std::sync::OnceLock<f32>,
+            sqrt_p_over_sum_sqrt_energies: &std::cell::OnceCell<f32>,
         ) -> f32 {
             // must check that return value is normal
 
@@ -186,7 +184,7 @@ pub mod transform_block_3d_dct {
                 .values
                 .exact_chunks(chunk_dimensions)
                 .into_iter()
-                .par_bridge()
+                // .par_bridge() <-- parallelism doesn't seem to help for O(n) operations.
                 .map(|chunk| chunk.mean().unwrap()) // chunk should always be nonempty
                 .collect();
 
@@ -195,7 +193,7 @@ pub mod transform_block_3d_dct {
                 .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
                 .zip(means.iter())
-                .par_bridge()
+                // .par_bridge() <-- parallelism doesn't seem to help for O(n) operations.
                 .for_each(|(mut chunk, &mean)| *chunk -= mean);
 
             // compute energy/variance after mean has been substracted, since we have to take the mean anyway
@@ -207,18 +205,18 @@ pub mod transform_block_3d_dct {
                 .map(|chunk| chunk.pow2().sum() / chunk.len() as f32)
                 .collect();
 
-            let compute_cache = std::sync::OnceLock::new();
-            for (&energy, mut chunk) in energies
+            let compute_cache = std::cell::OnceCell::new();
+            energies
                 .iter()
                 .zip(self.values.exact_chunks_mut(chunk_dimensions))
-            {
-                let power_scale =
-                    Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
-                // needs a comment
-                if power_scale.is_normal() {
-                    chunk *= power_scale;
-                }
-            }
+                .for_each(|(&energy, mut chunk)| {
+                    let power_scale =
+                        Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
+                    // needs a comment
+                    if power_scale.is_normal() {
+                        chunk *= power_scale;
+                    }
+                });
 
             //          TODO: Make distortion iterator
             //             {
@@ -259,14 +257,14 @@ pub mod transform_block_3d_dct {
             );
 
             let chunk_energies: Box<[f32]> = chunks.iter().map(|chunk| chunk.energy).collect();
-            let compute_cache = std::sync::OnceLock::new();
+            let compute_cache = std::cell::OnceCell::new();
 
             // Could be optimized by iterating over dst or src in memory order.
             values
                 .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
                 .zip(chunks)
-                .par_bridge()
+                // .par_bridge() <-- parallelism doesn't seem to help for O(n) operations.
                 .for_each(|(mut dst, src)| {
                     let power_scale = Self::power_scale(
                         chunk_dimensions,
