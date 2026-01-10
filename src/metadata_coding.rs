@@ -39,7 +39,7 @@ pub fn compress_metadata<'a, const DCT_LENGTH: usize, PixelType: HasPixelCompone
         .flatten()
         .for_each(|byte| metadata.push(byte));
 
-    let compressed_metadata = zstd::stream::encode_all(std::io::Cursor::new(metadata), 1)?;
+    let compressed_metadata = zstd::stream::encode_all(std::io::Cursor::new(metadata), 0)?;
 
     Ok(compressed_metadata.into())
 }
