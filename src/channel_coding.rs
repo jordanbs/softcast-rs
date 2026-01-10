@@ -214,10 +214,12 @@ pub mod slice {
 
 pub mod fwht {
     use super::*;
+    use rayon::prelude::*;
 
     pub(super) trait ValuesProvider {
         fn value_at(&self, idx: usize) -> f32;
         fn value_at_mut(&mut self, idx: usize) -> &mut f32;
+        fn unsafe_value_at(&self, idx: usize) -> *mut f32;
         fn values_len(&self) -> usize;
     }
 
@@ -244,6 +246,11 @@ pub mod fwht {
             let idx = idx.to_3dim_index(self.values.dim());
             &mut self.values[idx]
         }
+        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+            let idx = idx.to_3dim_index(self.values.dim());
+            let ptr: *const f32 = &self.values[idx];
+            ptr as *mut f32
+        }
         fn values_len(&self) -> usize {
             self.values.len()
         }
@@ -262,6 +269,15 @@ pub mod fwht {
                 ViewOrOwnedArray3::Owned(owned) => &mut owned[idx],
             }
         }
+        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+            let idx = idx.to_3dim_index(self.values().dim());
+            let value = match &self.values {
+                ViewOrOwnedArray3::View(view) => &view[idx],
+                ViewOrOwnedArray3::Owned(owned) => &owned[idx],
+            };
+            let ptr: *const f32 = value;
+            ptr as *mut f32
+        }
         fn values_len(&self) -> usize {
             self.values().len()
         }
@@ -275,6 +291,11 @@ pub mod fwht {
             let idx = idx.to_3dim_index(self.dim());
             &mut self[idx]
         }
+        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+            let idx = idx.to_3dim_index(self.dim());
+            let ptr: *const f32 = &self[idx];
+            ptr as *mut f32
+        }
         fn values_len(&self) -> usize {
             self.len()
         }
@@ -285,6 +306,10 @@ pub mod fwht {
         }
         fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
             &mut self[idx]
+        }
+        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+            let ptr: *const f32 = &self[idx];
+            ptr as *mut f32
         }
         fn values_len(&self) -> usize {
             self.len()
@@ -306,17 +331,35 @@ pub mod fwht {
         }
     }
 
+    unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Send
+        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+    {
+    }
+    unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Send
+        for Slice<'_, DCT_LENGTH, PixelType>
+    {
+    }
+
+    unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Sync
+        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+    {
+    }
+    unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Sync
+        for Slice<'_, DCT_LENGTH, PixelType>
+    {
+    }
+
     // MARK: could be performed more naturally with the entire 3d dct
     pub(super) fn fwht(
-        data: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32>]>,
-        padding: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32>]>,
+        data: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32> + Send + Sync]>,
+        padding: &mut Box<[impl ValuesProvider + std::ops::MulAssign<f32> + Send + Sync]>,
     ) {
         let num_columns = data.first().expect("no_data").values_len();
         let hadamard_len = data.len() + padding.len();
 
         assert!(hadamard_len.is_power_of_two());
 
-        for index_in_chunk in 0..num_columns {
+        (0..num_columns).into_par_iter().for_each(|index_in_chunk| {
             let mut h = 1;
             while h < hadamard_len {
                 for i in (0..hadamard_len).step_by(h * 2) {
@@ -333,22 +376,29 @@ pub mod fwht {
                             padding[j + h - data.len()].value_at(index_in_chunk)
                         };
 
-                        if j < data.len() {
-                            *data[j].value_at_mut(index_in_chunk) = x + y
-                        } else {
-                            *padding[j - data.len()].value_at_mut(index_in_chunk) = x + y
-                        };
+                        unsafe {
+                            if j < data.len() {
+                                *data[j].unsafe_value_at(index_in_chunk) = x + y;
+                                // *data[j].value_at_mut(index_in_chunk) = x + y
+                            } else {
+                                *padding[j - data.len()].unsafe_value_at(index_in_chunk) = x + y;
+                                // *padding[j - data.len()].value_at_mut(index_in_chunk) = x + y
+                            };
 
-                        if j + h < data.len() {
-                            *data[j + h].value_at_mut(index_in_chunk) = x - y
-                        } else {
-                            *padding[j + h - data.len()].value_at_mut(index_in_chunk) = x - y
-                        };
+                            if j + h < data.len() {
+                                *data[j + h].unsafe_value_at(index_in_chunk) = x - y;
+                                // *data[j + h].value_at_mut(index_in_chunk) = x - y
+                            } else {
+                                *padding[j + h - data.len()].unsafe_value_at(index_in_chunk) =
+                                    x - y;
+                                // *padding[j + h - data.len()].value_at_mut(index_in_chunk) = x - y
+                            };
+                        }
                     }
                 }
                 h *= 2;
             }
-        }
+        });
         let orthonormalization_factor = 1f32 / (hadamard_len as f32).sqrt();
         data.iter_mut()
             .for_each(|data_row| *data_row *= orthonormalization_factor);
