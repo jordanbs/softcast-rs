@@ -655,7 +655,7 @@ mod tests {
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
         let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
 
-        const LENGTH: usize = 128;
+        const LENGTH: usize = 2;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 

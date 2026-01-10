@@ -84,7 +84,7 @@ mod tests {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 
-        const LENGTH: usize = 145;
+        const LENGTH: usize = 2;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 

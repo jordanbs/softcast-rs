@@ -189,10 +189,12 @@ pub mod transform_block_3d_dct {
             // TODO: iterate in parallel with rayon
             for mut chunk in self.values.exact_chunks_mut(chunk_dimensions) {
                 let mean = chunk.mean().unwrap(); // chunk should always be nonempty
-
-                chunk.iter_mut().for_each(|value| *value -= mean); // Softcast specifies a zero-mean distribution
+                *chunk -= mean; // Softcast specifies a zero-mean distribution
+                                // parallelizing within each chunk is a measurable slowdown;
+                                // consider parallelizing on the outer loop.
 
                 // compute energy/variance after mean has been substracted, since we have to take the mean anyway
+
                 let energy =
                     chunk.iter().map(|value| value * value).sum::<f32>() / chunk.len() as f32;
 
@@ -208,7 +210,7 @@ pub mod transform_block_3d_dct {
                 let power_scale =
                     Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
                 if power_scale.is_normal() {
-                    chunk.iter_mut().for_each(|value| *value *= power_scale);
+                    chunk *= power_scale;
                 }
             }
 
@@ -267,10 +269,10 @@ pub mod transform_block_3d_dct {
                 );
                 if power_scale.is_normal() {
                     dst.assign(&src.values);
-                    dst.iter_mut().for_each(|value| *value /= power_scale);
+                    dst /= power_scale;
                 } // else assume all zeros
 
-                dst.iter_mut().for_each(|value| *value += src.mean);
+                dst += src.mean;
             }
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
