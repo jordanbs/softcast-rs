@@ -1,0 +1,6 @@
+[submodule "vendor/liquid-dsp"]
+	path = vendor/liquid-dsp
+	url = git@github.com:jordanbs/liquid-dsp.git
+[submodule "vendor/libfec"]
+	path = vendor/libfec
+	url = git@github.com:quiet/libfec.git
