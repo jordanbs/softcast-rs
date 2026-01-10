@@ -22,6 +22,8 @@ use ndrustfft;
 pub mod transform_block_3d_dct {
     use super::*;
     use chunked_dct_block::*;
+    use ndarray::parallel::prelude::*;
+    use rayon::prelude::*;
 
     #[derive(Debug)]
     pub struct TransformBlock3DDCT<const LENGTH: usize, PixelType: HasPixelComponentType> {
@@ -137,7 +139,7 @@ pub mod transform_block_3d_dct {
             chunk_dimensions: (usize, usize, usize),
             chunk_energy: f32,
             chunk_energies: &[f32],
-            sqrt_p_over_sum_sqrt_energies: &std::cell::OnceCell<f32>,
+            sqrt_p_over_sum_sqrt_energies: &std::sync::OnceLock<f32>,
         ) -> f32 {
             // must check that return value is normal
 
@@ -176,39 +178,43 @@ pub mod transform_block_3d_dct {
             let chunk_size = chunk_width * chunk_height * chunk_length;
             assert!(chunk_size > 0);
             assert_eq!((length * width * height) % chunk_size, 0);
-            let num_chunks = (length * width * height) / chunk_size;
 
             let chunk_dimensions = (chunk_length, chunk_width, chunk_height);
 
             // must preflight mutatation of the 3D DCT, because we are going to be giving out immutable borrows.
-            let mut means = Vec::with_capacity(num_chunks);
-            let mut energies = Vec::with_capacity(num_chunks);
+            let means: Box<[f32]> = self
+                .values
+                .exact_chunks(chunk_dimensions)
+                .into_iter()
+                .par_bridge()
+                .map(|chunk| chunk.mean().unwrap()) // chunk should always be nonempty
+                .collect();
 
-            // TODO: iterating over the standard memory layout and using a compute cache for mean and variance
-            //       would likely constitute a performance win.
-            // TODO: iterate in parallel with rayon
-            for mut chunk in self.values.exact_chunks_mut(chunk_dimensions) {
-                let mean = chunk.mean().unwrap(); // chunk should always be nonempty
-                *chunk -= mean; // Softcast specifies a zero-mean distribution
-                                // parallelizing within each chunk is a measurable slowdown;
-                                // consider parallelizing on the outer loop.
+            // Softcast specifies a zero-mean distribution
+            self.values
+                .exact_chunks_mut(chunk_dimensions)
+                .into_iter()
+                .zip(means.iter())
+                .par_bridge()
+                .for_each(|(mut chunk, &mean)| *chunk -= mean);
 
-                // compute energy/variance after mean has been substracted, since we have to take the mean anyway
+            // compute energy/variance after mean has been substracted, since we have to take the mean anyway
+            let energies: Box<[f32]> = self
+                .values
+                .exact_chunks(chunk_dimensions)
+                .into_iter()
+                //.par_bridge() <-- makes test_reader_to_chunked_dct_inverse_equality fail for some reason
+                .map(|chunk| chunk.pow2().sum() / chunk.len() as f32)
+                .collect();
 
-                let energy =
-                    chunk.iter().map(|value| value * value).sum::<f32>() / chunk.len() as f32;
-
-                energies.push(energy);
-                means.push(mean);
-            }
-
-            let compute_cache = std::cell::OnceCell::new();
+            let compute_cache = std::sync::OnceLock::new();
             for (&energy, mut chunk) in energies
                 .iter()
                 .zip(self.values.exact_chunks_mut(chunk_dimensions))
             {
                 let power_scale =
                     Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
+                // needs a comment
                 if power_scale.is_normal() {
                     chunk *= power_scale;
                 }
@@ -253,27 +259,28 @@ pub mod transform_block_3d_dct {
             );
 
             let chunk_energies: Box<[f32]> = chunks.iter().map(|chunk| chunk.energy).collect();
-            let compute_cache = std::cell::OnceCell::new();
+            let compute_cache = std::sync::OnceLock::new();
 
             // Could be optimized by iterating over dst or src in memory order.
-            for (mut dst, src) in values
+            values
                 .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
                 .zip(chunks)
-            {
-                let power_scale = Self::power_scale(
-                    chunk_dimensions,
-                    src.energy,
-                    &chunk_energies,
-                    &compute_cache,
-                );
-                if power_scale.is_normal() {
-                    dst.assign(&src.values);
-                    dst /= power_scale;
-                } // else assume all zeros
+                .par_bridge()
+                .for_each(|(mut dst, src)| {
+                    let power_scale = Self::power_scale(
+                        chunk_dimensions,
+                        src.energy,
+                        &chunk_energies,
+                        &compute_cache,
+                    );
+                    if power_scale.is_normal() {
+                        dst.assign(&src.values);
+                        dst /= power_scale;
+                    } // else assume all zeros
 
-                dst += src.mean;
-            }
+                    dst += src.mean;
+                });
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
                 values: values,
