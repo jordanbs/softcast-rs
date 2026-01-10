@@ -181,7 +181,7 @@ pub mod transform_block_3d_dct {
 
             let chunk_dimensions = (chunk_length, chunk_width, chunk_height);
 
-            // must preflight mutatation of the 3D DCT, because we are going to be giving out immutable borrows.
+            // must preflight mutatation of the 3D DCT, because power scaling requires all energies.
             let means: Box<[f32]> = self
                 .values
                 .exact_chunks(chunk_dimensions)
