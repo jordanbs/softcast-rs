@@ -461,10 +461,10 @@ mod tests {
 
     #[test]
     fn ofdm_flexframe() {
-        use liquid_dsp_sys;
+        use liquid_sys;
 
         unsafe {
-            let fg = liquid_dsp_sys::ofdmflexframegen_create(
+            let fg = liquid_sys::ofdmflexframegen_create(
                 64,
                 16,
                 4,
@@ -477,7 +477,7 @@ mod tests {
             let payload = [0u8; 20];
             let mut buf = [Complex32::ZERO; 120];
 
-            let status = liquid_dsp_sys::ofdmflexframegen_assemble(
+            let status = liquid_sys::ofdmflexframegen_assemble(
                 fg,
                 header.as_ptr(),
                 payload.as_ptr(),
@@ -485,12 +485,12 @@ mod tests {
             );
             assert_eq!(status, 0);
 
-            let status = liquid_dsp_sys::ofdmflexframegen_print(fg);
+            let status = liquid_sys::ofdmflexframegen_print(fg);
             assert_eq!(status, 0);
 
             let mut frame_complete = 0;
             while 0 == frame_complete {
-                frame_complete = liquid_dsp_sys::ofdmflexframegen_write(
+                frame_complete = liquid_sys::ofdmflexframegen_write(
                     fg,
                     buf.as_mut_ptr(),
                     buf.len().try_into().unwrap(),
@@ -504,6 +504,18 @@ mod tests {
                     },
                 );
             }
+        }
+    }
+
+    #[test]
+    fn link_libfec() {
+        use liquid_sys;
+        unsafe {
+            let ptr = liquid_sys::fec_create(
+                liquid_sys::fec_scheme_LIQUID_FEC_RS_M8,
+                core::ptr::null_mut(),
+            );
+            assert_ne!(ptr, std::ptr::null_mut());
         }
     }
 

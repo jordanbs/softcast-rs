@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-liquid-dsp-sys = { version = "0.1.0", features = ["num_complex"] }
+cmake = "0.1.57"
+liquid-sys = { path = "crates/liquid-sys" }
 ndarray = "0.17.1"
 ndrustfft = "0.6.2"
 num-complex = "0.4.6"
@@ -14,5 +15,13 @@ objc2-core-foundation = "0.3.2"
 objc2-core-media = "0.3.2"
 objc2-core-video = { version = "0.3.2", features = ["CVImageBuffer"] }
 objc2-foundation = { version = "0.3.2", features = ["NSObject"] }
+pkg-config = "0.3.32"
 rayon = "1.11.0"
 zstd = "0.13.3"
+
+
+[workspace]
+members = [
+  "crates/liquid-sys",
+]
+resolver = "2"
