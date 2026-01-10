@@ -212,14 +212,13 @@ pub mod slice {
     }
 }
 
-pub mod fwht {
+mod fwht {
     use super::*;
     use rayon::prelude::*;
 
     pub(super) trait ValuesProvider {
         fn value_at(&self, idx: usize) -> f32;
-        fn value_at_mut(&mut self, idx: usize) -> &mut f32;
-        fn unsafe_value_at(&self, idx: usize) -> *mut f32;
+        fn ptr_at(&self, idx: usize) -> *mut f32;
         fn values_len(&self) -> usize;
     }
 
@@ -242,11 +241,7 @@ pub mod fwht {
             let idx = idx.to_3dim_index(self.values.dim());
             self.values[idx]
         }
-        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
-            let idx = idx.to_3dim_index(self.values.dim());
-            &mut self.values[idx]
-        }
-        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+        fn ptr_at(&self, idx: usize) -> *mut f32 {
             let idx = idx.to_3dim_index(self.values.dim());
             let ptr: *const f32 = &self.values[idx];
             ptr as *mut f32
@@ -262,14 +257,7 @@ pub mod fwht {
             let idx = idx.to_3dim_index(self.values().dim());
             self.values()[idx]
         }
-        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
-            let idx = idx.to_3dim_index(self.values().dim());
-            match &mut self.values {
-                ViewOrOwnedArray3::View(view) => &mut view[idx],
-                ViewOrOwnedArray3::Owned(owned) => &mut owned[idx],
-            }
-        }
-        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+        fn ptr_at(&self, idx: usize) -> *mut f32 {
             let idx = idx.to_3dim_index(self.values().dim());
             let value = match &self.values {
                 ViewOrOwnedArray3::View(view) => &view[idx],
@@ -287,11 +275,7 @@ pub mod fwht {
             let idx = idx.to_3dim_index(self.dim());
             self[idx]
         }
-        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
-            let idx = idx.to_3dim_index(self.dim());
-            &mut self[idx]
-        }
-        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+        fn ptr_at(&self, idx: usize) -> *mut f32 {
             let idx = idx.to_3dim_index(self.dim());
             let ptr: *const f32 = &self[idx];
             ptr as *mut f32
@@ -304,10 +288,7 @@ pub mod fwht {
         fn value_at(&self, idx: usize) -> f32 {
             self[idx]
         }
-        fn value_at_mut(&mut self, idx: usize) -> &mut f32 {
-            &mut self[idx]
-        }
-        fn unsafe_value_at(&self, idx: usize) -> *mut f32 {
+        fn ptr_at(&self, idx: usize) -> *mut f32 {
             let ptr: *const f32 = &self[idx];
             ptr as *mut f32
         }
@@ -376,23 +357,22 @@ pub mod fwht {
                             padding[j + h - data.len()].value_at(index_in_chunk)
                         };
 
+                        let ptr = if j < data.len() {
+                            data[j].ptr_at(index_in_chunk)
+                        } else {
+                            padding[j - data.len()].ptr_at(index_in_chunk)
+                        };
                         unsafe {
-                            if j < data.len() {
-                                *data[j].unsafe_value_at(index_in_chunk) = x + y;
-                                // *data[j].value_at_mut(index_in_chunk) = x + y
-                            } else {
-                                *padding[j - data.len()].unsafe_value_at(index_in_chunk) = x + y;
-                                // *padding[j - data.len()].value_at_mut(index_in_chunk) = x + y
-                            };
+                            *ptr = x + y;
+                        }
 
-                            if j + h < data.len() {
-                                *data[j + h].unsafe_value_at(index_in_chunk) = x - y;
-                                // *data[j + h].value_at_mut(index_in_chunk) = x - y
-                            } else {
-                                *padding[j + h - data.len()].unsafe_value_at(index_in_chunk) =
-                                    x - y;
-                                // *padding[j + h - data.len()].value_at_mut(index_in_chunk) = x - y
-                            };
+                        let ptr = if j + h < data.len() {
+                            data[j + h].ptr_at(index_in_chunk)
+                        } else {
+                            padding[j + h - data.len()].ptr_at(index_in_chunk)
+                        };
+                        unsafe {
+                            *ptr = x - y;
                         }
                     }
                 }
@@ -675,7 +655,7 @@ mod tests {
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
         let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
 
-        const LENGTH: usize = 2;
+        const LENGTH: usize = 128;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
