@@ -154,8 +154,8 @@ pub mod transform_block_3d_dct {
 
             // scale each chunk by g_i = λ_i^(-0.25)*√(P/Σ_i(√λ_i))
             let sqrt_p_over_sum_sqrt_energies = sqrt_p_over_sum_sqrt_energies.get_or_init(|| {
-                let sum_sqrt_energies: f32 = chunk_energies.iter().map(|&λ| f32::sqrt(λ)).sum();
-                f32::sqrt(power_budget / sum_sqrt_energies)
+                let sum_sqrt_energies: f32 = chunk_energies.iter().map(|&λ| λ.sqrt()).sum();
+                (power_budget / sum_sqrt_energies).sqrt()
             });
 
             chunk_energy.powf(-0.25) * sqrt_p_over_sum_sqrt_energies
