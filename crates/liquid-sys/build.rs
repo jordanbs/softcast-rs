@@ -29,10 +29,12 @@ fn main() {
 
     // Rebuild triggers (avoid rebuilds)
     println!("cargo:rerun-if-changed=build.rs");
-    println!(
-        "cargo:rerun-if-changed={}",
-        manifest_dir.join("../../vendor/libfec").display()
-    );
+    // libfec always triggers rebuilds.
+    // Please cargo clean if a rebuild is truly needed.
+    //     println!(
+    //         "cargo:rerun-if-changed={}",
+    //         manifest_dir.join("../../vendor/libfec").display()
+    //     );
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join("../../vendor/liquid-dsp").display()
