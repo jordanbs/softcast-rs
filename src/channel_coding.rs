@@ -437,6 +437,7 @@ mod fwht {
             let values = match slice.values {
                 ViewOrOwnedArray3::View(view) => view,
                 ViewOrOwnedArray3::Owned(_) => {
+                    // TODO: This assumption is not be true in the testing loopback.
                     panic!("slice not expected to own its data in decode.")
                 }
             };
@@ -655,7 +656,7 @@ mod tests {
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
         let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
 
-        const LENGTH: usize = 2;
+        const LENGTH: usize = 8;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
