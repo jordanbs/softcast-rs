@@ -17,6 +17,7 @@
 
 use crate::asset_reader_writer::HasPixelComponentType;
 use crate::channel_coding::slice::*;
+use crate::source_coding::chunked_dct_block::*;
 use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
@@ -30,12 +31,12 @@ pub fn compress_metadata<'a, const DCT_LENGTH: usize, PixelType: HasPixelCompone
     let mut metadata = Vec::with_capacity(2 * slices.len());
     slices
         .iter()
-        .map(|slice| slice.chunk_mean.to_be_bytes())
+        .map(|slice| slice.chunk_metadata.mean.to_be_bytes())
         .flatten()
         .for_each(|byte| metadata.push(byte));
     slices
         .iter()
-        .map(|slice| slice.chunk_energy.to_be_bytes())
+        .map(|slice| slice.chunk_metadata.energy.to_be_bytes())
         .flatten()
         .for_each(|byte| metadata.push(byte));
 
@@ -44,14 +45,9 @@ pub fn compress_metadata<'a, const DCT_LENGTH: usize, PixelType: HasPixelCompone
     Ok(compressed_metadata.into())
 }
 
-pub struct Metadata {
-    pub mean: f32,
-    pub energy: f32,
-}
-
 pub fn decompress_metadata(
     compressed_metadata: Box<[u8]>,
-) -> Result<Box<[Metadata]>, Box<dyn std::error::Error>> {
+) -> Result<Box<[ChunkMetadata]>, Box<dyn std::error::Error>> {
     let data = zstd::stream::decode_all(std::io::Cursor::new(compressed_metadata))?;
     assert_eq!(data.len() % size_of::<f32>(), 0); // divisible by 4
 
@@ -67,7 +63,7 @@ pub fn decompress_metadata(
     let metadata = means
         .iter()
         .zip(energies.iter())
-        .map(|(&mean, &energy)| Metadata { mean, energy })
+        .map(|(&mean, &energy)| ChunkMetadata { mean, energy })
         .collect();
 
     Ok(metadata)
@@ -84,7 +80,7 @@ mod tests {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 
-        const LENGTH: usize = 8;
+        const LENGTH: usize = 4;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -104,8 +100,8 @@ mod tests {
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
         for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
-            assert_eq!(y_slice.chunk_mean, y_metadata.mean);
-            assert_eq!(y_slice.chunk_energy, y_metadata.energy);
+            assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
+            assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
         }
     }
 }

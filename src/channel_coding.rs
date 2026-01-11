@@ -30,19 +30,17 @@ pub mod slice {
 
     pub struct Slice<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ViewOrOwnedArray3<'a>,
-        pub chunk_mean: f32,
-        pub chunk_energy: f32,
+        pub chunk_metadata: ChunkMetadata,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
         Slice<'a, GOP_LENGTH, PixelType>
     {
-        pub fn new(values: ViewOrOwnedArray3<'a>, chunk_mean: f32, chunk_energy: f32) -> Self {
+        pub fn new(values: ViewOrOwnedArray3<'a>, chunk_metadata: ChunkMetadata) -> Self {
             Self {
                 values,
-                chunk_mean,
-                chunk_energy,
+                chunk_metadata,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -406,15 +404,14 @@ mod fwht {
 
         let mut slices = Vec::with_capacity(hadamard_len);
         for chunk in chunks {
-            let slice = Slice::new(
-                ViewOrOwnedArray3::View(chunk.values),
-                chunk.mean,
-                chunk.energy,
-            );
+            let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values), chunk.metadata);
             slices.push(slice);
         }
         for padding_chunk in padding_chunks {
-            let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk), 0f32, 0f32);
+            let slice = Slice::new(
+                ViewOrOwnedArray3::Owned(padding_chunk),
+                ChunkMetadata::default(), // zero
+            );
             slices.push(slice);
         }
 
@@ -442,7 +439,7 @@ mod fwht {
             };
 
             let chunk: ChunkedDCTBlock<'a, DCT_LENGTH, PixelType> =
-                ChunkedDCTBlock::new(values, slice.chunk_mean, slice.chunk_energy);
+                ChunkedDCTBlock::new(values, slice.chunk_metadata);
             chunks.push(chunk);
         }
 

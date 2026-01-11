@@ -235,7 +235,9 @@ pub mod transform_block_3d_dct {
                 .into_iter()
                 .zip(means.into_iter())
                 .zip(energies.into_iter())
-                .map(|((chunk, mean), energy)| ChunkedDCTBlock::new(chunk, mean, energy));
+                .map(|((chunk, mean), energy)| {
+                    ChunkedDCTBlock::new(chunk, ChunkMetadata { mean, energy })
+                });
 
             // TODO: Add option to sort chunks by energy, for compression
 
@@ -256,7 +258,8 @@ pub mod transform_block_3d_dct {
                 chunks.len() * chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2
             );
 
-            let chunk_energies: Box<[f32]> = chunks.iter().map(|chunk| chunk.energy).collect();
+            let chunk_energies: Box<[f32]> =
+                chunks.iter().map(|chunk| chunk.metadata.energy).collect();
             let compute_cache = std::cell::OnceCell::new();
 
             // Could be optimized by iterating over dst or src in memory order.
@@ -268,7 +271,7 @@ pub mod transform_block_3d_dct {
                 .for_each(|(mut dst, src)| {
                     let power_scale = Self::power_scale(
                         chunk_dimensions,
-                        src.energy,
+                        src.metadata.energy,
                         &chunk_energies,
                         &compute_cache,
                     );
@@ -277,7 +280,7 @@ pub mod transform_block_3d_dct {
                         dst /= power_scale;
                     } // else assume all zeros
 
-                    dst += src.mean;
+                    dst += src.metadata.mean;
                 });
 
             TransformBlock3DDCT::<LENGTH, PixelType> {
@@ -292,21 +295,32 @@ pub mod chunked_dct_block {
     use super::transform_block_3d_dct::*;
     use super::*;
 
-    pub struct ChunkedDCTBlock<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
-        pub values: ndarray::ArrayViewMut3<'a, f32>,
+    pub struct ChunkMetadata {
         pub mean: f32,
         pub energy: f32,
+    }
+    impl Default for ChunkMetadata {
+        fn default() -> Self {
+            ChunkMetadata {
+                mean: 0f32,
+                energy: 0f32,
+            }
+        }
+    }
+
+    pub struct ChunkedDCTBlock<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
+        pub values: ndarray::ArrayViewMut3<'a, f32>,
+        pub metadata: ChunkMetadata,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
         ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>
     {
-        pub fn new(values: ndarray::ArrayViewMut3<'a, f32>, mean: f32, energy: f32) -> Self {
+        pub fn new(values: ndarray::ArrayViewMut3<'a, f32>, metadata: ChunkMetadata) -> Self {
             ChunkedDCTBlock {
                 values,
-                mean,
-                energy,
+                metadata,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -464,7 +478,9 @@ mod tests {
             .expect("No DCT performed.");
 
         for ChunkedDCTBlock {
-            values: _, mean, ..
+            values: _,
+            metadata: ChunkMetadata { mean, .. },
+            ..
         } in transform_block_3d_dct.chunks_iter()
         {
             eprintln!("mean:{}", mean);
