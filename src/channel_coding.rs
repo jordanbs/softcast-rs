@@ -62,7 +62,7 @@ pub mod slice {
 
     pub struct SliceIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         chunked_dct_block_iter: std::iter::Peekable<I>,
         inner_slice_iter: std::vec::IntoIter<Slice<'a, DCT_LENGTH, PixelType>>,
@@ -72,7 +72,7 @@ pub mod slice {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
         SliceIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         pub fn new(chunked_dct_block_iter: I, chunks_per_gop: usize) -> Self {
             SliceIter {
@@ -85,7 +85,7 @@ pub mod slice {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
         for SliceIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         type Item = Slice<'a, DCT_LENGTH, PixelType>;
 
@@ -116,22 +116,22 @@ pub mod slice {
         }
     }
 
-    pub struct ChunkedDCTBlockIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
+    pub struct ChunkIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
     where
         I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
     {
         slice_iter: std::iter::Peekable<I>,
-        inner_chunk_iter: std::vec::IntoIter<ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        inner_chunk_iter: std::vec::IntoIter<Chunk<'a, DCT_LENGTH, PixelType>>,
         chunks_per_gop: usize,
     }
 
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, I>
+        ChunkIter<'a, DCT_LENGTH, PixelType, I>
     where
         I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
     {
         pub fn new(slice_iter: I, chunks_per_gop: usize) -> Self {
-            ChunkedDCTBlockIter {
+            ChunkIter {
                 slice_iter: slice_iter.peekable(),
                 inner_chunk_iter: vec![].into_iter(),
                 chunks_per_gop: chunks_per_gop,
@@ -139,11 +139,11 @@ pub mod slice {
         }
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
-        for ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, I>
+        for ChunkIter<'a, DCT_LENGTH, PixelType, I>
     where
         I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
     {
-        type Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>;
+        type Item = Chunk<'a, DCT_LENGTH, PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
             loop {
@@ -167,8 +167,8 @@ pub mod slice {
         }
     }
 
-    pub trait ChunkedDCTBlockIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
-        Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>> + Sized
+    pub trait ChunkIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+        Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>> + Sized
     {
         fn into_slice_iter(
             self,
@@ -176,9 +176,9 @@ pub mod slice {
         ) -> SliceIter<'a, DCT_LENGTH, PixelType, Self>;
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        ChunkedDCTBlockIterExt<'a, DCT_LENGTH, PixelType> for I
+        ChunkIterExt<'a, DCT_LENGTH, PixelType> for I
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         fn into_slice_iter(
             self,
@@ -194,7 +194,7 @@ pub mod slice {
         fn into_chunks_iter(
             self,
             chunks_per_gop: usize,
-        ) -> ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, Self>;
+        ) -> ChunkIter<'a, DCT_LENGTH, PixelType, Self>;
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
         SliceIterExt<'a, DCT_LENGTH, PixelType> for I
@@ -204,8 +204,8 @@ pub mod slice {
         fn into_chunks_iter(
             self,
             chunks_per_gop: usize,
-        ) -> ChunkedDCTBlockIter<'a, DCT_LENGTH, PixelType, Self> {
-            ChunkedDCTBlockIter::new(self, chunks_per_gop)
+        ) -> ChunkIter<'a, DCT_LENGTH, PixelType, Self> {
+            ChunkIter::new(self, chunks_per_gop)
         }
     }
 }
@@ -233,7 +233,7 @@ mod fwht {
     }
 
     impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> ValuesProvider
-        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+        for Chunk<'_, DCT_LENGTH, PixelType>
     {
         fn value_at(&self, idx: usize) -> f32 {
             let idx = idx.to_3dim_index(self.values.dim());
@@ -296,7 +296,7 @@ mod fwht {
     }
 
     impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> std::ops::MulAssign<f32>
-        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+        for Chunk<'_, DCT_LENGTH, PixelType>
     {
         fn mul_assign(&mut self, rhs: f32) {
             self.values.mul_assign(rhs);
@@ -311,7 +311,7 @@ mod fwht {
     }
 
     unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Send
-        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+        for Chunk<'_, DCT_LENGTH, PixelType>
     {
     }
     unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Send
@@ -320,7 +320,7 @@ mod fwht {
     }
 
     unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Sync
-        for ChunkedDCTBlock<'_, DCT_LENGTH, PixelType>
+        for Chunk<'_, DCT_LENGTH, PixelType>
     {
     }
     unsafe impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> Sync
@@ -385,7 +385,7 @@ mod fwht {
     }
 
     pub fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
-        chunks: Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>,
+        chunks: Box<[Chunk<'a, DCT_LENGTH, PixelType>]>,
     ) -> Result<Box<[Slice<'a, DCT_LENGTH, PixelType>]>, &'static str> {
         // adapted from fwht crate, with the intention of avoiding copies
         let mut chunks = chunks;
@@ -421,7 +421,7 @@ mod fwht {
     pub fn fwht_slices<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
         slices: Box<[Slice<'a, DCT_LENGTH, PixelType>]>,
         num_padding_rows: usize,
-    ) -> Result<Box<[ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>]>, &'static str> {
+    ) -> Result<Box<[Chunk<'a, DCT_LENGTH, PixelType>]>, &'static str> {
         let mut slices = slices;
 
         let mut empty: Box<[ndarray::Array3<f32>]> = vec![].into();
@@ -438,8 +438,7 @@ mod fwht {
                 }
             };
 
-            let chunk: ChunkedDCTBlock<'a, DCT_LENGTH, PixelType> =
-                ChunkedDCTBlock::new(values, slice.chunk_metadata);
+            let chunk: Chunk<'a, DCT_LENGTH, PixelType> = Chunk::new(values, slice.chunk_metadata);
             chunks.push(chunk);
         }
 
@@ -452,7 +451,7 @@ mod tests {
     use super::*;
     use crate::asset_reader_writer::pixel_buffer::*;
     use crate::asset_reader_writer::transform_block_3d::*;
-    use crate::channel_coding::slice::{ChunkedDCTBlockIterExt, SliceIterExt};
+    use crate::channel_coding::slice::{ChunkIterExt, SliceIterExt};
     use asset_reader::*;
     use num_complex::Complex32;
 
@@ -656,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_slice_inverse_equality() {
-        use crate::source_coding::chunked_dct_block::ChunkedDCTBlockIterExt; // idk why this only works here..
+        use crate::source_coding::chunked_dct_block::ChunkIterExt; // idk why this only works here..
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);

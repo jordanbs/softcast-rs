@@ -161,9 +161,7 @@ pub mod transform_block_3d_dct {
             chunk_energy.powf(-0.25) * sqrt_p_over_sum_sqrt_energies
         }
 
-        pub fn chunks_iter(
-            &mut self,
-        ) -> impl Iterator<Item = ChunkedDCTBlock<'_, LENGTH, PixelType>> {
+        pub fn chunks_iter(&mut self) -> impl Iterator<Item = Chunk<'_, LENGTH, PixelType>> {
             const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 30, 44);
             let (length, height, width) = self.values.dim();
             let chunk_length =
@@ -235,9 +233,7 @@ pub mod transform_block_3d_dct {
                 .into_iter()
                 .zip(means.into_iter())
                 .zip(energies.into_iter())
-                .map(|((chunk, mean), energy)| {
-                    ChunkedDCTBlock::new(chunk, ChunkMetadata { mean, energy })
-                });
+                .map(|((chunk, mean), energy)| Chunk::new(chunk, ChunkMetadata { mean, energy }));
 
             // TODO: Add option to sort chunks by energy, for compression
 
@@ -245,7 +241,7 @@ pub mod transform_block_3d_dct {
         }
 
         pub(super) fn from_chunked_dct_blocks(
-            chunks: &[ChunkedDCTBlock<'_, LENGTH, PixelType>],
+            chunks: &[Chunk<'_, LENGTH, PixelType>],
             frame_resolution: (usize, usize),
         ) -> Self {
             let (dct_length, dct_height, dct_width) =
@@ -308,17 +304,17 @@ pub mod chunked_dct_block {
         }
     }
 
-    pub struct ChunkedDCTBlock<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
+    pub struct Chunk<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ndarray::ArrayViewMut3<'a, f32>,
         pub metadata: ChunkMetadata,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
-        ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>
+        Chunk<'a, DCT_LENGTH, PixelType>
     {
         pub fn new(values: ndarray::ArrayViewMut3<'a, f32>, metadata: ChunkMetadata) -> Self {
-            ChunkedDCTBlock {
+            Chunk {
                 values,
                 metadata,
                 _marker: std::marker::PhantomData,
@@ -333,7 +329,7 @@ pub mod chunked_dct_block {
         I,
     >
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         chunked_dct_block_iter: I,
         frame_resolution: (usize, usize),
@@ -341,7 +337,7 @@ pub mod chunked_dct_block {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
         TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         fn new(chunked_dct_block_iter: I, frame_resolution: (usize, usize)) -> Self {
             let (frame_width, frame_height) = frame_resolution;
@@ -360,7 +356,7 @@ pub mod chunked_dct_block {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
         for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         type Item = TransformBlock3DDCT<DCT_LENGTH, PixelType>;
 
@@ -413,8 +409,8 @@ pub mod chunked_dct_block {
         }
     }
 
-    pub trait ChunkedDCTBlockIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
-        Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>> + Sized
+    pub trait ChunkIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+        Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>> + Sized
     {
         fn into_transform_block_3d_dct_iter(
             self,
@@ -422,9 +418,9 @@ pub mod chunked_dct_block {
         ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self>;
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        ChunkedDCTBlockIterExt<'a, DCT_LENGTH, PixelType> for I
+        ChunkIterExt<'a, DCT_LENGTH, PixelType> for I
     where
-        I: Iterator<Item = ChunkedDCTBlock<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         fn into_transform_block_3d_dct_iter(
             self,
@@ -477,7 +473,7 @@ mod tests {
             .next()
             .expect("No DCT performed.");
 
-        for ChunkedDCTBlock {
+        for Chunk {
             values: _,
             metadata: ChunkMetadata { mean, .. },
             ..
