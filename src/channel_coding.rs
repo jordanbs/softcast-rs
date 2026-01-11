@@ -16,7 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::asset_reader_writer::*;
-use crate::source_coding::chunked_dct_block::*;
+use crate::source_coding::chunk::*;
 use slice::*;
 
 pub mod slice {
@@ -64,7 +64,7 @@ pub mod slice {
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
-        chunked_dct_block_iter: std::iter::Peekable<I>,
+        chunk_iter: std::iter::Peekable<I>,
         inner_slice_iter: std::vec::IntoIter<Slice<'a, DCT_LENGTH, PixelType>>,
         chunks_per_gop: usize,
     }
@@ -74,9 +74,9 @@ pub mod slice {
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
-        pub fn new(chunked_dct_block_iter: I, chunks_per_gop: usize) -> Self {
+        pub fn new(chunk_iter: I, chunks_per_gop: usize) -> Self {
             SliceIter {
-                chunked_dct_block_iter: chunked_dct_block_iter.peekable(),
+                chunk_iter: chunk_iter.peekable(),
                 inner_slice_iter: vec![].into_iter(),
                 chunks_per_gop: chunks_per_gop,
             }
@@ -95,11 +95,7 @@ pub mod slice {
                     return Some(slice);
                 }
 
-                let chunks: Box<_> = self
-                    .chunked_dct_block_iter
-                    .by_ref()
-                    .take(self.chunks_per_gop)
-                    .collect();
+                let chunks: Box<_> = self.chunk_iter.by_ref().take(self.chunks_per_gop).collect();
 
                 if chunks.is_empty() {
                     return None;
@@ -655,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_slice_inverse_equality() {
-        use crate::source_coding::chunked_dct_block::ChunkIterExt; // idk why this only works here..
+        use crate::source_coding::chunk::ChunkIterExt; // idk why this only works here..
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);

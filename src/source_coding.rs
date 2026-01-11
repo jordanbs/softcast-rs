@@ -21,7 +21,7 @@ use ndrustfft;
 
 pub mod transform_block_3d_dct {
     use super::*;
-    use chunked_dct_block::*;
+    use chunk::*;
 
     #[derive(Debug)]
     pub struct TransformBlock3DDCT<const LENGTH: usize, PixelType: HasPixelComponentType> {
@@ -240,7 +240,7 @@ pub mod transform_block_3d_dct {
             chunked_transform_blocks
         }
 
-        pub(super) fn from_chunked_dct_blocks(
+        pub(super) fn from_chunks(
             chunks: &[Chunk<'_, LENGTH, PixelType>],
             frame_resolution: (usize, usize),
         ) -> Self {
@@ -287,7 +287,7 @@ pub mod transform_block_3d_dct {
     }
 }
 
-pub mod chunked_dct_block {
+pub mod chunk {
     use super::transform_block_3d_dct::*;
     use super::*;
 
@@ -331,7 +331,7 @@ pub mod chunked_dct_block {
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
-        chunked_dct_block_iter: I,
+        chunk_iter: I,
         frame_resolution: (usize, usize),
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
@@ -339,7 +339,7 @@ pub mod chunked_dct_block {
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
-        fn new(chunked_dct_block_iter: I, frame_resolution: (usize, usize)) -> Self {
+        fn new(chunk_iter: I, frame_resolution: (usize, usize)) -> Self {
             let (frame_width, frame_height) = frame_resolution;
             let pixel_type = PixelType::TYPE;
             let component_frame_resolution = (
@@ -347,7 +347,7 @@ pub mod chunked_dct_block {
                 frame_height / pixel_type.vertical_subsampling(),
             );
             TransformBlock3DDCTIter {
-                chunked_dct_block_iter: chunked_dct_block_iter,
+                chunk_iter: chunk_iter,
                 frame_resolution: component_frame_resolution,
             }
         }
@@ -368,17 +368,17 @@ pub mod chunked_dct_block {
             let chunks_needed = OnceCell::new();
             let chunk_dim = OnceCell::new();
             let mut chunks_to_consume = OnceCell::new();
-            let mut chunked_dct_block_iter_is_empty = true;
+            let mut chunk_iter_is_empty = true;
             loop {
-                let chunk = self.chunked_dct_block_iter.next();
+                let chunk = self.chunk_iter.next();
 
                 if chunk.is_none() {
-                    return match chunked_dct_block_iter_is_empty {
+                    return match chunk_iter_is_empty {
                         true => None,
                         false => panic!("Not enough chunks to form a TransformBlock3DDCT."),
                     };
                 }
-                chunked_dct_block_iter_is_empty = false;
+                chunk_iter_is_empty = false;
                 let chunk = chunk.unwrap();
 
                 let chunk_dim = chunk_dim.get_or_init(|| chunk.values.dim());
@@ -399,10 +399,8 @@ pub mod chunked_dct_block {
                 chunks_to_consume.push(chunk);
 
                 if *chunks_needed == chunks_to_consume.len() {
-                    let transform_block_3d_dct = TransformBlock3DDCT::from_chunked_dct_blocks(
-                        chunks_to_consume,
-                        self.frame_resolution,
-                    );
+                    let transform_block_3d_dct =
+                        TransformBlock3DDCT::from_chunks(chunks_to_consume, self.frame_resolution);
                     return Some(transform_block_3d_dct);
                 }
             }
@@ -437,7 +435,7 @@ mod tests {
     use asset_reader::*;
     #[cfg(not(debug_assertions))]
     use asset_writer::*;
-    use chunked_dct_block::*;
+    use chunk::*;
     use pixel_buffer::*;
     use std::fs;
     #[cfg(not(debug_assertions))]
@@ -584,7 +582,7 @@ mod tests {
 
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
-    fn test_reader_to_chunked_dct_blocks_to_writer() {
+    fn test_reader_to_chunks_to_writer() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 

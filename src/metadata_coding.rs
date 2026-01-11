@@ -17,7 +17,7 @@
 
 use crate::asset_reader_writer::HasPixelComponentType;
 use crate::channel_coding::slice::*;
-use crate::source_coding::chunked_dct_block::*;
+use crate::source_coding::chunk::*;
 use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
