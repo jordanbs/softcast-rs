@@ -16,6 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::source_coding::chunk::*;
+use liquid_sys;
 use std::io::Read;
 use zstd;
 
@@ -58,23 +59,26 @@ impl ToBytes for ChunkMetadata {
     }
 }
 
-pub fn compress_metadata<'a, I: Iterator<Item = &'a ChunkMetadata>>(
-    chunk_metadata_iter: I,
-) -> Result<Box<[u8]>, Box<dyn std::error::Error>> {
-    let binary_metadata: Box<[u8]> = chunk_metadata_iter
+pub fn compress_metadata<'a>(
+    chunk_metadata: &[&ChunkMetadata],
+) -> Result<CompressedMetadata, Box<dyn std::error::Error>> {
+    let binary_metadata: Box<[u8]> = chunk_metadata
+        .iter()
         .flat_map(|metadata| metadata.to_bytes())
         .collect();
 
     // Could stream this, but this buffer should only be on the order of 1-2MB.
     let compressed_metadata = zstd::stream::encode_all(std::io::Cursor::new(binary_metadata), 0)?;
 
-    Ok(compressed_metadata.into())
+    Ok(CompressedMetadata {
+        data: compressed_metadata.into(),
+    })
 }
 
 pub fn decompress_metadata(
-    compressed_metadata: &[u8],
+    compressed_metadata: CompressedMetadata,
 ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
-    let cursor = std::io::Cursor::new(compressed_metadata);
+    let cursor = std::io::Cursor::new(compressed_metadata.data);
     let mut decoder = zstd::stream::read::Decoder::new(cursor)?;
 
     // TODO: has no size hint.
@@ -86,6 +90,65 @@ pub fn decompress_metadata(
         Some(meta)
     });
     Ok(iter)
+}
+
+#[derive(Debug)]
+pub struct CompressedMetadata {
+    data: Box<[u8]>,
+}
+
+impl From<&[&ChunkMetadata]> for CompressedMetadata {
+    fn from(chunk_metadata: &[&ChunkMetadata]) -> Self {
+        compress_metadata(chunk_metadata).expect("compress_metadata failed.")
+    }
+}
+
+impl CompressedMetadata {
+    pub fn crc(&self) -> u32 {
+        unsafe {
+            let crc_scheme = CompressedMetadataAndCRC::CRC_SCHEME;
+            liquid_sys::crc_generate_key(
+                crc_scheme,
+                self.data.as_ptr() as *mut u8,
+                self.data.len() as u32,
+            )
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompressedMetadataAndCRC {
+    compressed_metadata: CompressedMetadata,
+    crc: u32,
+}
+
+impl From<CompressedMetadata> for CompressedMetadataAndCRC {
+    fn from(compressed_metadata: CompressedMetadata) -> Self {
+        let crc = compressed_metadata.crc();
+        CompressedMetadataAndCRC {
+            compressed_metadata,
+            crc,
+        }
+    }
+}
+
+impl CompressedMetadataAndCRC {
+    const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
+
+    pub fn into_valid_data(self) -> Result<CompressedMetadata, &'static str> {
+        unsafe {
+            let success = liquid_sys::crc_validate_message(
+                Self::CRC_SCHEME,
+                self.compressed_metadata.data.as_ptr() as *mut u8,
+                self.compressed_metadata.data.len() as u32,
+                self.crc,
+            );
+            match success {
+                1 => Ok(self.compressed_metadata),
+                _ => Err("crc_validate_message failed."),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -109,15 +172,15 @@ mod tests {
         let mut y_dct = macro_block.y_components.into_dct();
 
         let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
-        let y_metadata_iter = y_slices.iter().map(|slice| &slice.chunk_metadata);
-        let y_compressed_metadata = compress_metadata(y_metadata_iter).expect("y_metadata failed");
+        let y_metadata: Box<_> = y_slices.iter().map(|slice| &slice.chunk_metadata).collect();
+        let y_compressed_metadata = compress_metadata(&y_metadata).expect("y_metadata failed");
         eprintln!(
             "orig_size:{} compressed size:{}",
             y_slices.len() * 2 * 4,
-            y_compressed_metadata.len()
+            y_compressed_metadata.data.len()
         );
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
-            decompress_metadata(&y_compressed_metadata)
+            decompress_metadata(y_compressed_metadata)
                 .expect("y_metadata decompression failed")
                 .collect();
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
@@ -126,5 +189,46 @@ mod tests {
             assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
             assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
         }
+    }
+
+    #[test]
+    fn test_metatada_crc_valid() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_metadata: CompressedMetadata =
+            CompressedMetadata::from(metadata_refs.as_ref());
+        let orig_compressed_data = compressed_metadata.data.clone();
+        let compressed_metadata_crc: CompressedMetadataAndCRC = compressed_metadata.into();
+
+        let validated_compressed_metadata = compressed_metadata_crc
+            .into_valid_data()
+            .expect("validation failed");
+        assert_eq!(orig_compressed_data, validated_compressed_metadata.data);
+    }
+
+    #[test]
+    fn test_metatada_crc_fail() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_metadata: CompressedMetadata =
+            CompressedMetadata::from(metadata_refs.as_ref());
+        let mut compressed_metadata_crc: CompressedMetadataAndCRC = compressed_metadata.into();
+
+        compressed_metadata_crc.compressed_metadata.data[5] -= 1;
+        let _ = compressed_metadata_crc
+            .into_valid_data()
+            .expect_err("validation unexpectly passed");
     }
 }
