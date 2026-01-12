@@ -17,7 +17,7 @@
 
 use crate::source_coding::chunk::*;
 use liquid_sys;
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
@@ -261,13 +261,12 @@ pub struct Packet {
 
 pub struct Packetizer {
     packetizer: *mut liquid_sys::packetizer_s,
-    cursor: std::io::Cursor<Box<[u8]>>,
-    payload_len: usize,
+    payload_cursor: std::io::Cursor<Box<[u8]>>,
     encoded_payload_len: usize,
 }
 
 impl Packetizer {
-    const DECODED_MESSAGE_LENGTH: usize = 1024;
+    const DECODED_MESSAGE_LENGTH: usize = 894; // liquid uses {255, 223}-rs. 223//255 = 894.
     const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
     const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8;
     const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
@@ -298,7 +297,6 @@ impl From<CompressedMetadata> for Packetizer {
                 Self::FEC_SCHEME_2 as i32,
             )
         };
-        let payload_len = compressed_metadata.data.len();
         let encoded_payload_len = unsafe {
             liquid_sys::packetizer_compute_enc_msg_len(
                 Self::DECODED_MESSAGE_LENGTH as u32,
@@ -307,10 +305,10 @@ impl From<CompressedMetadata> for Packetizer {
                 Self::FEC_SCHEME_2 as i32,
             )
         } as usize;
+        assert_eq!(encoded_payload_len, 1024); // TODO: remove
         Packetizer {
             packetizer,
-            cursor: std::io::Cursor::new(compressed_metadata.data),
-            payload_len,
+            payload_cursor: std::io::Cursor::new(compressed_metadata.data),
             encoded_payload_len,
         }
     }
@@ -321,42 +319,35 @@ impl Iterator for Packetizer {
 
     fn next(&mut self) -> Option<Self::Item> {
         // send payload len first
-        let encoded_data = if 0 == self.cursor.position()
-            || self.cursor.position() as usize + Self::DECODED_MESSAGE_LENGTH > self.payload_len
-        {
-            let buf = [0u8; Self::DECODED_MESSAGE_LENGTH];
-            let mut local_cursor = std::io::Cursor::new(buf);
+        let mut buf = [0u8; Self::DECODED_MESSAGE_LENGTH];
+        let header_size = size_of::<u16>();
 
-            // send payload_len at the beginning of each packet
-            if self.cursor.position() == 0 {
-                local_cursor
-                    .write_all(&(self.payload_len as u32).to_be_bytes())
-                    .expect("Write to buffer failed.");
+        // send payload_len at the beginning of each packet
+
+        let mut this_payload_len = 0u16; // U16_MAX == 65,536
+        let mut pos = header_size;
+        while pos < Self::DECODED_MESSAGE_LENGTH {
+            let dst = &mut buf[pos..];
+            let bytes_written = self
+                .payload_cursor
+                .read(dst)
+                .expect("Failed to write bytes.");
+            this_payload_len += bytes_written as u16;
+            pos += bytes_written;
+
+            if bytes_written == 0 {
+                break; // EOF
             }
+        }
+        match this_payload_len {
+            0 => None, // Last packet was EOF
+            _ => {
+                buf[0..header_size].copy_from_slice(&this_payload_len.to_be_bytes());
+                let encoded_data = self.encode_packet(&buf);
 
-            let bytes_written = local_cursor.position() as usize;
-            while self.cursor.position() < Self::DECODED_MESSAGE_LENGTH as u64 {
-                let dst = &mut local_cursor.get_mut()[bytes_written..];
-                let bytes_written = self.cursor.read(dst).expect("Failed to write bytes.");
-                local_cursor
-                    .seek_relative(bytes_written as i64)
-                    .expect("Seek out of range");
-                if bytes_written == 0 {
-                    break; // EOF
-                }
+                Some(Packet { encoded_data })
             }
-            self.encode_packet(&buf)
-        } else {
-            let pos = self.cursor.position() as usize;
-            self.cursor
-                .seek_relative(Self::DECODED_MESSAGE_LENGTH as i64)
-                .expect("Seek out of range.");
-            let subslice = &self.cursor.get_ref()[pos..pos + Self::DECODED_MESSAGE_LENGTH];
-
-            self.encode_packet(&subslice)
-        };
-
-        Some(Packet { encoded_data })
+        }
     }
 }
 
