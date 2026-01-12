@@ -59,11 +59,13 @@ impl ToBytes<{ Self::SERIALIZED_SIZE }> for ChunkMetadata {
     }
 }
 
-fn compress_metadata<'a>(
-    chunk_metadata: &[&ChunkMetadata],
-) -> Result<CompressedMetadata, Box<dyn std::error::Error>> {
-    let binary_metadata: Box<[u8]> = chunk_metadata
-        .iter()
+fn compress_metadata<'a, I>(
+    chunk_metadata_iter: I,
+) -> Result<CompressedMetadata, Box<dyn std::error::Error>>
+where
+    I: Iterator<Item = &'a ChunkMetadata>,
+{
+    let binary_metadata: Box<[u8]> = chunk_metadata_iter
         .flat_map(|metadata| metadata.to_bytes())
         .collect();
 
@@ -97,9 +99,12 @@ pub struct CompressedMetadata {
     data: Box<[u8]>,
 }
 
-impl From<&[&ChunkMetadata]> for CompressedMetadata {
-    fn from(chunk_metadata: &[&ChunkMetadata]) -> Self {
-        compress_metadata(chunk_metadata).expect("compress_metadata failed.")
+impl<'a, I> From<I> for CompressedMetadata
+where
+    I: Iterator<Item = &'a ChunkMetadata>,
+{
+    fn from(chunk_metadata_iter: I) -> Self {
+        compress_metadata(chunk_metadata_iter).expect("Compressing metadata failed.")
     }
 }
 
@@ -268,8 +273,9 @@ mod tests {
         let mut y_dct = macro_block.y_components.into_dct();
 
         let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
-        let y_metadata: Box<_> = y_slices.iter().map(|slice| &slice.chunk_metadata).collect();
-        let y_compressed_metadata = compress_metadata(&y_metadata).expect("y_metadata failed");
+        let y_compressed_metadata =
+            compress_metadata(y_slices.iter().map(|slice| &slice.chunk_metadata))
+                .expect("y_metadata failed");
         eprintln!(
             "orig_size:{} compressed size:{}",
             y_slices.len() * 2 * 4,
@@ -301,9 +307,10 @@ mod tests {
         let mut y_dct = macro_block.y_components.into_dct();
 
         let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
-        let y_metadata: Box<_> = y_slices.iter().map(|slice| &slice.chunk_metadata).collect();
 
-        let y_compressed_metadata: CompressedMetadata = y_metadata.as_ref().into();
+        let y_compressed_metadata: CompressedMetadata =
+            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
+
         let y_framed_metadata = y_compressed_metadata.into_crc_frame().into_rs_frame();
 
         let y_decompressed_metadata: Vec<ChunkMetadata> = y_framed_metadata
@@ -331,8 +338,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_metadata: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_metadata: CompressedMetadata = metadata.iter().into();
         let orig_compressed_data = compressed_metadata.data.clone();
         let compressed_metadata_crc: CompressedMetadataAndCRC = compressed_metadata.into();
 
@@ -350,8 +356,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata_in.iter().collect();
-        let compressed_metadata: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_metadata: CompressedMetadata = metadata_in.iter().into();
         let medatadata_out: Vec<ChunkMetadata> = compressed_metadata
             .into_chunk_metadata_iter()
             .expect("Failed to decompress")
@@ -369,8 +374,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_metadata: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_metadata: CompressedMetadata = metadata.iter().into();
         let mut compressed_metadata_crc: CompressedMetadataAndCRC = compressed_metadata.into();
 
         compressed_metadata_crc.compressed_metadata.data[5] -= 1;
@@ -388,8 +392,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_data: CompressedMetadata = metadata.iter().into();
         let orig_compressed_data = compressed_data.data.clone();
         let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
 
@@ -414,8 +417,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_data: CompressedMetadata = metadata.iter().into();
         let orig_compressed_data = compressed_data.data.clone();
         let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
 
@@ -441,8 +443,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_data: CompressedMetadata = metadata.iter().into();
         let orig_compressed_data = compressed_data.data.clone();
         let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
 
@@ -471,8 +472,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_data: CompressedMetadata = metadata.iter().into();
         let orig_compressed_data = compressed_data.data.clone();
         let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
 
@@ -503,8 +503,7 @@ mod tests {
             };
             1024
         ];
-        let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let compressed_data: CompressedMetadata = metadata.iter().into();
         let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
 
         eprintln!("crc_data_in : {:x?}", crc_data_in.compressed_metadata.data);
