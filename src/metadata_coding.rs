@@ -137,15 +137,97 @@ impl CompressedMetadataAndCRC {
 
     pub fn into_valid_data(self) -> Result<CompressedMetadata, &'static str> {
         unsafe {
-            let success = liquid_sys::crc_validate_message(
+            let success: bool = liquid_sys::crc_validate_message(
                 Self::CRC_SCHEME,
                 self.compressed_metadata.data.as_ptr() as *mut u8,
                 self.compressed_metadata.data.len() as u32,
                 self.crc,
-            );
+            ) != 0;
             match success {
-                1 => Ok(self.compressed_metadata),
+                true => Ok(self.compressed_metadata),
                 _ => Err("crc_validate_message failed."),
+            }
+        }
+    }
+
+    pub fn into_bytes(self) -> Box<[u8]> {
+        let data_and_crc_len = self.compressed_metadata.data.len() + size_of_val(&self.crc);
+        let mut bytes: Box<[u8]> = vec![0u8; data_and_crc_len].into();
+        bytes[..self.compressed_metadata.data.len()]
+            .copy_from_slice(&self.compressed_metadata.data);
+        bytes[self.compressed_metadata.data.len()..]
+            .copy_from_slice(&self.compressed_metadata.crc().to_be_bytes());
+        bytes
+    }
+
+    pub fn from_bytes(mut bytes: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
+        let crc_len = size_of::<u32>();
+        if bytes.len() < crc_len {
+            return Err("bytes.len() < crc_len".into());
+        }
+        let crc_bytes: [u8; 4] = bytes[bytes.len() - crc_len..].try_into()?;
+        let crc = u32::from_be_bytes(crc_bytes);
+        bytes.truncate(bytes.len() - crc_len);
+
+        let data_and_crc = Self {
+            compressed_metadata: CompressedMetadata { data: bytes.into() },
+            crc,
+        };
+        Ok(data_and_crc)
+    }
+}
+
+pub struct CompressedMetadataAndCRCAndRS {
+    data: Box<[u8]>,
+    decoded_data_len: usize,
+}
+impl CompressedMetadataAndCRCAndRS {
+    const FEC_SCHEME: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8;
+
+    pub fn into_recovered_data(
+        self,
+    ) -> Result<CompressedMetadataAndCRC, Box<dyn std::error::Error>> {
+        let mut recovered_data = vec![0u8; self.decoded_data_len];
+        unsafe {
+            let fec = liquid_sys::fec_create(Self::FEC_SCHEME, std::ptr::null_mut());
+            let status = liquid_sys::fec_decode(
+                fec,
+                recovered_data.len() as u32,
+                self.data.as_ptr() as *mut u8,
+                recovered_data.as_mut_ptr(),
+            ) as u32;
+            // should never fail
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let data_and_crc = CompressedMetadataAndCRC::from_bytes(recovered_data)?;
+            Ok(data_and_crc)
+        }
+    }
+}
+
+impl From<CompressedMetadataAndCRC> for CompressedMetadataAndCRCAndRS {
+    fn from(compressed_metadata_and_crc: CompressedMetadataAndCRC) -> Self {
+        let decoded_data = compressed_metadata_and_crc.into_bytes();
+
+        unsafe {
+            let encoded_data_len =
+                liquid_sys::fec_get_enc_msg_length(Self::FEC_SCHEME, decoded_data.len() as u32)
+                    as usize;
+            let mut encoded_data: Box<[u8]> = vec![0u8; encoded_data_len].into();
+            let fec = liquid_sys::fec_create(Self::FEC_SCHEME, std::ptr::null_mut());
+
+            let success = liquid_sys::fec_encode(
+                fec,
+                decoded_data.len() as u32,
+                decoded_data.as_ptr() as *mut u8,
+                encoded_data.as_mut_ptr(),
+            ) as u32;
+            // should never fail
+            assert_eq!(success, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            CompressedMetadataAndCRCAndRS {
+                data: encoded_data,
+                decoded_data_len: decoded_data.len(),
             }
         }
     }
@@ -201,8 +283,7 @@ mod tests {
             1024
         ];
         let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_metadata: CompressedMetadata =
-            CompressedMetadata::from(metadata_refs.as_ref());
+        let compressed_metadata: CompressedMetadata = metadata_refs.as_ref().into();
         let orig_compressed_data = compressed_metadata.data.clone();
         let compressed_metadata_crc: CompressedMetadataAndCRC = compressed_metadata.into();
 
@@ -222,13 +303,161 @@ mod tests {
             1024
         ];
         let metadata_refs: Box<_> = metadata.iter().collect();
-        let compressed_metadata: CompressedMetadata =
-            CompressedMetadata::from(metadata_refs.as_ref());
+        let compressed_metadata: CompressedMetadata = metadata_refs.as_ref().into();
         let mut compressed_metadata_crc: CompressedMetadataAndCRC = compressed_metadata.into();
 
         compressed_metadata_crc.compressed_metadata.data[5] -= 1;
         let _ = compressed_metadata_crc
             .into_valid_data()
             .expect_err("validation unexpectly passed");
+    }
+
+    #[test]
+    fn test_metatada_rs_recovery_no_corruption() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let orig_compressed_data = compressed_data.data.clone();
+        let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
+
+        let rs_crc_data: CompressedMetadataAndCRCAndRS = crc_data_in.into();
+
+        let crc_data_out = rs_crc_data
+            .into_recovered_data()
+            .expect("rs recovery failed");
+        let valid_compressed_data = crc_data_out
+            .into_valid_data()
+            .expect("crc validation failed");
+
+        assert_eq!(orig_compressed_data, valid_compressed_data.data);
+    }
+
+    #[test]
+    fn test_metatada_rs_recovery_bit_flip() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let orig_compressed_data = compressed_data.data.clone();
+        let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
+
+        let mut rs_crc_data: CompressedMetadataAndCRCAndRS = crc_data_in.into();
+
+        rs_crc_data.data[5] ^= 0x1u8;
+
+        let crc_data_out = rs_crc_data
+            .into_recovered_data()
+            .expect("rs recovery failed");
+        let valid_compressed_data = crc_data_out
+            .into_valid_data()
+            .expect("crc validation failed");
+
+        assert_eq!(orig_compressed_data, valid_compressed_data.data);
+    }
+    #[test]
+    fn test_metatada_rs_recovery_byte_flip() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let orig_compressed_data = compressed_data.data.clone();
+        let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
+
+        let mut rs_crc_data: CompressedMetadataAndCRCAndRS = crc_data_in.into();
+
+        eprintln!("data_in: {:x?}", rs_crc_data.data);
+        rs_crc_data.data[5] ^= 0xffu8;
+        eprintln!("data_out: {:x?}", rs_crc_data.data);
+
+        let crc_data_out = rs_crc_data
+            .into_recovered_data()
+            .expect("rs recovery failed");
+        let valid_compressed_data = crc_data_out
+            .into_valid_data()
+            .expect("crc validation failed");
+
+        assert_eq!(orig_compressed_data, valid_compressed_data.data);
+    }
+
+    #[test]
+    fn test_metatada_rs_recovery_flip_16_bytes() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let orig_compressed_data = compressed_data.data.clone();
+        let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
+
+        let mut rs_crc_data: CompressedMetadataAndCRCAndRS = crc_data_in.into();
+
+        eprintln!("data_in: {:x?}", rs_crc_data.data);
+        for idx in 5..21 {
+            rs_crc_data.data[idx] ^= 0xffu8;
+        }
+        eprintln!("data_out: {:x?}", rs_crc_data.data);
+
+        let crc_data_out = rs_crc_data
+            .into_recovered_data()
+            .expect("rs recovery failed");
+        let valid_compressed_data = crc_data_out
+            .into_valid_data()
+            .expect("crc validation failed");
+
+        assert_eq!(orig_compressed_data, valid_compressed_data.data);
+    }
+
+    #[test]
+    fn test_metatada_rs_recovery_fail_flip_40_bytes() {
+        let metadata = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata.iter().collect();
+        let compressed_data: CompressedMetadata = metadata_refs.as_ref().into();
+        let crc_data_in: CompressedMetadataAndCRC = compressed_data.into();
+
+        eprintln!("crc_data_in : {:x?}", crc_data_in.compressed_metadata.data);
+
+        let mut rs_crc_data: CompressedMetadataAndCRCAndRS = crc_data_in.into();
+
+        // eprintln!("data_in : {:x?}", rs_crc_data.data);
+        for idx in 5..45 {
+            rs_crc_data.data[idx] ^= 0xffu8;
+        }
+        // eprintln!("data_out: {:x?}", rs_crc_data.data);
+
+        let crc_data_out = rs_crc_data
+            .into_recovered_data()
+            .expect("rs recovery failed");
+
+        eprintln!("crc_data_out: {:x?}", crc_data_out.compressed_metadata.data);
+
+        let _ = crc_data_out
+            .into_valid_data()
+            .expect_err("crc validation unexpectedly passed");
     }
 }
