@@ -404,8 +404,8 @@ pub mod packetizer {
         packet_iter: I,
     }
 
-    impl<I: Iterator<Item = EncodedPacket>> Depacketizer<I> {
-        pub fn new(packet_iter: I) -> Self {
+    impl<I: Iterator<Item = EncodedPacket>> From<I> for Depacketizer<I> {
+        fn from(packet_iter: I) -> Self {
             let packetizer = new_packetizer();
 
             Self {
@@ -413,7 +413,9 @@ pub mod packetizer {
                 packet_iter,
             }
         }
+    }
 
+    impl<I: Iterator<Item = EncodedPacket>> Depacketizer<I> {
         fn decode_packet(
             &self,
             packet: EncodedPacket,
@@ -802,7 +804,7 @@ mod tests {
         };
         let packetizer = Packetizer::from(compressed_metadata);
 
-        let depacketizer = Depacketizer::new(packetizer);
+        let depacketizer = Depacketizer::from(packetizer);
         let new_data: CompressedMetadata = depacketizer
             .map(|result| result.expect("depacketizing failed."))
             .next()
@@ -825,12 +827,96 @@ mod tests {
         };
         let packetizer = Packetizer::from(compressed_metadata);
 
-        let depacketizer = Depacketizer::new(packetizer);
+        let depacketizer = Depacketizer::from(packetizer);
         let new_data: CompressedMetadata = depacketizer
             .map(|result| result.expect("depacketizing failed."))
             .next()
             .expect("No compressed metadatas produced.");
 
         assert_eq!(data.into_boxed_slice(), new_data.data);
+    }
+
+    #[test]
+    fn test_depacketizer_even_boundary() {
+        let mut data = vec![0xbau8; (223 * 4 - 2) * 8 - 4];
+        for (idx, byte) in data.iter_mut().enumerate() {
+            if idx % 7 == 0 {
+                *byte ^= 0xff;
+            }
+        }
+
+        let compressed_metadata = CompressedMetadata {
+            data: data.clone().into(),
+        };
+        let packetizer = Packetizer::from(compressed_metadata);
+
+        let depacketizer = Depacketizer::from(packetizer);
+        let new_data: CompressedMetadata = depacketizer
+            .map(|result| result.expect("depacketizing failed."))
+            .next()
+            .expect("No compressed metadatas produced.");
+
+        assert_eq!(data.into_boxed_slice(), new_data.data);
+    }
+
+    //     #[test]
+    //     fn test_depacketizer_bad_payload() {
+    //         let mut data = vec![0xbau8; (223 * 4 - 2) * 8 - 4];
+    //         for (idx, byte) in data.iter_mut().enumerate() {
+    //             if idx % 7 == 0 {
+    //                 *byte ^= 0xff;
+    //             }
+    //         }
+    //
+    //         let compressed_metadata = CompressedMetadata {
+    //             data: data.clone().into(),
+    //         };
+    //         let packetizer = Packetizer::from(compressed_metadata);
+    //
+    //         let depacketizer = Depacketizer::from(packetizer);
+    //         let new_data: CompressedMetadata = depacketizer
+    //             .map(|result| result.expect("depacketizing failed."))
+    //             .next()
+    //             .expect("No compressed metadatas produced.");
+    //
+    //         assert_eq!(data.into_boxed_slice(), new_data.data);
+    //     }
+
+    #[test]
+    fn test_reader_to_packet_inverse_equality() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let mut y_dct = macro_block.y_components.into_dct();
+
+        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_compressed_metadata: CompressedMetadata =
+            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
+
+        let packetizer: Packetizer = y_compressed_metadata.into();
+        let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
+        let mut depacketizer = Depacketizer::from(encoded_packets.into_iter());
+        let y_compressed_metadata = depacketizer
+            .next()
+            .expect("No compressed metadatas.")
+            .expect("Error in depacketizing.");
+
+        let y_decompressed_metadata: Box<[ChunkMetadata]> = y_compressed_metadata
+            .into_chunk_metadata_iter()
+            .expect("Failed to create chunk metadata iter")
+            .collect();
+
+        assert_eq!(y_slices.len(), y_decompressed_metadata.len());
+
+        for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
+            assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
+            assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
+        }
     }
 }
