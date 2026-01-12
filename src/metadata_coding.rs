@@ -17,7 +17,7 @@
 
 use crate::source_coding::chunk::*;
 use liquid_sys;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
@@ -252,6 +252,111 @@ impl From<CompressedMetadataAndCRC> for CompressedMetadataAndCRCAndRS {
                 decoded_data_len: decoded_data.len(),
             }
         }
+    }
+}
+
+pub struct Packet {
+    pub encoded_data: Box<[u8]>,
+}
+
+pub struct Packetizer {
+    packetizer: *mut liquid_sys::packetizer_s,
+    cursor: std::io::Cursor<Box<[u8]>>,
+    payload_len: usize,
+    encoded_payload_len: usize,
+}
+
+impl Packetizer {
+    const DECODED_MESSAGE_LENGTH: usize = 1024;
+    const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
+    const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8;
+    const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
+
+    fn encode_packet(&self, decoded_data: &[u8]) -> Box<[u8]> {
+        assert_eq!(decoded_data.len(), Self::DECODED_MESSAGE_LENGTH);
+        let mut encoded_data: Box<[u8]> = vec![0u8; self.encoded_payload_len].into();
+        unsafe {
+            let status = liquid_sys::packetizer_encode(
+                self.packetizer,
+                decoded_data.as_ptr() as *mut u8,
+                encoded_data.as_mut_ptr(),
+            );
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK as i32);
+        }
+
+        encoded_data
+    }
+}
+
+impl From<CompressedMetadata> for Packetizer {
+    fn from(compressed_metadata: CompressedMetadata) -> Self {
+        let packetizer = unsafe {
+            liquid_sys::packetizer_create(
+                Self::DECODED_MESSAGE_LENGTH as u32,
+                Self::CRC_SCHEME as i32,
+                Self::FEC_SCHEME_1 as i32,
+                Self::FEC_SCHEME_2 as i32,
+            )
+        };
+        let payload_len = compressed_metadata.data.len();
+        let encoded_payload_len = unsafe {
+            liquid_sys::packetizer_compute_enc_msg_len(
+                Self::DECODED_MESSAGE_LENGTH as u32,
+                Self::CRC_SCHEME as i32,
+                Self::FEC_SCHEME_1 as i32,
+                Self::FEC_SCHEME_2 as i32,
+            )
+        } as usize;
+        Packetizer {
+            packetizer,
+            cursor: std::io::Cursor::new(compressed_metadata.data),
+            payload_len,
+            encoded_payload_len,
+        }
+    }
+}
+
+impl Iterator for Packetizer {
+    type Item = Packet;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // send payload len first
+        let encoded_data = if 0 == self.cursor.position()
+            || self.cursor.position() as usize + Self::DECODED_MESSAGE_LENGTH > self.payload_len
+        {
+            let buf = [0u8; Self::DECODED_MESSAGE_LENGTH];
+            let mut local_cursor = std::io::Cursor::new(buf);
+
+            // send payload_len at the beginning of each packet
+            if self.cursor.position() == 0 {
+                local_cursor
+                    .write_all(&(self.payload_len as u32).to_be_bytes())
+                    .expect("Write to buffer failed.");
+            }
+
+            let bytes_written = local_cursor.position() as usize;
+            while self.cursor.position() < Self::DECODED_MESSAGE_LENGTH as u64 {
+                let dst = &mut local_cursor.get_mut()[bytes_written..];
+                let bytes_written = self.cursor.read(dst).expect("Failed to write bytes.");
+                local_cursor
+                    .seek_relative(bytes_written as i64)
+                    .expect("Seek out of range");
+                if bytes_written == 0 {
+                    break; // EOF
+                }
+            }
+            self.encode_packet(&buf)
+        } else {
+            let pos = self.cursor.position() as usize;
+            self.cursor
+                .seek_relative(Self::DECODED_MESSAGE_LENGTH as i64)
+                .expect("Seek out of range.");
+            let subslice = &self.cursor.get_ref()[pos..pos + Self::DECODED_MESSAGE_LENGTH];
+
+            self.encode_packet(&subslice)
+        };
+
+        Some(Packet { encoded_data })
     }
 }
 
