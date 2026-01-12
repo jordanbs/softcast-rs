@@ -496,13 +496,20 @@ pub mod packetizer {
                 is_first = false;
 
                 compressed_metadata.append(&mut decoded_packet.decoded_data);
+
+                // check to see if this CompressedMetadata is finished
+                if compressed_metadata.len() >= compressed_metadata_len {
+                    break;
+                }
             }
 
-            assert_eq!(
-                compressed_metadata.len(),
-                compressed_metadata_len,
-                "paylod_len from footer does not match compressed_metadata.len()"
-            );
+            if compressed_metadata.len() != compressed_metadata_len {
+                let err = Err("Packet EOF mismatch with payload_len.".into());
+                return Some(err);
+            }
+            if compressed_metadata.is_empty() {
+                return None; // no depacketizer is finished.
+            }
             let compressed_metadata = CompressedMetadata {
                 data: compressed_metadata.into(),
             };
@@ -858,29 +865,6 @@ mod tests {
 
         assert_eq!(data.into_boxed_slice(), new_data.data);
     }
-
-    //     #[test]
-    //     fn test_depacketizer_bad_payload() {
-    //         let mut data = vec![0xbau8; (223 * 4 - 2) * 8 - 4];
-    //         for (idx, byte) in data.iter_mut().enumerate() {
-    //             if idx % 7 == 0 {
-    //                 *byte ^= 0xff;
-    //             }
-    //         }
-    //
-    //         let compressed_metadata = CompressedMetadata {
-    //             data: data.clone().into(),
-    //         };
-    //         let packetizer = Packetizer::from(compressed_metadata);
-    //
-    //         let depacketizer = Depacketizer::from(packetizer);
-    //         let new_data: CompressedMetadata = depacketizer
-    //             .map(|result| result.expect("depacketizing failed."))
-    //             .next()
-    //             .expect("No compressed metadatas produced.");
-    //
-    //         assert_eq!(data.into_boxed_slice(), new_data.data);
-    //     }
 
     #[test]
     fn test_reader_to_packet_inverse_equality() {
