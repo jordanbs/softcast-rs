@@ -115,6 +115,10 @@ impl CompressedMetadata {
         }
     }
 
+    pub fn into_crc_frame(self) -> CompressedMetadataAndCRC {
+        self.into()
+    }
+
     pub fn into_chunk_metadata_iter(
         self,
     ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
@@ -154,6 +158,10 @@ impl CompressedMetadataAndCRC {
                 _ => Err("crc_validate_message failed."),
             }
         }
+    }
+
+    pub fn into_rs_frame(self) -> CompressedMetadataAndCRCAndRS {
+        self.into()
     }
 
     pub fn into_bytes(self) -> Box<[u8]> {
@@ -276,6 +284,41 @@ mod tests {
         for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
             assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
             assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
+        }
+    }
+
+    #[test]
+    fn test_reader_to_framed_metadata_inverse_equality() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let mut y_dct = macro_block.y_components.into_dct();
+
+        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_metadata: Box<_> = y_slices.iter().map(|slice| &slice.chunk_metadata).collect();
+
+        let y_compressed_metadata: CompressedMetadata = y_metadata.as_ref().into();
+        let y_framed_metadata = y_compressed_metadata.into_crc_frame().into_rs_frame();
+
+        let y_decompressed_metadata: Vec<ChunkMetadata> = y_framed_metadata
+            .into_recovered_data()
+            .expect("Reed Soloman failed")
+            .into_valid_data()
+            .expect("CRC failed")
+            .into_chunk_metadata_iter()
+            .expect("Decompress failed")
+            .collect();
+
+        assert_eq!(y_slices.len(), y_decompressed_metadata.len());
+
+        for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
+            assert_eq!(y_slice.chunk_metadata, *y_metadata);
         }
     }
 
