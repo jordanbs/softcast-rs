@@ -23,29 +23,29 @@ use zstd;
 // TODO: compress bitmap of discarded chunks with RLE and huffman
 // TODO: consider using protobuf or similar for metadata binary format
 
-trait ToBytes {
-    fn to_bytes(&self) -> [u8; 8];
+trait ToBytes<const SERIALIZED_SIZE: usize> {
+    fn to_bytes(&self) -> [u8; SERIALIZED_SIZE];
 }
 
-trait ConstantByteSize {
-    const CONSTANT_BYTE_SIZE: usize;
+trait SerializedSize {
+    const SERIALIZED_SIZE: usize;
 }
 
-impl ConstantByteSize for ChunkMetadata {
-    const CONSTANT_BYTE_SIZE: usize = 8;
+impl SerializedSize for ChunkMetadata {
+    const SERIALIZED_SIZE: usize = 8;
 }
 
-impl From<&ChunkMetadata> for [u8; ChunkMetadata::CONSTANT_BYTE_SIZE] {
+impl From<&ChunkMetadata> for [u8; ChunkMetadata::SERIALIZED_SIZE] {
     fn from(chunk: &ChunkMetadata) -> Self {
-        let mut bytes = [0u8; ChunkMetadata::CONSTANT_BYTE_SIZE];
+        let mut bytes = [0u8; ChunkMetadata::SERIALIZED_SIZE];
         bytes[0..4].copy_from_slice(&chunk.mean.to_be_bytes());
         bytes[4..8].copy_from_slice(&chunk.energy.to_be_bytes());
         bytes
     }
 }
 
-impl From<&[u8; ChunkMetadata::CONSTANT_BYTE_SIZE]> for ChunkMetadata {
-    fn from(bytes: &[u8; ChunkMetadata::CONSTANT_BYTE_SIZE]) -> Self {
+impl From<&[u8; ChunkMetadata::SERIALIZED_SIZE]> for ChunkMetadata {
+    fn from(bytes: &[u8; ChunkMetadata::SERIALIZED_SIZE]) -> Self {
         ChunkMetadata {
             mean: f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
             energy: f32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
@@ -53,8 +53,8 @@ impl From<&[u8; ChunkMetadata::CONSTANT_BYTE_SIZE]> for ChunkMetadata {
     }
 }
 
-impl ToBytes for ChunkMetadata {
-    fn to_bytes(&self) -> [u8; 8] {
+impl ToBytes<{ Self::SERIALIZED_SIZE }> for ChunkMetadata {
+    fn to_bytes(&self) -> [u8; Self::SERIALIZED_SIZE] {
         self.into()
     }
 }
@@ -83,7 +83,7 @@ fn decompress_metadata(
 
     // TODO: has no size hint.
     let iter = std::iter::from_fn(move || {
-        let mut buf = [0u8; ChunkMetadata::CONSTANT_BYTE_SIZE];
+        let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
         decoder.read_exact(&mut buf).ok()?; // handles EOF
 
         let meta = ChunkMetadata::from(&buf);
