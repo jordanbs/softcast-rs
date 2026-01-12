@@ -17,7 +17,7 @@
 
 use crate::source_coding::chunk::*;
 use liquid_sys;
-use std::io::Read;
+use std::io::{Read, Write};
 use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
@@ -65,15 +65,18 @@ fn compress_metadata<'a, I>(
 where
     I: Iterator<Item = &'a ChunkMetadata>,
 {
-    let binary_metadata: Box<[u8]> = chunk_metadata_iter
-        .flat_map(|metadata| metadata.to_bytes())
-        .collect();
+    let (_, max_chunks) = chunk_metadata_iter.size_hint();
+    let write_buf = Vec::with_capacity(max_chunks.unwrap_or_default());
+    let cursor = std::io::Cursor::new(write_buf);
 
-    // Could stream this, but this buffer should only be on the order of 1-2MB.
-    let compressed_metadata = zstd::stream::encode_all(std::io::Cursor::new(binary_metadata), 0)?;
+    let mut encoder = zstd::stream::Encoder::new(cursor, 0)?;
+    for metadata in chunk_metadata_iter {
+        encoder.write_all(&metadata.to_bytes())?
+    }
+    let compressed_bytes = encoder.finish()?.into_inner();
 
     Ok(CompressedMetadata {
-        data: compressed_metadata.into(),
+        data: compressed_bytes.into(),
     })
 }
 
