@@ -291,7 +291,7 @@ pub mod chunk {
     use super::transform_block_3d_dct::*;
     use super::*;
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct ChunkMetadata {
         pub mean: f32,
         pub energy: f32,

@@ -59,7 +59,7 @@ impl ToBytes for ChunkMetadata {
     }
 }
 
-pub fn compress_metadata<'a>(
+fn compress_metadata<'a>(
     chunk_metadata: &[&ChunkMetadata],
 ) -> Result<CompressedMetadata, Box<dyn std::error::Error>> {
     let binary_metadata: Box<[u8]> = chunk_metadata
@@ -75,7 +75,7 @@ pub fn compress_metadata<'a>(
     })
 }
 
-pub fn decompress_metadata(
+fn decompress_metadata(
     compressed_metadata: CompressedMetadata,
 ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
     let cursor = std::io::Cursor::new(compressed_metadata.data);
@@ -113,6 +113,12 @@ impl CompressedMetadata {
                 self.data.len() as u32,
             )
         }
+    }
+
+    pub fn into_chunk_metadata_iter(
+        self,
+    ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
+        decompress_metadata(self)
     }
 }
 
@@ -291,6 +297,24 @@ mod tests {
             .into_valid_data()
             .expect("validation failed");
         assert_eq!(orig_compressed_data, validated_compressed_metadata.data);
+    }
+    #[test]
+    fn test_metatada_decompression() {
+        let metadata_in = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            1024
+        ];
+        let metadata_refs: Box<_> = metadata_in.iter().collect();
+        let compressed_metadata: CompressedMetadata = metadata_refs.as_ref().into();
+        let medatadata_out: Vec<ChunkMetadata> = compressed_metadata
+            .into_chunk_metadata_iter()
+            .expect("Failed to decompress")
+            .collect();
+
+        assert_eq!(metadata_in, medatadata_out);
     }
 
     #[test]
