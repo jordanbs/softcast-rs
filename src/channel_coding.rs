@@ -23,6 +23,21 @@ pub mod slice {
     use super::*;
     use fwht;
 
+    pub struct SliceAndChunkMetadata<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
+        pub slice: Slice<'a, GOP_LENGTH, PixelType>,
+        pub chunk_metadata: ChunkMetadata,
+    }
+    impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
+        SliceAndChunkMetadata<'a, GOP_LENGTH, PixelType>
+    {
+        pub fn new(slice: Slice<'a, GOP_LENGTH, PixelType>, chunk_metadata: ChunkMetadata) -> Self {
+            Self {
+                slice,
+                chunk_metadata,
+            }
+        }
+    }
+
     pub enum ViewOrOwnedArray3<'a> {
         View(ndarray::ArrayViewMut3<'a, f32>),
         Owned(ndarray::Array3<f32>),
@@ -30,17 +45,15 @@ pub mod slice {
 
     pub struct Slice<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ViewOrOwnedArray3<'a>,
-        pub chunk_metadata: ChunkMetadata,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
         Slice<'a, GOP_LENGTH, PixelType>
     {
-        pub fn new(values: ViewOrOwnedArray3<'a>, chunk_metadata: ChunkMetadata) -> Self {
+        pub fn new(values: ViewOrOwnedArray3<'a>) -> Self {
             Self {
                 values,
-                chunk_metadata,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -65,7 +78,7 @@ pub mod slice {
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
         chunk_iter: std::iter::Peekable<I>,
-        inner_slice_iter: std::vec::IntoIter<Slice<'a, DCT_LENGTH, PixelType>>,
+        inner_slice_iter: std::vec::IntoIter<SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>>,
         chunks_per_gop: usize,
     }
 
@@ -87,7 +100,7 @@ pub mod slice {
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
-        type Item = Slice<'a, DCT_LENGTH, PixelType>;
+        type Item = SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
             loop {
@@ -114,7 +127,7 @@ pub mod slice {
 
     pub struct ChunkIter<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
     where
-        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>>,
     {
         slice_iter: std::iter::Peekable<I>,
         inner_chunk_iter: std::vec::IntoIter<Chunk<'a, DCT_LENGTH, PixelType>>,
@@ -124,7 +137,7 @@ pub mod slice {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
         ChunkIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>>,
     {
         pub fn new(slice_iter: I, chunks_per_gop: usize) -> Self {
             ChunkIter {
@@ -137,7 +150,7 @@ pub mod slice {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
         for ChunkIter<'a, DCT_LENGTH, PixelType, I>
     where
-        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>>,
     {
         type Item = Chunk<'a, DCT_LENGTH, PixelType>;
 
@@ -185,7 +198,7 @@ pub mod slice {
     }
 
     pub trait SliceIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
-        Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>> + Sized
+        Iterator<Item = SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>> + Sized
     {
         fn into_chunks_iter(
             self,
@@ -195,7 +208,7 @@ pub mod slice {
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
         SliceIterExt<'a, DCT_LENGTH, PixelType> for I
     where
-        I: Iterator<Item = Slice<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>>,
     {
         fn into_chunks_iter(
             self,
@@ -264,6 +277,19 @@ mod fwht {
             self.values().len()
         }
     }
+    impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> ValuesProvider
+        for SliceAndChunkMetadata<'_, DCT_LENGTH, PixelType>
+    {
+        fn value_at(&self, idx: usize) -> f32 {
+            self.slice.value_at(idx)
+        }
+        fn ptr_at(&self, idx: usize) -> *mut f32 {
+            self.slice.ptr_at(idx)
+        }
+        fn values_len(&self) -> usize {
+            self.slice.values_len()
+        }
+    }
     impl ValuesProvider for ndarray::Array3<f32> {
         fn value_at(&self, idx: usize) -> f32 {
             let idx = idx.to_3dim_index(self.dim());
@@ -303,6 +329,13 @@ mod fwht {
     {
         fn mul_assign(&mut self, rhs: f32) {
             self.values_mut().mul_assign(rhs);
+        }
+    }
+    impl<const DCT_LENGTH: usize, PixelType: HasPixelComponentType> std::ops::MulAssign<f32>
+        for SliceAndChunkMetadata<'_, DCT_LENGTH, PixelType>
+    {
+        fn mul_assign(&mut self, rhs: f32) {
+            self.slice.mul_assign(rhs);
         }
     }
 
@@ -382,7 +415,7 @@ mod fwht {
 
     pub fn fwht_chunks<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
         chunks: Box<[Chunk<'a, DCT_LENGTH, PixelType>]>,
-    ) -> Result<Box<[Slice<'a, DCT_LENGTH, PixelType>]>, &'static str> {
+    ) -> Result<Box<[SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>]>, &'static str> {
         // adapted from fwht crate, with the intention of avoiding copies
         let mut chunks = chunks;
 
@@ -400,14 +433,13 @@ mod fwht {
 
         let mut slices = Vec::with_capacity(hadamard_len);
         for chunk in chunks {
-            let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values), chunk.metadata);
+            let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values));
+            let slice = SliceAndChunkMetadata::new(slice, chunk.metadata);
             slices.push(slice);
         }
         for padding_chunk in padding_chunks {
-            let slice = Slice::new(
-                ViewOrOwnedArray3::Owned(padding_chunk),
-                ChunkMetadata::default(), // zero
-            );
+            let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk));
+            let slice = SliceAndChunkMetadata::new(slice, ChunkMetadata::default() /* zero */);
             slices.push(slice);
         }
 
@@ -415,7 +447,7 @@ mod fwht {
     }
 
     pub fn fwht_slices<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>(
-        slices: Box<[Slice<'a, DCT_LENGTH, PixelType>]>,
+        slices: Box<[SliceAndChunkMetadata<'a, DCT_LENGTH, PixelType>]>,
         num_padding_rows: usize,
     ) -> Result<Box<[Chunk<'a, DCT_LENGTH, PixelType>]>, &'static str> {
         let mut slices = slices;
@@ -426,7 +458,7 @@ mod fwht {
         let mut chunks = Vec::with_capacity(slices.len() - num_padding_rows);
         for slice in slices {
             // consume slice.values
-            let values = match slice.values {
+            let values = match slice.slice.values {
                 ViewOrOwnedArray3::View(view) => view,
                 ViewOrOwnedArray3::Owned(_) => {
                     // TODO: This assumption is not be true in the testing loopback.
@@ -445,10 +477,6 @@ mod fwht {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset_reader_writer::pixel_buffer::*;
-    use crate::asset_reader_writer::transform_block_3d::*;
-    use crate::channel_coding::slice::{ChunkIterExt, SliceIterExt};
-    use asset_reader::*;
     use num_complex::Complex32;
 
     #[test]
@@ -650,8 +678,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_slice_inverse_equality() {
-        use crate::source_coding::chunk::ChunkIterExt; // idk why this only works here..
+        use crate::asset_reader_writer::pixel_buffer::*;
+        use crate::asset_reader_writer::transform_block_3d::*;
+        use crate::channel_coding::slice::{ChunkIterExt, SliceIterExt};
+        use asset_reader::*; // idk why this only works here..
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
