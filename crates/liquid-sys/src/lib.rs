@@ -14,16 +14,6 @@
 //
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
-//
-// #![allow(non_upper_case_globals)]
-// #![allow(non_camel_case_types)]
-// #![allow(non_snake_case)]
-// #![allow(improper_ctypes)] // for u128
-//
-//
-// include!(concat!(env!("OUT_DIR"), "/liquid.rs"));
-
-// use libc::{c_float, c_int};
 
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]

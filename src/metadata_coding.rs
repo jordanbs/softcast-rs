@@ -227,7 +227,7 @@ impl CompressedMetadataAndCRCAndRS {
     ) -> Result<CompressedMetadataAndCRC, Box<dyn std::error::Error>> {
         let mut recovered_data = vec![0u8; self.decoded_data_len];
         unsafe {
-            let fec = liquid_sys::fec_create(Self::FEC_SCHEME, std::ptr::null_mut());
+            let fec = liquid_sys::fec_create(Self::FEC_SCHEME, std::ptr::null_mut()); // TODO: fec_destroy on drop
             let status = liquid_sys::fec_decode(
                 fec,
                 recovered_data.len() as u32,
@@ -252,7 +252,7 @@ impl From<CompressedMetadataAndCRC> for CompressedMetadataAndCRCAndRS {
                 liquid_sys::fec_get_enc_msg_length(Self::FEC_SCHEME, decoded_data.len() as u32)
                     as usize;
             let mut encoded_data: Box<[u8]> = vec![0u8; encoded_data_len].into();
-            let fec = liquid_sys::fec_create(Self::FEC_SCHEME, std::ptr::null_mut());
+            let fec = liquid_sys::fec_create(Self::FEC_SCHEME, std::ptr::null_mut()); // TODO: fec_destroy on drop
 
             let success = liquid_sys::fec_encode(
                 fec,

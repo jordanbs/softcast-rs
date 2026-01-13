@@ -291,18 +291,10 @@ pub mod chunk {
     use super::transform_block_3d_dct::*;
     use super::*;
 
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Default)]
     pub struct ChunkMetadata {
         pub mean: f32,
         pub energy: f32,
-    }
-    impl Default for ChunkMetadata {
-        fn default() -> Self {
-            ChunkMetadata {
-                mean: 0f32,
-                energy: 0f32,
-            }
-        }
     }
 
     pub struct Chunk<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
