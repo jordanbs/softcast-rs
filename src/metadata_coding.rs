@@ -97,6 +97,22 @@ fn decompress_metadata(
     Ok(iter)
 }
 
+fn decompress_metadata2<R: Read>(
+    reader: R,
+) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
+    let mut decoder = zstd::stream::read::Decoder::new(reader)?;
+
+    // TODO: has no size hint.
+    let iter = std::iter::from_fn(move || {
+        let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
+        decoder.read_exact(&mut buf).ok()?; // handles EOF
+
+        let meta = ChunkMetadata::from(&buf);
+        Some(meta)
+    });
+    Ok(iter)
+}
+
 #[derive(Debug)]
 pub struct CompressedMetadata {
     data: Box<[u8]>,
@@ -402,6 +418,10 @@ pub mod packetizer {
     pub struct Depacketizer<I: Iterator<Item = EncodedPacket>> {
         packetizer: *mut liquid_sys::packetizer_s,
         packet_iter: I,
+        working_cursor: std::io::Cursor<Vec<u8>>,
+        has_read_first_packet: bool,
+        payload_len: std::cell::OnceCell<usize>,
+        bytes_read: usize,
     }
 
     impl<I: Iterator<Item = EncodedPacket>> From<I> for Depacketizer<I> {
@@ -411,11 +431,23 @@ pub mod packetizer {
             Self {
                 packetizer,
                 packet_iter,
+                working_cursor: std::io::Cursor::new(vec![]),
+                has_read_first_packet: false,
+                payload_len: std::cell::OnceCell::new(),
+                bytes_read: 0,
             }
         }
     }
 
     impl<I: Iterator<Item = EncodedPacket>> Depacketizer<I> {
+        pub fn into_chunk_metadata_iter(
+            self,
+        ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
+            let my_result = decompress_metadata2(self);
+            eprintln!("asdf");
+            return my_result;
+        }
+
         fn decode_packet(
             &self,
             packet: EncodedPacket,
@@ -471,6 +503,69 @@ pub mod packetizer {
                 decoded_data: decoded_data.into(),
                 compressed_metadata_len: payload_len,
             })
+        }
+    }
+
+    impl<I: Iterator<Item = EncodedPacket>> Read for Depacketizer<I> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let mut buf = buf;
+            let mut bytes_in_this_read = 0;
+
+            loop {
+                // Check if cursor is at the end its underlying buffer
+                if self.working_cursor.position() as usize == self.working_cursor.get_ref().len() {
+                    let encoded_packet = self.packet_iter.next();
+                    if encoded_packet.is_none() {
+                        // No more packets
+                        self.bytes_read += bytes_in_this_read;
+
+                        let payload_len = match self.payload_len.get() {
+                            Some(&payload_len) => payload_len,
+                            None => 0,
+                        };
+                        if payload_len != self.bytes_read {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "EOF does not match payload_len.",
+                            ));
+                        }
+                        // return EOF
+                        return Ok(bytes_in_this_read);
+                    }
+                    let encoded_packet = encoded_packet.unwrap();
+                    let decoded_packet =
+                        self.decode_packet(encoded_packet, !self.has_read_first_packet);
+                    if decoded_packet.is_err() {
+                        let decode_err = decoded_packet.err().unwrap();
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            decode_err.to_string(),
+                        ));
+                    }
+                    let decoded_packet = decoded_packet.unwrap();
+                    self.has_read_first_packet = true;
+                    let _ = self
+                        .payload_len
+                        .get_or_init(|| decoded_packet.compressed_metadata_len.unwrap());
+                    self.working_cursor = std::io::Cursor::new(decoded_packet.decoded_data);
+                }
+
+                let remaining_in_cursor =
+                    self.working_cursor.get_ref().len() - self.working_cursor.position() as usize;
+
+                if remaining_in_cursor < buf.len() {
+                    // read is asking for more than what is in cursor.
+                    // read remainder of cursor and loop
+                    bytes_in_this_read +=
+                        self.working_cursor.read(&mut buf[..remaining_in_cursor])?;
+                    buf = &mut buf[remaining_in_cursor..];
+                } else {
+                    // working cursor has enough buffer to fully satisfy this read.
+                    bytes_in_this_read += self.working_cursor.read(buf)?;
+                    self.bytes_read += bytes_in_this_read;
+                    return Ok(bytes_in_this_read);
+                }
+            }
         }
     }
 
@@ -892,6 +987,40 @@ mod tests {
             .expect("Error in depacketizing.");
 
         let y_decompressed_metadata: Box<[ChunkMetadata]> = y_compressed_metadata
+            .into_chunk_metadata_iter()
+            .expect("Failed to create chunk metadata iter")
+            .collect();
+
+        assert_eq!(y_slices.len(), y_decompressed_metadata.len());
+
+        for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
+            assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
+            assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
+        }
+    }
+
+    #[test]
+    fn test_reader_to_packet_inverse_equality_reader() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let mut y_dct = macro_block.y_components.into_dct();
+
+        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_compressed_metadata: CompressedMetadata =
+            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
+
+        let packetizer: Packetizer = y_compressed_metadata.into();
+        let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
+        let depacketizer = Depacketizer::from(encoded_packets.into_iter());
+
+        let y_decompressed_metadata: Box<[ChunkMetadata]> = depacketizer
             .into_chunk_metadata_iter()
             .expect("Failed to create chunk metadata iter")
             .collect();
