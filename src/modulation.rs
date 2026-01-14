@@ -146,3 +146,35 @@ pub mod metadata {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metadata::*;
+
+    #[test]
+    fn test_modem_basic() {
+        let mut encoded_packets: Vec<EncodedPacket> =
+            vec![[0xbau8; ENCODED_MESSAGE_LENGTH].into(); 333];
+
+        for (idx, packet) in &mut encoded_packets.iter_mut().enumerate() {
+            packet.encoded_data[idx] = 0x11u8;
+        }
+        let cloned_encoded_packets = encoded_packets.clone();
+
+        let modulator = MetadataModulator::from(encoded_packets.into_iter());
+        let demodulator = MetadataDemodulator::from(modulator.flatten());
+
+        let new_encoded_packets_iter =
+            demodulator.map(|result| result.expect("Failed to demodulate"));
+
+        let mut num_new_packets = 0;
+        for (original_packet, new_packet) in
+            cloned_encoded_packets.iter().zip(new_encoded_packets_iter)
+        {
+            num_new_packets += 1;
+            assert_eq!(original_packet.encoded_data, new_packet.encoded_data);
+        }
+        assert_eq!(cloned_encoded_packets.len(), num_new_packets);
+    }
+}

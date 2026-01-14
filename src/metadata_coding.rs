@@ -279,6 +279,7 @@ pub mod packetizer {
         pub compressed_metadata_len: Option<usize>, // only present in the first packet of a compressed metadata
     }
 
+    #[derive(Debug, Clone, Copy)]
     pub struct EncodedPacket {
         pub encoded_data: [u8; ENCODED_MESSAGE_LENGTH],
     }
