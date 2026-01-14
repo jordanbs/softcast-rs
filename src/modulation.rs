@@ -23,29 +23,10 @@ use num_complex::Complex32;
 pub struct QuadratureSymbol {
     pub value: Complex32,
 }
-trait ToByte {
-    fn to_byte(self, modem: *mut liquid_sys::modemcf_s) -> u8;
-}
 trait FromByte {
     fn from_byte(byte: u8, modem: *mut liquid_sys::modemcf_s) -> Self;
 }
 type BPSKModulatedByte = [QuadratureSymbol; 8];
-impl ToByte for &BPSKModulatedByte {
-    fn to_byte(self, modem: *mut liquid_sys::modemcf_s) -> u8 {
-        let quadature_symbols = self;
-
-        let mut byte = 0u8;
-        for (bitpos, q_symbol) in quadature_symbols.iter().enumerate().rev() {
-            let mut bitval = 0u32;
-            let status =
-                unsafe { liquid_sys::modemcf_demodulate(modem, q_symbol.value, &mut bitval) };
-            assert_eq!(status as u32, liquid_sys::liquid_error_code_LIQUID_OK);
-            let bitval = bitval as u8;
-            byte |= bitval << bitpos;
-        }
-        byte
-    }
-}
 impl FromByte for BPSKModulatedByte {
     fn from_byte(byte: u8, modem: *mut liquid_sys::modemcf_s) -> Self {
         let mut quadrature_symbols = BPSKModulatedByte::default();
@@ -123,26 +104,31 @@ pub mod metadata {
     impl<I: Iterator<Item = QuadratureSymbol>> Iterator for MetadataDemodulator<I> {
         // TODO: size hint
 
-        type Item = Result<EncodedPacket, Box<dyn std::error::Error>>;
+        type Item = EncodedPacket;
         fn next(&mut self) -> Option<Self::Item> {
             let mut packet_buf = [0u8; ENCODED_MESSAGE_LENGTH];
             for byte in &mut packet_buf {
-                let mut bpsk_byte = BPSKModulatedByte::default();
-                let mut bits_consumed = 0;
-                for quadrature_symbol in &mut bpsk_byte {
-                    if let Some(consumed_symbol) = self.inner.next() {
-                        *quadrature_symbol = consumed_symbol;
-                        bits_consumed += 1;
-                    } else if bits_consumed != 0 {
-                        let err =
-                            Err("Not enough quadrature symbols to create a full byte.".into());
-                        return Some(err);
+                for bitpos in 0..8 {
+                    // assume 0 bits if not inner runs out, let CRC reject
+                    if let Some(q_symbol) = self.inner.next() {
+                        let mut bitval = 0u32;
+                        let status = unsafe {
+                            liquid_sys::modemcf_demodulate(
+                                self.modemcf,
+                                q_symbol.value,
+                                &mut bitval,
+                            )
+                        };
+                        assert_eq!(status as u32, liquid_sys::liquid_error_code_LIQUID_OK);
+
+                        let bitval = bitval as u8;
+                        *byte |= bitval << bitpos;
+                    } else {
+                        return Some(packet_buf.into());
                     }
                 }
-                *byte = bpsk_byte.to_byte(self.modemcf);
             }
-            let packet: EncodedPacket = packet_buf.into();
-            Some(Ok(packet))
+            Some(packet_buf.into())
         }
     }
 }
@@ -165,13 +151,8 @@ mod tests {
         let modulator = MetadataModulator::from(encoded_packets.into_iter());
         let demodulator = MetadataDemodulator::from(modulator.flatten());
 
-        let new_encoded_packets_iter =
-            demodulator.map(|result| result.expect("Failed to demodulate"));
-
         let mut num_new_packets = 0;
-        for (original_packet, new_packet) in
-            cloned_encoded_packets.iter().zip(new_encoded_packets_iter)
-        {
+        for (original_packet, new_packet) in cloned_encoded_packets.iter().zip(demodulator) {
             num_new_packets += 1;
             assert_eq!(original_packet.encoded_data, new_packet.encoded_data);
         }
