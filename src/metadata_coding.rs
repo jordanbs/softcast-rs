@@ -280,11 +280,16 @@ pub mod packetizer {
     }
 
     pub struct EncodedPacket {
-        pub encoded_data: Box<[u8]>,
+        pub encoded_data: [u8; ENCODED_MESSAGE_LENGTH],
+    }
+    impl From<[u8; ENCODED_MESSAGE_LENGTH]> for EncodedPacket {
+        fn from(encoded_data: [u8; ENCODED_MESSAGE_LENGTH]) -> Self {
+            EncodedPacket { encoded_data }
+        }
     }
 
     const DECODED_MESSAGE_LENGTH: usize = 223 * 4; // liquid uses {255, 223}-rs
-    const ENCODED_MESSAGE_LENGTH: usize = 1060;
+    pub const ENCODED_MESSAGE_LENGTH: usize = 1060;
     const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
     const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8;
     const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
@@ -292,7 +297,6 @@ pub mod packetizer {
     pub struct Packetizer {
         packetizer: *mut liquid_sys::packetizer_s,
         payload_cursor: std::io::Cursor<Box<[u8]>>,
-        encoded_payload_len: usize,
     }
 
     fn new_packetizer() -> *mut liquid_sys::packetizer_s {
@@ -319,17 +323,17 @@ pub mod packetizer {
                     FEC_SCHEME_2 as i32,
                 )
             } as usize;
+            assert_eq!(encoded_payload_len, ENCODED_MESSAGE_LENGTH);
 
             Packetizer {
                 packetizer,
                 payload_cursor: std::io::Cursor::new(data),
-                encoded_payload_len,
             }
         }
 
-        fn encode_packet(&self, decoded_data: &[u8]) -> Box<[u8]> {
+        fn encode_packet(&self, decoded_data: &[u8]) -> [u8; ENCODED_MESSAGE_LENGTH] {
             assert_eq!(decoded_data.len(), DECODED_MESSAGE_LENGTH);
-            let mut encoded_data: Box<[u8]> = vec![0u8; self.encoded_payload_len].into();
+            let mut encoded_data = [0u8; ENCODED_MESSAGE_LENGTH];
             unsafe {
                 let status = liquid_sys::packetizer_encode(
                     self.packetizer,
@@ -409,7 +413,7 @@ pub mod packetizer {
                     footer.copy_from_slice(&decoded_packet_len.to_be_bytes());
                     let encoded_data = self.encode_packet(&buf);
 
-                    Some(EncodedPacket { encoded_data })
+                    Some(EncodedPacket::from(encoded_data))
                 }
             }
         }
