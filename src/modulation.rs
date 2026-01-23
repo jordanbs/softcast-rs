@@ -133,6 +133,47 @@ pub mod metadata {
     }
 }
 
+pub mod slices {
+    use super::*;
+    use crate::asset_reader_writer::HasPixelComponentType;
+    use crate::channel_coding::slice::*;
+
+    pub struct SliceModulator<
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+    > {
+        slice_iter: I,
+    }
+
+    impl<
+            'a,
+            const GOP_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+        > From<I> for SliceModulator<'a, GOP_LENGTH, PixelType, I>
+    {
+        fn from(slice_iter: I) -> Self {
+            Self { slice_iter }
+        }
+    }
+
+    impl<
+            'a,
+            const GOP_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+        > Iterator for SliceModulator<'a, GOP_LENGTH, PixelType, I>
+    {
+        type Item = QuadratureSymbol;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
