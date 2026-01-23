@@ -23,6 +23,11 @@ use num_complex::Complex32;
 pub struct QuadratureSymbol {
     pub value: Complex32,
 }
+impl From<Complex32> for QuadratureSymbol {
+    fn from(value: Complex32) -> Self {
+        Self { value }
+    }
+}
 trait FromByte {
     fn from_byte(byte: u8, modem: *mut liquid_sys::modemcf_s) -> Self;
 }
@@ -109,7 +114,7 @@ pub mod metadata {
             let mut packet_buf = [0u8; ENCODED_MESSAGE_LENGTH];
             for byte in &mut packet_buf {
                 for bitpos in 0..8 {
-                    // assume 0 bits if not inner runs out, let CRC reject
+                    // assume 0 bits if inner runs out, let CRC reject
                     if let Some(q_symbol) = self.inner.next() {
                         let mut bitval = 0u32;
                         let status = unsafe {
@@ -136,6 +141,7 @@ pub mod metadata {
 pub mod slices {
     use super::*;
     use crate::asset_reader_writer::HasPixelComponentType;
+    use crate::channel_coding::fwht::ValuesProvider;
     use crate::channel_coding::slice::*;
 
     pub struct SliceModulator<
@@ -145,6 +151,8 @@ pub mod slices {
         I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
     > {
         slice_iter: I,
+        working_slice: Option<Slice<'a, GOP_LENGTH, PixelType>>,
+        working_idx: usize,
     }
 
     impl<
@@ -155,7 +163,37 @@ pub mod slices {
         > From<I> for SliceModulator<'a, GOP_LENGTH, PixelType, I>
     {
         fn from(slice_iter: I) -> Self {
-            Self { slice_iter }
+            Self {
+                slice_iter,
+                working_slice: None,
+                working_idx: 0,
+            }
+        }
+    }
+
+    impl<
+            'a,
+            const GOP_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+        > SliceModulator<'a, GOP_LENGTH, PixelType, I>
+    {
+        fn next_real(&mut self) -> Option<f32> {
+            if self.working_slice.is_none() {
+                self.working_slice = self.slice_iter.next();
+            }
+            let working_slice = self.working_slice.as_ref()?; // ends iteration
+
+            let values_len = working_slice.values_len();
+            if self.working_idx >= values_len {
+                return None;
+            }
+            let real_value = working_slice.value_at(self.working_idx);
+            self.working_idx += 1;
+            if self.working_idx >= values_len {
+                self.working_slice = None;
+            }
+            Some(real_value)
         }
     }
 
@@ -169,7 +207,11 @@ pub mod slices {
         type Item = QuadratureSymbol;
 
         fn next(&mut self) -> Option<Self::Item> {
-            None
+            // TODO: use size hint for more thorough interleaving.
+            let q_val = self.next_real()?;
+            let i_val = self.next_real().unwrap_or_default(); // don't drop q_val
+
+            Some(Complex32::new(q_val, i_val).into())
         }
     }
 }

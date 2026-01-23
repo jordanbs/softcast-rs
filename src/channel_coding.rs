@@ -219,11 +219,11 @@ pub mod slice {
     }
 }
 
-mod fwht {
+pub mod fwht {
     use super::*;
     use rayon::prelude::*;
 
-    pub(super) trait ValuesProvider {
+    pub trait ValuesProvider {
         fn value_at(&self, idx: usize) -> f32;
         fn ptr_at(&self, idx: usize) -> *mut f32;
         fn values_len(&self) -> usize;
