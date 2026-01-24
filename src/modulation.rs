@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn test_modulate_multiple_slices() {
+    fn test_modulate_multiple_slices_1() {
         let dim = (1, 30, 44);
         let mut array3_orig = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2)); // 5 slices
         const GOP_LEN: usize = 15;
@@ -364,6 +364,45 @@ mod tests {
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 5);
+
+        for (slice_new, view_orig) in slices_new
+            .iter()
+            .zip(array3_orig_clone.exact_chunks(dim).into_iter())
+        {
+            assert_eq!(view_orig, slice_new.values());
+        }
+    }
+
+    #[test]
+    fn test_modulate_multiple_slices_2() {
+        let dim = (1, 30, 44);
+        // 500 slices
+        let gop_dim = (dim.0 * 5, dim.1 * 10, dim.2 * 10);
+        let mut array3_orig = ndarray::Array3::<f32>::zeros(gop_dim);
+        const GOP_LEN: usize = 15;
+
+        let mut val = 0f32;
+        for dst in array3_orig.iter_mut() {
+            *dst = val;
+            val += 1f32;
+        }
+        let array3_orig_clone = array3_orig.clone();
+
+        let slices_orig: Vec<Slice<'_, GOP_LEN, YPixelComponentType>> = array3_orig
+            .exact_chunks_mut(dim)
+            .into_iter()
+            .map(|view| Slice::from_view(view))
+            .collect();
+
+        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
+
+        let mut array3_new = ndarray::Array3::<f32>::zeros(gop_dim);
+        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
+            SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
+
+        let slices_new: Vec<_> = slice_demodulator.collect();
+        assert_eq!(slices_new.len(), 500);
 
         for (slice_new, view_orig) in slices_new
             .iter()
