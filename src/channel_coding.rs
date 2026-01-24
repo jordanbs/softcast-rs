@@ -461,7 +461,7 @@ pub mod fwht {
             let values = match slice.slice.values {
                 ViewOrOwnedArray3::View(view) => view,
                 ViewOrOwnedArray3::Owned(_) => {
-                    // TODO: This assumption is not be true in the testing loopback.
+                    // TODO: This assumption might not be true in the testing loopback.
                     panic!("slice not expected to own its data in decode.")
                 }
             };

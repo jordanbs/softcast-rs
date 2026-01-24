@@ -143,6 +143,7 @@ pub mod slices {
     use crate::asset_reader_writer::HasPixelComponentType;
     use crate::channel_coding::fwht::ValuesProvider;
     use crate::channel_coding::slice::*;
+    use ndarray;
 
     pub struct SliceModulator<
         'a,
@@ -208,10 +209,70 @@ pub mod slices {
 
         fn next(&mut self) -> Option<Self::Item> {
             // TODO: use size hint for more thorough interleaving.
-            let q_val = self.next_real()?;
-            let i_val = self.next_real().unwrap_or_default(); // don't drop q_val
+            let i_val = self.next_real()?;
+            let q_val = self.next_real().unwrap_or_default(); // don't drop i_val
 
-            Some(Complex32::new(q_val, i_val).into())
+            Some(Complex32::new(i_val, q_val).into())
+        }
+    }
+
+    pub struct SliceDemodulator<
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = QuadratureSymbol>,
+    > {
+        quadrature_symbol_iter: I,
+        exact_array3_chunks_iter: ndarray::iter::ExactChunksIterMut<'a, f32, ndarray::Ix3>,
+        _marker: std::marker::PhantomData<PixelType>,
+    }
+
+    impl<
+            'a,
+            const GOP_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = QuadratureSymbol>,
+        > SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
+    {
+        pub fn new(
+            slice_dimensions: (usize, usize, usize),
+            quadrature_symbol_iter: I,
+            array3: &'a mut ndarray::Array3<f32>,
+        ) -> Self {
+            Self {
+                quadrature_symbol_iter,
+                exact_array3_chunks_iter: array3.exact_chunks_mut(slice_dimensions).into_iter(),
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<
+            'a,
+            const GOP_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = QuadratureSymbol>,
+        > Iterator for SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
+    {
+        type Item = Slice<'a, GOP_LENGTH, PixelType>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let slice_values = self.exact_array3_chunks_iter.next()?;
+            let mut slice: Slice<'a, GOP_LENGTH, PixelType> =
+                Slice::new(ViewOrOwnedArray3::View(slice_values));
+
+            let mut iq_iter = self
+                .quadrature_symbol_iter
+                .by_ref()
+                .flat_map(|symbol| [symbol.value.re, symbol.value.im]);
+
+            for dst in &mut slice.values_mut() {
+                *dst = iq_iter
+                    .next()
+                    .expect("Not enough values to complete slices.");
+            }
+
+            Some(slice)
         }
     }
 }
