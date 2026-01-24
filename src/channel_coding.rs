@@ -58,6 +58,13 @@ pub mod slice {
             }
         }
 
+        pub fn from_view(view: ndarray::ArrayViewMut3<'a, f32>) -> Self {
+            Self::new(ViewOrOwnedArray3::View(view))
+        }
+        pub fn from_owned(owned: ndarray::Array3<f32>) -> Self {
+            Self::new(ViewOrOwnedArray3::Owned(owned))
+        }
+
         pub fn values(&self) -> ndarray::ArrayView3<'_, f32> {
             match &self.values {
                 ViewOrOwnedArray3::View(view) => view.into(),
@@ -433,12 +440,12 @@ pub mod fwht {
 
         let mut slices = Vec::with_capacity(hadamard_len);
         for chunk in chunks {
-            let slice = Slice::new(ViewOrOwnedArray3::View(chunk.values));
+            let slice = Slice::from_view(chunk.values);
             let slice = SliceAndChunkMetadata::new(slice, chunk.metadata);
             slices.push(slice);
         }
         for padding_chunk in padding_chunks {
-            let slice = Slice::new(ViewOrOwnedArray3::Owned(padding_chunk));
+            let slice = Slice::from_owned(padding_chunk);
             let slice = SliceAndChunkMetadata::new(slice, ChunkMetadata::default() /* zero */);
             slices.push(slice);
         }

@@ -258,8 +258,7 @@ pub mod slices {
 
         fn next(&mut self) -> Option<Self::Item> {
             let slice_values = self.exact_array3_chunks_iter.next()?;
-            let mut slice: Slice<'a, GOP_LENGTH, PixelType> =
-                Slice::new(ViewOrOwnedArray3::View(slice_values));
+            let mut slice: Slice<'a, GOP_LENGTH, PixelType> = Slice::from_view(slice_values);
 
             let mut iq_iter = self
                 .quadrature_symbol_iter
@@ -280,6 +279,9 @@ pub mod slices {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asset_reader_writer::*;
+    use crate::channel_coding::slice::*;
+    use crate::modulation::slices::*;
     use metadata::*;
 
     #[test]
@@ -301,5 +303,36 @@ mod tests {
             assert_eq!(original_packet.encoded_data, new_packet.encoded_data);
         }
         assert_eq!(cloned_encoded_packets.len(), num_new_packets);
+    }
+
+    #[test]
+    fn test_modulate_one_slice() {
+        let dim = (1, 30, 44);
+        let mut array3_orig = ndarray::Array3::<f32>::zeros(dim);
+        const GOP_LEN: usize = 15;
+
+        let mut val = 0f32;
+        for dst in array3_orig.iter_mut() {
+            *dst = val;
+            val += 1f32;
+        }
+
+        let array3_orig_clone = array3_orig.clone();
+
+        let slice_orig: Slice<'_, GOP_LEN, YPixelComponentType> = Slice::from_owned(array3_orig);
+        let slices_orig = [slice_orig];
+
+        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
+
+        let mut array3_new = ndarray::Array3::<f32>::zeros(dim);
+        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
+            SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
+
+        let slices_new: Vec<_> = slice_demodulator.collect();
+        assert_eq!(slices_new.len(), 1);
+        let slice_new = slices_new.first().expect("Failed to grab slice.");
+
+        assert_eq!(array3_orig_clone, slice_new.values());
     }
 }
