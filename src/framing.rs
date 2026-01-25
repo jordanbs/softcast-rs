@@ -141,6 +141,8 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
 pub struct OFDMFrameSynchronizer<I: Iterator<Item = OFDMSymbol>> {
     ofdm_symbol_iter: I,
     ofdm_framesync: liquid_sys::ofdmframesync,
+    self_cell_ptr: std::cell::OnceCell<*const Self>,
+    time_domain_symbols: std::collections::VecDeque<QuadratureSymbol>,
 }
 
 #[allow(non_snake_case)]
@@ -150,21 +152,30 @@ extern "C" fn ofdm_framesync_callback<T: OFDMFrameSyncCallback>(
     _M: u32,
     _userdata: *mut core::ffi::c_void,
 ) -> i32 {
-    let cell_ptr: *const std::cell::OnceCell<T> = _userdata.cast();
-    let cell: &std::cell::OnceCell<T> = unsafe { cell_ptr.as_ref().expect("NULL cell_ptr.") };
-    let obj = cell.get().expect("Cell not initialized.");
-    obj.ofdm_framesync_callback(_y, _p, _M)
+    let subcarrier_samples = unsafe { std::slice::from_raw_parts(_y, _M as usize) };
+    let subcarrier_allocation = unsafe { std::slice::from_raw_parts(_p, _M as usize) };
+
+    let cell_ptr = _userdata as *mut std::cell::OnceCell<T>;
+    let cell = unsafe { cell_ptr.as_mut().expect("NULL cell_ptr.") };
+    let obj = cell.get_mut().expect("Cell not initialized.");
+
+    obj.ofdm_framesync_callback(subcarrier_samples, subcarrier_allocation);
+
+    liquid_sys::liquid_error_code_LIQUID_OK as i32 // always ok
 }
 
 trait OFDMFrameSyncCallback {
-    #[allow(non_snake_case)]
-    fn ofdm_framesync_callback(&self, _y: *mut Complex32, _p: *mut u8, _M: u32) -> i32;
+    fn ofdm_framesync_callback(
+        &mut self,
+        subcarrier_samples: &[Complex32],
+        subcarrier_allocation: &[u8],
+    );
 }
 
 impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
     fn from(ofdm_symbol_iter: I) -> Self {
-        let cell = std::cell::OnceCell::new();
-        let cell_cvoid = &cell as *const std::cell::OnceCell<_> as *const core::ffi::c_void;
+        let mut cell = std::cell::OnceCell::new();
+        let cell_cvoid = &mut cell as *mut std::cell::OnceCell<_> as *mut core::ffi::c_void;
 
         let ofdm_framesync = unsafe {
             liquid_sys::ofdmframesync_create(
@@ -173,24 +184,42 @@ impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
                 TAPER_LEN as u32,
                 std::ptr::null_mut(),
                 Some(ofdm_framesync_callback::<Self>),
-                cell_cvoid as *mut core::ffi::c_void, // not actually mut
+                cell_cvoid,
             )
         }; // TODO: destroy on drop
         assert_ne!(std::ptr::null_mut(), ofdm_framesync);
+
         let new_self = Self {
             ofdm_symbol_iter,
             ofdm_framesync,
+            time_domain_symbols: vec![].into(),
+            self_cell_ptr: cell, // moved
         };
-        let _ = cell.set(&new_self); // .unwrap() requires Debug for self and I.
 
+        // No need for a weak ref, as callback is only synchronously called by .next().
+        let cell_ref = &new_self.self_cell_ptr;
+        let new_self_ptr = &new_self as *const Self;
+        cell_ref.set(new_self_ptr).unwrap();
         return new_self;
     }
 }
 
 impl<I: Iterator<Item = OFDMSymbol>> OFDMFrameSyncCallback for OFDMFrameSynchronizer<I> {
-    #[allow(non_snake_case)]
-    fn ofdm_framesync_callback(&self, _y: *mut Complex32, _p: *mut u8, _M: u32) -> i32 {
-        0
+    fn ofdm_framesync_callback(
+        &mut self,
+        subcarrier_samples: &[Complex32],
+        subcarrier_allocation: &[u8],
+    ) {
+        let mut new_samples: std::collections::VecDeque<_> = subcarrier_samples
+            .iter()
+            .enumerate()
+            // ignore null and pilot subcarriers
+            .filter(|(idx, _)| {
+                liquid_sys::OFDMFRAME_SCTYPE_DATA == subcarrier_allocation[*idx].into()
+            })
+            .map(|(_, sample)| QuadratureSymbol { value: *sample })
+            .collect();
+        self.time_domain_symbols.append(&mut new_samples);
     }
 }
 
@@ -198,16 +227,23 @@ impl<I: Iterator<Item = OFDMSymbol>> Iterator for OFDMFrameSynchronizer<I> {
     type Item = QuadratureSymbol;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let ofdm_symbol = self.ofdm_symbol_iter.next()?;
-        let status = unsafe {
-            liquid_sys::ofdmframesync_execute(
-                self.ofdm_framesync,
-                ofdm_symbol.time_domain_symbols.as_ptr() as *mut Complex32,
-                FRAME_LEN as u32,
-            )
-        } as u32;
-        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+        while self.time_domain_symbols.is_empty() {
+            let ofdm_symbol = self.ofdm_symbol_iter.next()?; // breaks iteration
+            let status = unsafe {
+                // Pushes samples to self.time_domain_symbols via ofdm_framesync_callback.
+                liquid_sys::ofdmframesync_execute(
+                    self.ofdm_framesync,
+                    ofdm_symbol.time_domain_symbols.as_ptr() as *mut Complex32,
+                    FRAME_LEN as u32,
+                )
+            } as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+        }
 
-        None
+        let q_symbol = self
+            .time_domain_symbols
+            .pop_front()
+            .expect("time_domain_symbols unexepectly empty.");
+        Some(q_symbol)
     }
 }
