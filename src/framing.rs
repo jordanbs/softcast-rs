@@ -25,13 +25,13 @@ const TAPER_LEN: usize = 4;
 const FRAME_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
 pub struct OFDMSymbol {
-    td_symbols: [Complex32; FRAME_LEN], // in time domain
+    time_domain_symbols: [Complex32; FRAME_LEN],
 }
 
 impl Default for OFDMSymbol {
     fn default() -> Self {
         Self {
-            td_symbols: [Complex32::default(); FRAME_LEN],
+            time_domain_symbols: [Complex32::default(); FRAME_LEN],
         }
     }
 }
@@ -60,6 +60,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
                 std::ptr::null_mut(),
             )
         }; // TODO: destroy on drop
+        assert_ne!(std::ptr::null_mut(), ofdm_framegen);
         Self {
             quadrature_symbol_iter,
             ofdm_framegen,
@@ -79,7 +80,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                 self.state = OFDMFrameGeneratorState::S0b;
                 let status = liquid_sys::ofdmframegen_write_S0a(
                     self.ofdm_framegen,
-                    symbol.td_symbols.as_mut_ptr(),
+                    symbol.time_domain_symbols.as_mut_ptr(),
                 ) as u32;
                 assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
                 Some(symbol)
@@ -88,7 +89,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                 self.state = OFDMFrameGeneratorState::S1;
                 let status = liquid_sys::ofdmframegen_write_S0b(
                     self.ofdm_framegen,
-                    symbol.td_symbols.as_mut_ptr(),
+                    symbol.time_domain_symbols.as_mut_ptr(),
                 ) as u32;
                 assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
                 Some(symbol)
@@ -97,7 +98,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                 self.state = OFDMFrameGeneratorState::Data;
                 let status = liquid_sys::ofdmframegen_write_S1(
                     self.ofdm_framegen,
-                    symbol.td_symbols.as_mut_ptr(),
+                    symbol.time_domain_symbols.as_mut_ptr(),
                 ) as u32;
                 assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
                 Some(symbol)
@@ -115,13 +116,13 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                     let status = unsafe {
                         liquid_sys::ofdmframegen_writetail(
                             self.ofdm_framegen,
-                            symbol.td_symbols.as_mut_ptr(),
+                            symbol.time_domain_symbols.as_mut_ptr(),
                         )
                     } as u32;
                     assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
                     return Some(symbol);
                 }
-                let time_domain = &mut symbol.td_symbols;
+                let time_domain = &mut symbol.time_domain_symbols;
                 let status = unsafe {
                     liquid_sys::ofdmframegen_writesymbol(
                         self.ofdm_framegen,
@@ -134,5 +135,79 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
             }
             OFDMFrameGeneratorState::Complete => None,
         }
+    }
+}
+
+pub struct OFDMFrameSynchronizer<I: Iterator<Item = OFDMSymbol>> {
+    ofdm_symbol_iter: I,
+    ofdm_framesync: liquid_sys::ofdmframesync,
+}
+
+#[allow(non_snake_case)]
+extern "C" fn ofdm_framesync_callback<T: OFDMFrameSyncCallback>(
+    _y: *mut Complex32,
+    _p: *mut u8,
+    _M: u32,
+    _userdata: *mut core::ffi::c_void,
+) -> i32 {
+    let cell_ptr: *const std::cell::OnceCell<T> = _userdata.cast();
+    let cell: &std::cell::OnceCell<T> = unsafe { cell_ptr.as_ref().expect("NULL cell_ptr.") };
+    let obj = cell.get().expect("Cell not initialized.");
+    obj.ofdm_framesync_callback(_y, _p, _M)
+}
+
+trait OFDMFrameSyncCallback {
+    #[allow(non_snake_case)]
+    fn ofdm_framesync_callback(&self, _y: *mut Complex32, _p: *mut u8, _M: u32) -> i32;
+}
+
+impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
+    fn from(ofdm_symbol_iter: I) -> Self {
+        let cell = std::cell::OnceCell::new();
+        let cell_cvoid = &cell as *const std::cell::OnceCell<_> as *const core::ffi::c_void;
+
+        let ofdm_framesync = unsafe {
+            liquid_sys::ofdmframesync_create(
+                NUM_SUBCARRIERS as u32,
+                CP_LEN as u32,
+                TAPER_LEN as u32,
+                std::ptr::null_mut(),
+                Some(ofdm_framesync_callback::<Self>),
+                cell_cvoid as *mut core::ffi::c_void, // not actually mut
+            )
+        }; // TODO: destroy on drop
+        assert_ne!(std::ptr::null_mut(), ofdm_framesync);
+        let new_self = Self {
+            ofdm_symbol_iter,
+            ofdm_framesync,
+        };
+        let _ = cell.set(&new_self); // .unwrap() requires Debug for self and I.
+
+        return new_self;
+    }
+}
+
+impl<I: Iterator<Item = OFDMSymbol>> OFDMFrameSyncCallback for OFDMFrameSynchronizer<I> {
+    #[allow(non_snake_case)]
+    fn ofdm_framesync_callback(&self, _y: *mut Complex32, _p: *mut u8, _M: u32) -> i32 {
+        0
+    }
+}
+
+impl<I: Iterator<Item = OFDMSymbol>> Iterator for OFDMFrameSynchronizer<I> {
+    type Item = QuadratureSymbol;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ofdm_symbol = self.ofdm_symbol_iter.next()?;
+        let status = unsafe {
+            liquid_sys::ofdmframesync_execute(
+                self.ofdm_framesync,
+                ofdm_symbol.time_domain_symbols.as_ptr() as *mut Complex32,
+                FRAME_LEN as u32,
+            )
+        } as u32;
+        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+        None
     }
 }

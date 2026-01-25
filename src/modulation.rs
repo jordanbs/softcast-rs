@@ -19,6 +19,8 @@ use crate::metadata_coding::packetizer::*;
 use liquid_sys;
 use num_complex::Complex32;
 
+// TODO: Interleave metadata and slice symbols.
+
 #[derive(Default, Clone, Copy)]
 pub struct QuadratureSymbol {
     pub value: Complex32,
@@ -63,6 +65,7 @@ pub mod metadata {
     impl<I: Iterator<Item = EncodedPacket>> From<I> for MetadataModulator<I> {
         fn from(encoded_packet_iter: I) -> Self {
             let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) }; // TODO: destroy on drop
+            assert_ne!(std::ptr::null_mut(), modemcf);
             MetadataModulator {
                 modemcf,
                 inner: encoded_packet_iter,
@@ -100,6 +103,7 @@ pub mod metadata {
     impl<I: Iterator<Item = QuadratureSymbol>> From<I> for MetadataDemodulator<I> {
         fn from(quadrature_symbol_iter: I) -> Self {
             let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) }; // TODO: destroy on drop
+            assert_ne!(std::ptr::null_mut(), modemcf);
             MetadataDemodulator {
                 modemcf,
                 inner: quadrature_symbol_iter,
