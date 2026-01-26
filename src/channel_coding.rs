@@ -183,7 +183,7 @@ pub mod slice {
         }
     }
 
-    pub trait ChunkIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+    pub trait ChunkIterIntoExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
         Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>> + Sized
     {
         fn into_slice_iter(
@@ -192,7 +192,7 @@ pub mod slice {
         ) -> SliceIter<'a, DCT_LENGTH, PixelType, Self>;
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        ChunkIterExt<'a, DCT_LENGTH, PixelType> for I
+        ChunkIterIntoExt<'a, DCT_LENGTH, PixelType> for I
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {
@@ -689,7 +689,7 @@ mod tests {
     fn test_reader_to_slice_inverse_equality() {
         use crate::asset_reader_writer::pixel_buffer::*;
         use crate::asset_reader_writer::transform_block_3d::*;
-        use crate::channel_coding::slice::{ChunkIterExt, SliceIterExt};
+        use crate::channel_coding::slice::{ChunkIterIntoExt, SliceIterExt};
         use asset_reader::*; // idk why this only works here..
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4";

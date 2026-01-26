@@ -356,18 +356,19 @@ mod tests {
             assert!((orig.value.im - new.value.im).abs() < 0.0001);
         }
     }
-    /*
+
     use crate::asset_reader_writer::asset_reader::*;
     use crate::asset_reader_writer::pixel_buffer::*;
+    use crate::asset_reader_writer::transform_block_3d::*;
     use crate::asset_reader_writer::*;
+    use crate::channel_coding::slice::ChunkIterIntoExt;
     use crate::channel_coding::slice::*;
     use crate::metadata_coding::packetizer::*;
     use crate::metadata_coding::*;
     use crate::modulation::metadata::*;
     use crate::modulation::slices::*;
-    //     use crate::source_coding::chunk::ChunkIterExt;
+    use crate::source_coding::chunk::ChunkIterFromExt;
     use crate::source_coding::chunk::*;
-    use crate::source_coding::transform_block_3d_dct::*;
 
     #[test]
     fn test_reader_to_frame_inverse_equality() {
@@ -384,6 +385,12 @@ mod tests {
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
+        let MacroBlock3D {
+            y_components: original_y_components,
+            cb_components: _,
+            cr_components: _,
+        } = macro_block.clone();
+
         let mut y_dct = macro_block.y_components.into_dct();
 
         // Expensive.. can I defer?
@@ -391,6 +398,8 @@ mod tests {
 
         let first_slice = y_slices_and_metadata.first().expect("No slices.");
         let slice_dim = first_slice.slice.values().dim();
+        let chunks_per_gop =
+            (LENGTH * asset_height * asset_width) / (slice_dim.0 * slice_dim.1 * slice_dim.2);
 
         let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
             .iter()
@@ -405,30 +414,49 @@ mod tests {
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+
         let medatata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-        let mut depacketizer: Depacketizer<_> = medatata_demodulator.into();
-        let chunk_metadata_iter = depacketizer.into_chunk_metadata_iter().unwrap();
+
+        let depacketizer: Depacketizer<_, _> = medatata_demodulator.into();
+
+        let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+        let _ = metadata_decompressor.next().unwrap();
+
+        let chunk_metadatas: Vec<ChunkMetadata> =
+            metadata_decompressor.by_ref().map(|r| r.unwrap()).collect();
+        assert!(!chunk_metadatas.is_empty());
 
         // metadata_demodulator should be terminated or converted into a slice demodulator
         let mut dct_array: ndarray::Array3<f32> =
             ndarray::Array3::zeros((LENGTH, asset_height, asset_width)); // luma, matches resolution
-        let synchronizer: OFDMFrameSynchronizer<_> = depacketizer.into_inner().into_inner(); // move back
-        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+        let mut slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
             SliceDemodulator::new(slice_dim, synchronizer, &mut dct_array);
 
-        let slice_and_chunk_metadata_iter = chunk_metadata_iter
-            .zip(slice_demodulator)
-            .map(|(metadata, slice)| SliceAndChunkMetadata::new(slice, metadata));
-        let chunks_iter: ChunkIter<_, _, _> =
-            slice_and_chunk_metadata_iter.into_chunks_iter(LENGTH);
-        //         let transform_block_3d_iter =
-        //             chunks_iter.into_transform_block_3d_dct_iter((asset_width, asset_height));
+        let mut slice_and_metadatas = vec![];
+        for chunk_metadata in chunk_metadatas {
+            let slice = slice_demodulator.next().expect("could not get slice");
+            let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
+            slice_and_metadatas.push(slice_and_metadata);
+        }
+        let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-        //         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
-        //
-        //         for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
-        //             assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
-        //             assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
-        //         }
-    }*/
+        //         let slice_and_chunk_metadata_iter = chunk_metadata
+        //             .iter()
+        //             .zip(slice_demodulator)
+        //             .map(|(&metadata, slice)| SliceAndChunkMetadata::new(slice, metadata));
+
+        let chunks_iter: ChunkIter<_, _, _> =
+            slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
+        let mut transform_block_3d_dct_iter =
+            chunks_iter.into_transform_block_3d_dct_iter((asset_width, asset_height));
+
+        let y_dct_components = transform_block_3d_dct_iter
+            .next()
+            .expect("No y_dct_components");
+        let new_y_components: TransformBlock3D<_, _> = y_dct_components.into();
+
+        assert_eq!(original_y_components, new_y_components);
+    }
 }

@@ -400,7 +400,7 @@ pub mod chunk {
         }
     }
 
-    pub trait ChunkIterExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
+    pub trait ChunkIterFromExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
         Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>> + Sized
     {
         fn into_transform_block_3d_dct_iter(
@@ -409,7 +409,7 @@ pub mod chunk {
         ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self>;
     }
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        ChunkIterExt<'a, DCT_LENGTH, PixelType> for I
+        ChunkIterFromExt<'a, DCT_LENGTH, PixelType> for I
     where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
     {

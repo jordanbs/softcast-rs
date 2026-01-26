@@ -84,6 +84,7 @@ where
 
 pub struct MetadataDecompressor<QI, R: Read> {
     decoder: zstd::stream::read::Decoder<'static, std::io::BufReader<R>>,
+    had_error: bool,
     _marker: std::marker::PhantomData<QI>,
 }
 
@@ -94,19 +95,31 @@ impl<QI, R: Read> From<R> for MetadataDecompressor<QI, R> {
         let decoder = zstd::stream::read::Decoder::new(reader).unwrap();
         Self {
             decoder,
+            had_error: false,
             _marker: std::marker::PhantomData,
         }
     }
 }
 
 impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
-    type Item = ChunkMetadata;
+    type Item = Result<ChunkMetadata, std::io::Error>;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
-        self.decoder.read_exact(&mut buf).ok()?; // handles EOF
+        if self.had_error {
+            return None;
+        }
 
-        let meta = ChunkMetadata::from(&buf);
-        Some(meta)
+        let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
+
+        match self.decoder.read_exact(&mut buf) /* handles EOF */ {
+            Ok(()) => {
+                let meta = ChunkMetadata::from(&buf);
+                Some(Ok(meta))
+            },
+            Err(err) => {
+                self.had_error = true;
+                Some(Err(err))
+            },
+        }
     }
 }
 
@@ -450,7 +463,7 @@ mod tests {
     use super::*;
     use crate::asset_reader_writer::asset_reader::*;
     use crate::asset_reader_writer::pixel_buffer::*;
-    use crate::channel_coding::slice::ChunkIterExt;
+    use crate::channel_coding::slice::ChunkIterIntoExt;
     use packetizer::*;
 
     #[test]
@@ -477,7 +490,8 @@ mod tests {
         );
         let reader = std::io::Cursor::new(y_compressed_metadata.data);
         let decompressor: MetadataDecompressor<(), _> = reader.into();
-        let y_decompressed_metadata: Box<[ChunkMetadata]> = decompressor.collect();
+        let y_decompressed_metadata: Box<[ChunkMetadata]> =
+            decompressor.map(|r| r.unwrap()).collect();
 
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
@@ -499,7 +513,8 @@ mod tests {
         let compressed_metadata: CompressedMetadata = metadata_in.iter().into();
         let reader = std::io::Cursor::new(compressed_metadata.data);
         let decompressor: MetadataDecompressor<(), _> = reader.into();
-        let medatadata_out: Vec<ChunkMetadata> = decompressor.collect();
+
+        let medatadata_out: Vec<ChunkMetadata> = decompressor.map(|r| r.unwrap()).collect();
 
         assert_eq!(metadata_in, medatadata_out);
     }
@@ -605,7 +620,8 @@ mod tests {
         let depacketizer: Depacketizer<_, ()> = Depacketizer::from(encoded_packets.into_iter());
         let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
 
-        let y_decompressed_metadata: Box<[ChunkMetadata]> = decompressor.collect();
+        let y_decompressed_metadata: Box<[ChunkMetadata]> =
+            decompressor.map(|r| r.unwrap()).collect();
 
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
@@ -637,7 +653,8 @@ mod tests {
         let depacketizer: Depacketizer<_, ()> = encoded_packets.into_iter().into();
         let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
 
-        let y_decompressed_metadata: Box<[ChunkMetadata]> = decompressor.collect();
+        let y_decompressed_metadata: Box<[ChunkMetadata]> =
+            decompressor.map(|r| r.unwrap()).collect();
 
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
