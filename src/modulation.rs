@@ -139,6 +139,8 @@ pub mod metadata {
 
                         let bitval = bitval as u8;
                         *byte |= bitval << bitpos;
+                    } else if 0 == bitpos {
+                        return None;
                     } else {
                         return Some(packet_buf.into());
                     }
@@ -433,5 +435,72 @@ mod tests {
         {
             assert_eq!(view_orig, slice_new.values());
         }
+    }
+
+    use crate::metadata_coding::*;
+    use crate::source_coding::chunk::*;
+
+    #[test]
+    fn test_chunk_metadata_modulation_values() {
+        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
+        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
+            cm.energy = idx as f32;
+            cm.mean = -(idx as f32);
+        }
+        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let packetizer: Packetizer = compressed_metadata.into();
+
+        let orig_encoded_packets: Vec<_> = packetizer.collect();
+
+        let metadata_modulator: MetadataModulator<_> =
+            orig_encoded_packets.clone().into_iter().into();
+        let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
+
+        let new_encoded_packets: Vec<_> = metadata_demodulator.collect();
+        assert_eq!(orig_encoded_packets, new_encoded_packets);
+    }
+
+    #[test]
+    fn test_chunk_metadata_modulation_decode_1() {
+        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
+        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
+            cm.energy = idx as f32;
+            cm.mean = -(idx as f32);
+        }
+        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let packetizer: Packetizer = compressed_metadata.into();
+
+        let orig_encoded_packets: Vec<_> = packetizer.collect();
+
+        let metadata_modulator: MetadataModulator<_> =
+            orig_encoded_packets.clone().into_iter().into();
+        let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
+
+        let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
+        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let new_chunk_metatata: Vec<ChunkMetadata> =
+            decompressor.map(|result| result.unwrap()).collect();
+
+        assert_eq!(chunk_metadata, new_chunk_metatata);
+    }
+
+    #[test]
+    fn test_chunk_metadata_modulation_decode_2() {
+        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
+        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
+            cm.energy = idx as f32;
+            cm.mean = -(idx as f32);
+        }
+        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let packetizer: Packetizer = compressed_metadata.into();
+        let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+        let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
+        let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
+        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let new_chunk_metatata: Vec<ChunkMetadata> =
+            decompressor.map(|result| result.unwrap()).collect();
+
+        assert_eq!(chunk_metadata, new_chunk_metatata);
     }
 }
