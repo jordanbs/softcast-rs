@@ -110,15 +110,20 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
 
         let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
 
-        match self.decoder.read_exact(&mut buf) /* handles EOF */ {
+        match self.decoder.read_exact(&mut buf) {
             Ok(()) => {
                 let meta = ChunkMetadata::from(&buf);
                 Some(Ok(meta))
-            },
+            }
             Err(err) => {
-                self.had_error = true;
-                Some(Err(err))
-            },
+                match err.kind() {
+                    std::io::ErrorKind::UnexpectedEof => None, // expected EoF, no more metadata
+                    _ => {
+                        self.had_error = true;
+                        Some(Err(err))
+                    }
+                }
+            }
         }
     }
 }
