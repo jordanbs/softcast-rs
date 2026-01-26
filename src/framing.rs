@@ -70,7 +70,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
                 TAPER_LEN as u32,
                 std::ptr::null_mut(),
             )
-        }; // TODO: destroy on drop
+        };
         assert_ne!(std::ptr::null_mut(), ofdm_framegen);
         Self {
             quadrature_symbol_iter: quadrature_symbol_iter.peekable(),
@@ -157,6 +157,13 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
     }
 }
 
+impl<I: Iterator<Item = QuadratureSymbol>> Drop for OFDMFrameGenerator<I> {
+    fn drop(&mut self) {
+        let status = unsafe { liquid_sys::ofdmframegen_destroy(self.ofdm_framegen) } as u32;
+        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+    }
+}
+
 pub struct OFDMFrameSynchronizer<I: Iterator<Item = OFDMSymbol>> {
     ofdm_symbol_iter: I,
     ofdm_framesync: liquid_sys::ofdmframesync,
@@ -220,7 +227,7 @@ impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
                 Some(ofdm_framesync_callback),
                 callback_context_ptr,
             )
-        }; // TODO: destroy on drop
+        };
         assert_ne!(std::ptr::null_mut(), ofdm_framesync);
 
         Self {
@@ -254,6 +261,13 @@ impl<I: Iterator<Item = OFDMSymbol>> Iterator for OFDMFrameSynchronizer<I> {
             .pop_front()
             .expect("time_domain_symbols unexepectly empty.");
         Some(q_symbol)
+    }
+}
+
+impl<I: Iterator<Item = OFDMSymbol>> Drop for OFDMFrameSynchronizer<I> {
+    fn drop(&mut self) {
+        let status = unsafe { liquid_sys::ofdmframesync_destroy(self.ofdm_framesync) } as u32;
+        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
     }
 }
 
