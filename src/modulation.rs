@@ -100,6 +100,13 @@ pub mod metadata {
         modemcf: *mut liquid_sys::modemcf_s,
         inner: I,
     }
+
+    impl<I: Iterator<Item = QuadratureSymbol>> MetadataDemodulator<I> {
+        pub fn into_inner(self) -> I {
+            self.inner
+        }
+    }
+
     impl<I: Iterator<Item = QuadratureSymbol>> From<I> for MetadataDemodulator<I> {
         fn from(quadrature_symbol_iter: I) -> Self {
             let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) }; // TODO: destroy on drop
@@ -140,6 +147,18 @@ pub mod metadata {
             Some(packet_buf.into())
         }
     }
+
+    impl<I: Iterator<Item = QuadratureSymbol>> IntoInnerQuadratureSymbolIter<I>
+        for MetadataDemodulator<I>
+    {
+        fn into_inner_quadrature_symbol_iter(self) -> I {
+            self.inner
+        }
+    }
+}
+
+pub trait IntoInnerQuadratureSymbolIter<I: Iterator<Item = QuadratureSymbol>> {
+    fn into_inner_quadrature_symbol_iter(self) -> I;
 }
 
 pub mod slices {

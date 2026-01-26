@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::modulation::QuadratureSymbol;
 use crate::source_coding::chunk::*;
 use liquid_sys;
 use std::io::{Read, Write};
@@ -97,6 +98,8 @@ fn decompress_metadata(
     Ok(iter)
 }
 
+use crate::modulation::IntoInnerQuadratureSymbolIter;
+
 fn decompress_metadata2<R: Read>(
     reader: R,
 ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
@@ -111,6 +114,43 @@ fn decompress_metadata2<R: Read>(
         Some(meta)
     });
     Ok(iter)
+}
+
+pub struct MetadataDecompressor<I: Iterator<Item = QuadratureSymbol>, R: Read> {
+    decoder: zstd::stream::read::Decoder<'static, std::io::BufReader<R>>,
+    _marker: std::marker::PhantomData<I>,
+}
+
+impl<I: Iterator<Item = QuadratureSymbol>, R: Read> From<R> for MetadataDecompressor<I, R> {
+    fn from(reader: R) -> Self {
+        let decoder = zstd::stream::read::Decoder::new(reader).unwrap();
+        Self {
+            decoder,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<I: Iterator<Item = QuadratureSymbol>, R: Read + IntoInnerQuadratureSymbolIter<I>> Iterator
+    for MetadataDecompressor<I, R>
+{
+    type Item = ChunkMetadata;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
+        self.decoder.read_exact(&mut buf).ok()?; // handles EOF
+
+        let meta = ChunkMetadata::from(&buf);
+        Some(meta)
+    }
+}
+
+impl<I: Iterator<Item = QuadratureSymbol>, R: Read + IntoInnerQuadratureSymbolIter<I>>
+    IntoInnerQuadratureSymbolIter<I> for MetadataDecompressor<I, R>
+{
+    fn into_inner_quadrature_symbol_iter(self) -> I {
+        let reader = self.decoder.finish().into_inner();
+        reader.into_inner_quadrature_symbol_iter()
+    }
 }
 
 #[derive(Debug)]
@@ -420,16 +460,24 @@ pub mod packetizer {
         }
     }
 
-    pub struct Depacketizer<I: Iterator<Item = EncodedPacket>> {
+    pub struct Depacketizer<
+        I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+        QI: Iterator<Item = QuadratureSymbol>,
+    > {
         packetizer: *mut liquid_sys::packetizer_s,
         packet_iter: I,
         working_cursor: std::io::Cursor<Vec<u8>>,
         has_read_first_packet: bool,
         payload_len: std::cell::OnceCell<usize>,
         bytes_read: usize,
+        _marker: std::marker::PhantomData<QI>,
     }
 
-    impl<I: Iterator<Item = EncodedPacket>> From<I> for Depacketizer<I> {
+    impl<
+            I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+            QI: Iterator<Item = QuadratureSymbol>,
+        > From<I> for Depacketizer<I, QI>
+    {
         fn from(packet_iter: I) -> Self {
             let packetizer = new_packetizer();
 
@@ -440,17 +488,40 @@ pub mod packetizer {
                 has_read_first_packet: false,
                 payload_len: std::cell::OnceCell::new(),
                 bytes_read: 0,
+                _marker: std::marker::PhantomData,
             }
         }
     }
 
-    impl<I: Iterator<Item = EncodedPacket>> Depacketizer<I> {
+    impl<
+            I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+            QI: Iterator<Item = QuadratureSymbol>,
+        > IntoInnerQuadratureSymbolIter<QI> for Depacketizer<I, QI>
+    {
+        fn into_inner_quadrature_symbol_iter(self) -> QI {
+            self.packet_iter.into_inner_quadrature_symbol_iter()
+        }
+    }
+
+    impl<
+            I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+            QI: Iterator<Item = QuadratureSymbol>,
+        > Depacketizer<I, QI>
+    {
+        pub fn into_inner(self) -> I {
+            self.packet_iter
+        }
+
         pub fn into_chunk_metadata_iter(
+            // TODO: remove
             self,
         ) -> Result<impl Iterator<Item = ChunkMetadata>, Box<dyn std::error::Error>> {
             let my_result = decompress_metadata2(self);
-            eprintln!("asdf");
             return my_result;
+        }
+
+        pub fn into_chunk_metadata_iter2(self) -> MetadataDecompressor<QI, Self> {
+            MetadataDecompressor::from(self)
         }
 
         fn decode_packet(
@@ -511,7 +582,11 @@ pub mod packetizer {
         }
     }
 
-    impl<I: Iterator<Item = EncodedPacket>> Read for Depacketizer<I> {
+    impl<
+            I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+            QI: Iterator<Item = QuadratureSymbol>,
+        > Read for Depacketizer<I, QI>
+    {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let mut buf = buf;
             let mut bytes_in_this_read = 0;
@@ -574,7 +649,11 @@ pub mod packetizer {
         }
     }
 
-    impl<I: Iterator<Item = EncodedPacket>> Iterator for Depacketizer<I> {
+    impl<
+            I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+            QI: Iterator<Item = QuadratureSymbol>,
+        > Iterator for Depacketizer<I, QI>
+    {
         type Item = Result<CompressedMetadata, Box<dyn std::error::Error>>;
 
         fn next(&mut self) -> Option<Self::Item> {
