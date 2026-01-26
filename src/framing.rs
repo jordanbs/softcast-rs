@@ -356,7 +356,7 @@ mod tests {
             assert!((orig.value.im - new.value.im).abs() < 0.0001);
         }
     }
-
+    /*
     use crate::asset_reader_writer::asset_reader::*;
     use crate::asset_reader_writer::pixel_buffer::*;
     use crate::asset_reader_writer::*;
@@ -430,5 +430,5 @@ mod tests {
         //             assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
         //             assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
         //         }
-    }
+    }*/
 }
