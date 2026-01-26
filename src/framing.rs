@@ -420,8 +420,6 @@ mod tests {
         let depacketizer: Depacketizer<_, _> = medatata_demodulator.into();
 
         let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
-        let _ = metadata_decompressor.next().unwrap();
-
         let chunk_metadatas: Vec<ChunkMetadata> =
             metadata_decompressor.by_ref().map(|r| r.unwrap()).collect();
         assert!(!chunk_metadatas.is_empty());

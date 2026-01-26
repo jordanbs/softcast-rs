@@ -83,18 +83,19 @@ where
 }
 
 pub struct MetadataDecompressor<QI, R: Read> {
-    decoder: zstd::stream::read::Decoder<'static, std::io::BufReader<R>>,
+    reader: Option<R>,
+    decoder: std::cell::OnceCell<
+        Result<zstd::stream::read::Decoder<'static, std::io::BufReader<R>>, std::io::Error>,
+    >,
     had_error: bool,
     _marker: std::marker::PhantomData<QI>,
 }
 
 impl<QI, R: Read> From<R> for MetadataDecompressor<QI, R> {
     fn from(reader: R) -> Self {
-        // TODO: zstd will return an error when parsing the dictionary failed.
-        // Need to figure out a way not to crash here.
-        let decoder = zstd::stream::read::Decoder::new(reader).unwrap();
         Self {
-            decoder,
+            reader: Some(reader),
+            decoder: std::cell::OnceCell::new(),
             had_error: false,
             _marker: std::marker::PhantomData,
         }
@@ -102,7 +103,7 @@ impl<QI, R: Read> From<R> for MetadataDecompressor<QI, R> {
 }
 
 impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
-    type Item = Result<ChunkMetadata, std::io::Error>;
+    type Item = Result<ChunkMetadata, Box<dyn std::error::Error>>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.had_error {
             return None;
@@ -110,7 +111,20 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
 
         let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
 
-        match self.decoder.read_exact(&mut buf) {
+        // zstd will return an error when parsing the dictionary failed.
+        {
+            let decoder = self.decoder.get_or_init(|| {
+                let reader = self.reader.take().unwrap(); // move into decoder
+                zstd::stream::read::Decoder::new(reader)
+            });
+            if decoder.is_err() {
+                self.had_error = true;
+                return Some(Err("zstd dictionary parse failed.".into())); // meh
+            }
+        }
+
+        let decoder = self.decoder.get_mut().unwrap().as_mut().unwrap(); // this is safe
+        match decoder.read_exact(&mut buf) {
             Ok(()) => {
                 let meta = ChunkMetadata::from(&buf);
                 Some(Ok(meta))
@@ -120,7 +134,7 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
                     std::io::ErrorKind::UnexpectedEof => None, // expected EoF, no more metadata
                     _ => {
                         self.had_error = true;
-                        Some(Err(err))
+                        Some(Err(err.into()))
                     }
                 }
             }
@@ -132,7 +146,12 @@ impl<QI: Iterator<Item = QuadratureSymbol>, R: Read + IntoInnerQuadratureSymbolI
     IntoInnerQuadratureSymbolIter<QI> for MetadataDecompressor<QI, R>
 {
     fn into_inner_quadrature_symbol_iter(self) -> QI {
-        let reader = self.decoder.finish().into_inner();
+        if let Some(reader) = self.reader {
+            return reader.into_inner_quadrature_symbol_iter();
+        }
+
+        let decoder = self.decoder.into_inner().unwrap().unwrap();
+        let reader = decoder.finish().into_inner();
         reader.into_inner_quadrature_symbol_iter()
     }
 }
