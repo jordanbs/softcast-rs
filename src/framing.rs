@@ -24,6 +24,8 @@ const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
 const FRAME_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
+static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Debug)]
 pub struct OFDMSymbol {
     time_domain_symbols: [Complex32; FRAME_LEN],
@@ -63,13 +65,17 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
         } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
-        let ofdm_framegen = unsafe {
-            liquid_sys::ofdmframegen_create(
-                NUM_SUBCARRIERS as u32,
-                CP_LEN as u32,
-                TAPER_LEN as u32,
-                std::ptr::null_mut(),
-            )
+        let ofdm_framegen = {
+            // ofdmframesync calls FFTW_PLANNER, which is not thread safe.
+            let _guard = FFTW_PLANNER_LOCK.lock().unwrap(); // drops at end of scope
+            unsafe {
+                liquid_sys::ofdmframegen_create(
+                    NUM_SUBCARRIERS as u32,
+                    CP_LEN as u32,
+                    TAPER_LEN as u32,
+                    std::ptr::null_mut(),
+                )
+            }
         };
         assert_ne!(std::ptr::null_mut(), ofdm_framegen);
         Self {
@@ -218,15 +224,19 @@ impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
         let callback_context_ptr: *mut CallbackContext = callback_context_box.as_mut();
         let callback_context_ptr = callback_context_ptr as *mut core::ffi::c_void;
 
-        let ofdm_framesync = unsafe {
-            liquid_sys::ofdmframesync_create(
-                NUM_SUBCARRIERS as u32,
-                CP_LEN as u32,
-                TAPER_LEN as u32,
-                std::ptr::null_mut(),
-                Some(ofdm_framesync_callback),
-                callback_context_ptr,
-            )
+        let ofdm_framesync = {
+            // ofdmframesync calls FFTW_PLANNER, which is not thread safe.
+            let _guard = FFTW_PLANNER_LOCK.lock().unwrap(); // drops at end of scope
+            unsafe {
+                liquid_sys::ofdmframesync_create(
+                    NUM_SUBCARRIERS as u32,
+                    CP_LEN as u32,
+                    TAPER_LEN as u32,
+                    std::ptr::null_mut(),
+                    Some(ofdm_framesync_callback),
+                    callback_context_ptr,
+                )
+            }
         };
         assert_ne!(std::ptr::null_mut(), ofdm_framesync);
 
