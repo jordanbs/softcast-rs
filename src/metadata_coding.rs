@@ -89,6 +89,8 @@ pub struct MetadataDecompressor<QI, R: Read> {
 
 impl<QI, R: Read> From<R> for MetadataDecompressor<QI, R> {
     fn from(reader: R) -> Self {
+        // TODO: zstd will return an error when parsing the dictionary failed.
+        // Need to figure out a way not to crash here.
         let decoder = zstd::stream::read::Decoder::new(reader).unwrap();
         Self {
             decoder,
