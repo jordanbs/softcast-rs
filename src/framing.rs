@@ -38,9 +38,10 @@ impl Default for OFDMSymbol {
 }
 
 pub struct OFDMFrameGenerator<I: Iterator<Item = QuadratureSymbol>> {
-    quadrature_symbol_iter: I,
+    quadrature_symbol_iter: std::iter::Peekable<I>,
     ofdm_framegen: liquid_sys::ofdmframegen,
     state: OFDMFrameGeneratorState,
+    subcarrier_allocation: Box<[u8]>,
 }
 
 enum OFDMFrameGeneratorState {
@@ -53,6 +54,15 @@ enum OFDMFrameGeneratorState {
 
 impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
     fn from(quadrature_symbol_iter: I) -> Self {
+        let mut subcarrier_allocation = Box::new([0u8; NUM_SUBCARRIERS]);
+        let status = unsafe {
+            liquid_sys::ofdmframe_init_default_sctype(
+                NUM_SUBCARRIERS as u32,
+                subcarrier_allocation.as_mut_ptr(),
+            )
+        } as u32;
+        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
         let ofdm_framegen = unsafe {
             liquid_sys::ofdmframegen_create(
                 NUM_SUBCARRIERS as u32,
@@ -63,9 +73,10 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
         }; // TODO: destroy on drop
         assert_ne!(std::ptr::null_mut(), ofdm_framegen);
         Self {
-            quadrature_symbol_iter,
+            quadrature_symbol_iter: quadrature_symbol_iter.peekable(),
             ofdm_framegen,
             state: OFDMFrameGeneratorState::S0a,
+            subcarrier_allocation,
         }
     }
 }
@@ -105,13 +116,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                 Some(symbol)
             },
             OFDMFrameGeneratorState::Data => {
-                let freq_domain: Box<_> = self
-                    .quadrature_symbol_iter
-                    .by_ref()
-                    .take(NUM_SUBCARRIERS)
-                    .map(|quadrature_symbol| quadrature_symbol.value)
-                    .collect();
-                if freq_domain.is_empty() {
+                if self.quadrature_symbol_iter.peek().is_none() {
                     self.state = OFDMFrameGeneratorState::Complete;
                     // write tail
                     let status = unsafe {
@@ -123,6 +128,19 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                     assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
                     return Some(symbol);
                 }
+
+                let freq_domain: Box<_> = self
+                    .subcarrier_allocation
+                    .iter()
+                    // Insert placeholders for null and pilot subcarriers.
+                    .map(|subcarrier_type| match *subcarrier_type as u32 {
+                        // Pad frame with zero values; don't drop data.
+                        liquid_sys::OFDMFRAME_SCTYPE_DATA => {
+                            self.quadrature_symbol_iter.next().unwrap_or_default()
+                        }
+                        _ => QuadratureSymbol::default(),
+                    })
+                    .collect();
                 let time_domain = &mut symbol.time_domain_symbols;
                 let status = unsafe {
                     liquid_sys::ofdmframegen_writesymbol(
@@ -249,13 +267,13 @@ mod tests {
             QuadratureSymbol {
                 value: Complex32::default()
             };
-            NUM_SUBCARRIERS
+            1037
         ];
         for (idx, symbol) in quadrature_symbols.iter_mut().enumerate() {
             symbol.value.re = 0.01 * idx as f32;
             symbol.value.im = 0.01 * -(idx as f32);
         }
-        let mut quadrature_symbols_clone: std::collections::VecDeque<_> =
+        let quadrature_symbols_clone: std::collections::VecDeque<_> =
             quadrature_symbols.clone().into();
 
         let ofdm_frame_generator: OFDMFrameGenerator<_> = quadrature_symbols.into_iter().into();
@@ -266,26 +284,43 @@ mod tests {
 
         let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.collect();
 
-        // assert_eq!(quadrature_symbols_clone, new_quadrature_symbols);
+        // orig may be shorter than new, because of frame padding.
+        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols.len());
 
-        // match first symbol
-        loop {
-            let orig = quadrature_symbols_clone
-                .front()
-                .expect("No more orig quadrature symbols.");
-            let new = new_quadrature_symbols
-                .first()
-                .expect("No more new quadrature symbols.");
-
-            if (orig.value.re - new.value.re).abs() < 0.0001
-                && (orig.value.im - new.value.im).abs() < 0.0001
-            {
-                break;
-            }
-
-            quadrature_symbols_clone.pop_front();
+        for (orig, new) in quadrature_symbols_clone
+            .iter()
+            .zip(new_quadrature_symbols.iter())
+        {
+            eprintln!("orig:{:?} new:{:?}", orig, new);
+            assert!((orig.value.re - new.value.re).abs() < 0.0001);
+            assert!((orig.value.im - new.value.im).abs() < 0.0001);
         }
+    }
 
+    #[test]
+    fn test_ofdm_multiple_frames() {
+        let mut quadrature_symbols = vec![
+            QuadratureSymbol {
+                value: Complex32::default()
+            };
+            1037
+        ];
+        for (idx, symbol) in quadrature_symbols.iter_mut().enumerate() {
+            symbol.value.re = 0.01 * idx as f32;
+            symbol.value.im = 0.01 * -(idx as f32);
+        }
+        let quadrature_symbols_clone: std::collections::VecDeque<_> =
+            quadrature_symbols.clone().into();
+
+        let ofdm_frame_generator: OFDMFrameGenerator<_> = quadrature_symbols.into_iter().into();
+        let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator.collect();
+        eprintln!("{:?}", ofdm_symbols);
+
+        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols.into_iter().into();
+
+        let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.collect();
+
+        // orig may be shorter than new, because of frame padding.
         assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols.len());
 
         for (orig, new) in quadrature_symbols_clone
