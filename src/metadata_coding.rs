@@ -424,6 +424,14 @@ pub mod packetizer {
             let mut bytes_in_this_read = 0;
 
             loop {
+                if let Some(&payload_len) = self.payload_len.get() {
+                    let remaining_in_payload = payload_len - (self.bytes_read + bytes_in_this_read);
+                    if 0 == remaining_in_payload {
+                        self.bytes_read += bytes_in_this_read;
+                        return Ok(bytes_in_this_read); // EOF when bytes_in_this_read == 0
+                    }
+                }
+
                 // Check if cursor is at the end its underlying buffer
                 if self.working_cursor.position() as usize == self.working_cursor.get_ref().len() {
                     let encoded_packet = self.packet_iter.next();
@@ -431,10 +439,7 @@ pub mod packetizer {
                         // No more packets
                         self.bytes_read += bytes_in_this_read;
 
-                        let payload_len = match self.payload_len.get() {
-                            Some(&payload_len) => payload_len,
-                            None => 0,
-                        };
+                        let payload_len = self.payload_len.get().copied().unwrap_or_default();
                         if payload_len != self.bytes_read {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
@@ -460,6 +465,16 @@ pub mod packetizer {
                         .payload_len
                         .get_or_init(|| decoded_packet.compressed_metadata_len.unwrap());
                     self.working_cursor = std::io::Cursor::new(decoded_packet.decoded_data);
+                }
+
+                // short circuit read if it is asking for more than the payload
+                let payload_len = *self
+                    .payload_len
+                    .get()
+                    .expect("Payload unexpectedly not initialized.");
+                let remaining_in_payload = payload_len - (self.bytes_read + bytes_in_this_read);
+                if remaining_in_payload < buf.len() {
+                    buf = &mut buf[..remaining_in_payload];
                 }
 
                 let remaining_in_cursor =
@@ -618,6 +633,32 @@ mod tests {
             .expect("failed to read to end.");
 
         assert_eq!(read_bytes, (223 * 4 - 2) * 8 - 4);
+
+        assert_eq!(data, new_data);
+    }
+
+    #[test]
+    fn test_depacketizer_extra_data_in_iterator() {
+        let data = vec![0xbau8; 8];
+        let compressed_metadata = CompressedMetadata {
+            data: data.clone().into(),
+        };
+        let packetizer = Packetizer::from(compressed_metadata);
+
+        let zeros = [0u8; 1060];
+        let zeros_encoded_tail = EncodedPacket {
+            encoded_data: zeros,
+        };
+
+        let mut depacketizer: Depacketizer<_, ()> =
+            packetizer.chain([zeros_encoded_tail].into_iter()).into();
+
+        let mut new_data = vec![];
+        let read_bytes = depacketizer
+            .read_to_end(&mut new_data)
+            .expect("failed to read to end.");
+
+        assert_eq!(read_bytes, 8);
 
         assert_eq!(data, new_data);
     }

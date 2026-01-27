@@ -371,6 +371,119 @@ mod tests {
     use crate::source_coding::chunk::*;
 
     #[test]
+    fn test_reader_to_frame_inverse_to_packets_equality() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+        let mut y_dct = macro_block.y_components.into_dct();
+
+        // Expensive.. can I defer?
+        let y_slices_and_metadata: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+
+        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
+            .iter()
+            .map(|slice| &slice.chunk_metadata)
+            .into();
+        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
+        let packetizer: Packetizer = y_compressed_metadata.into();
+
+        let orig_packets: Vec<_> = packetizer.collect();
+
+        let metadata_modulator: MetadataModulator<_> = orig_packets.clone().into_iter().into();
+        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let framer: OFDMFrameGenerator<_> =
+            metadata_modulator.flatten().chain(slice_modulator).into();
+
+        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
+
+        let new_packets: Vec<_> = metadata_demodulator.take(orig_packets.len()).collect();
+        assert_eq!(orig_packets, new_packets);
+    }
+
+    #[test]
+    fn test_reader_to_frame_inverse_num_slices() {
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
+        let asset_width: usize = asset_width.try_into().unwrap();
+        let asset_height: usize = asset_height.try_into().unwrap();
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+        let mut y_dct = macro_block.y_components.into_dct();
+
+        // Expensive.. can I defer?
+        let chunks: Vec<_> = y_dct.chunks_iter().collect();
+
+        let first_chunk = chunks.first().expect("No chunks.");
+        let chunk_dim = first_chunk.values.dim();
+        let chunks_per_gop =
+            (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+
+        let y_slices_and_metadata: Box<_> =
+            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+
+        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
+            .iter()
+            .map(|slice| &slice.chunk_metadata)
+            .into();
+        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
+        let packetizer: Packetizer = y_compressed_metadata.into();
+        let metadata_modulator: MetadataModulator<_> = packetizer.into();
+        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let framer: OFDMFrameGenerator<_> =
+            metadata_modulator.flatten().chain(slice_modulator).into();
+
+        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
+        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+
+        let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+        let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
+            .by_ref()
+            .take(chunks_per_gop)
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(!chunk_metadatas.is_empty());
+        assert_eq!(chunk_metadatas.len(), 6912);
+
+        let num_slices = chunks_per_gop.next_power_of_two();
+        let mut dct_allocation: Box<_> = vec![
+                0f32;
+                num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2  // luma, matches resolution
+            ]
+        .into();
+        let mut array3d_view: ndarray::ArrayViewMut3<f32> = ndarray::ArrayViewMut3::from_shape(
+            (num_slices, chunk_dim.1, chunk_dim.2),
+            &mut dct_allocation,
+        )
+        .expect("Failed to create view.");
+
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+
+        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d_view);
+
+        let slices: Vec<_> = slice_demodulator.collect();
+        assert_eq!(slices.len(), 8192);
+    }
+
+    #[test]
     fn test_reader_to_frame_inverse_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
@@ -394,12 +507,15 @@ mod tests {
         let mut y_dct = macro_block.y_components.into_dct();
 
         // Expensive.. can I defer?
-        let y_slices_and_metadata: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let chunks: Vec<_> = y_dct.chunks_iter().collect();
 
-        let first_slice = y_slices_and_metadata.first().expect("No slices.");
-        let slice_dim = first_slice.slice.values().dim();
+        let first_chunk = chunks.first().expect("No chunks.");
+        let chunk_dim = first_chunk.values.dim();
         let chunks_per_gop =
-            (LENGTH * asset_height * asset_width) / (slice_dim.0 * slice_dim.1 * slice_dim.2);
+            (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+
+        let y_slices_and_metadata: Box<_> =
+            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
 
         let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
             .iter()
@@ -415,35 +531,45 @@ mod tests {
 
         let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
 
-        let medatata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-
-        let depacketizer: Depacketizer<_, _> = medatata_demodulator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
+        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
         let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
-        let chunk_metadatas: Vec<ChunkMetadata> =
-            metadata_decompressor.by_ref().map(|r| r.unwrap()).collect();
+        let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
+            .by_ref()
+            .take(chunks_per_gop)
+            .map(|r| r.unwrap())
+            .collect();
         assert!(!chunk_metadatas.is_empty());
+        assert_eq!(chunk_metadatas.len(), 6912);
 
-        // metadata_demodulator should be terminated or converted into a slice demodulator
-        let mut dct_array: ndarray::Array3<f32> =
-            ndarray::Array3::zeros((LENGTH, asset_height, asset_width)); // luma, matches resolution
+        let num_slices = chunks_per_gop.next_power_of_two();
+        let mut dct_allocation: Box<_> = vec![
+                0f32;
+                num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2  // luma, matches resolution
+            ]
+        .into();
+        let mut array3d_view: ndarray::ArrayViewMut3<f32> = ndarray::ArrayViewMut3::from_shape(
+            (num_slices, chunk_dim.1, chunk_dim.2),
+            &mut dct_allocation,
+        )
+        .expect("Failed to create view.");
+
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
-        let mut slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
-            SliceDemodulator::new(slice_dim, synchronizer, &mut dct_array);
+        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d_view);
 
         let mut slice_and_metadatas = vec![];
-        for chunk_metadata in chunk_metadatas {
-            let slice = slice_demodulator.next().expect("could not get slice");
+        let mut chunk_metadata_iter = chunk_metadatas.into_iter();
+
+        for slice in slice_demodulator {
+            // there will be more slices than chunk_metadatas
+            let chunk_metadata = chunk_metadata_iter.next().unwrap_or_default();
             let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
             slice_and_metadatas.push(slice_and_metadata);
         }
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
-
-        //         let slice_and_chunk_metadata_iter = chunk_metadata
-        //             .iter()
-        //             .zip(slice_demodulator)
-        //             .map(|(&metadata, slice)| SliceAndChunkMetadata::new(slice, metadata));
 
         let chunks_iter: ChunkIter<_, _, _> =
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
@@ -456,5 +582,27 @@ mod tests {
         let new_y_components: TransformBlock3D<_, _> = y_dct_components.into();
 
         assert_eq!(original_y_components, new_y_components);
+    }
+
+    #[test]
+    fn test_chunk_metadata_framing_decode() {
+        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
+        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
+            cm.energy = idx as f32;
+            cm.mean = -(idx as f32);
+        }
+        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let packetizer: Packetizer = compressed_metadata.into();
+        let metadata_modulator: MetadataModulator<_> = packetizer.into();
+        let ofdm_generator: OFDMFrameGenerator<_> = metadata_modulator.flatten().into();
+
+        let ofdm_synchronizer: OFDMFrameSynchronizer<_> = ofdm_generator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = ofdm_synchronizer.into();
+        let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
+        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let new_chunk_metatata: Vec<ChunkMetadata> =
+            decompressor.map(|result| result.unwrap()).collect();
+
+        assert_eq!(chunk_metadata, new_chunk_metatata);
     }
 }

@@ -262,7 +262,7 @@ pub mod slices {
         pub fn new(
             slice_dimensions: (usize, usize, usize),
             quadrature_symbol_iter: I,
-            array3: &'a mut ndarray::Array3<f32>,
+            array3: &'a mut ndarray::ArrayViewMut3<f32>,
         ) -> Self {
             Self {
                 quadrature_symbol_iter,
@@ -350,7 +350,10 @@ mod tests {
         let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
-        let mut array3_new = ndarray::Array3::<f32>::zeros(dim);
+        let mut allocation = vec![0f32; dim.1 * dim.2];
+        let mut array3_new = ndarray::ArrayViewMut3::<f32>::from_shape(dim, &mut allocation)
+            .expect("Failed ot create ndarray.");
+
         let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
             SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
 
@@ -383,7 +386,11 @@ mod tests {
         let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
-        let mut array3_new = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2));
+        let mut allocation = vec![0f32; 5 * dim.1 * dim.2];
+        let mut array3_new =
+            ndarray::ArrayViewMut3::<f32>::from_shape((5, dim.1, dim.2), &mut allocation)
+                .expect("Failed to create ndarray.");
+
         let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
             SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
 
@@ -422,7 +429,10 @@ mod tests {
         let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
-        let mut array3_new = ndarray::Array3::<f32>::zeros(gop_dim);
+        let mut allocation = vec![0f32; gop_dim.0 * gop_dim.1 * gop_dim.2];
+        let mut array3_new = ndarray::ArrayViewMut3::<f32>::from_shape(gop_dim, &mut allocation)
+            .expect("Failed to create ndarray.");
+
         let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
             SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
 
@@ -486,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_chunk_metadata_modulation_decode_2() {
-        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
+        let mut chunk_metadata = vec![ChunkMetadata::default(); 15000];
         for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
             cm.energy = idx as f32;
             cm.mean = -(idx as f32);
@@ -500,6 +510,8 @@ mod tests {
         let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
+
+        eprintln!("{:?}", new_chunk_metatata);
 
         assert_eq!(chunk_metadata, new_chunk_metatata);
     }
