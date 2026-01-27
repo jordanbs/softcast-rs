@@ -35,15 +35,16 @@ trait FromByte {
 }
 type BPSKModulatedByte = [QuadratureSymbol; 8];
 impl FromByte for BPSKModulatedByte {
-    fn from_byte(byte: u8, modem: *mut liquid_sys::modemcf_s) -> Self {
+    fn from_byte(byte: u8, modem: liquid_sys::modemcf) -> Self {
         let mut quadrature_symbols = BPSKModulatedByte::default();
 
         for (bitpos, q_symbol) in quadrature_symbols.iter_mut().enumerate().rev() {
             // MSB-first
             let bitval = 0 != (byte & (1 << bitpos));
             let symbol_ptr: *mut Complex32 = &mut q_symbol.value; // Complex32 is bincompat with C float complex
-            let status = unsafe { liquid_sys::modemcf_modulate(modem, bitval.into(), symbol_ptr) };
-            assert_eq!(status as u32, liquid_sys::liquid_error_code_LIQUID_OK);
+            let status =
+                unsafe { liquid_sys::modemcf_modulate(modem, bitval.into(), symbol_ptr) } as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
         }
 
         quadrature_symbols
@@ -56,7 +57,7 @@ pub mod metadata {
     const MODULATION_SCHEME: u32 = liquid_sys::modulation_scheme_LIQUID_MODEM_BPSK;
 
     pub struct MetadataModulator<I: Iterator<Item = EncodedPacket>> {
-        modemcf: *mut liquid_sys::modemcf_s,
+        modemcf_wrapper: ModemCFWrapper,
         inner: I,
         working_packet: Option<EncodedPacket>,
         working_packet_pos: usize,
@@ -64,10 +65,12 @@ pub mod metadata {
 
     impl<I: Iterator<Item = EncodedPacket>> From<I> for MetadataModulator<I> {
         fn from(encoded_packet_iter: I) -> Self {
-            let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) }; // TODO: destroy on drop
+            let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) };
             assert_ne!(std::ptr::null_mut(), modemcf);
+            let modemcf_wrapper = ModemCFWrapper { ptr: modemcf };
+
             MetadataModulator {
-                modemcf,
+                modemcf_wrapper,
                 inner: encoded_packet_iter,
                 working_packet: None,
                 working_packet_pos: 0,
@@ -85,7 +88,7 @@ pub mod metadata {
             }
             let working_packet = self.working_packet.as_ref()?;
             let byte = working_packet.encoded_data[self.working_packet_pos];
-            let quadrature_symbols = BPSKModulatedByte::from_byte(byte, self.modemcf);
+            let quadrature_symbols = BPSKModulatedByte::from_byte(byte, self.modemcf_wrapper.ptr);
 
             self.working_packet_pos += 1;
             if working_packet.encoded_data.len() == self.working_packet_pos {
@@ -97,7 +100,7 @@ pub mod metadata {
     }
 
     pub struct MetadataDemodulator<I: Iterator<Item = QuadratureSymbol>> {
-        modemcf: *mut liquid_sys::modemcf_s,
+        modemcf_wrapper: ModemCFWrapper,
         inner: I,
     }
 
@@ -109,10 +112,12 @@ pub mod metadata {
 
     impl<I: Iterator<Item = QuadratureSymbol>> From<I> for MetadataDemodulator<I> {
         fn from(quadrature_symbol_iter: I) -> Self {
-            let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) }; // TODO: destroy on drop
+            let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) };
             assert_ne!(std::ptr::null_mut(), modemcf);
+            let modemcf_wrapper = ModemCFWrapper { ptr: modemcf };
+
             MetadataDemodulator {
-                modemcf,
+                modemcf_wrapper,
                 inner: quadrature_symbol_iter,
             }
         }
@@ -130,7 +135,7 @@ pub mod metadata {
                         let mut bitval = 0u32;
                         let status = unsafe {
                             liquid_sys::modemcf_demodulate(
-                                self.modemcf,
+                                self.modemcf_wrapper.ptr,
                                 q_symbol.value,
                                 &mut bitval,
                             )
@@ -155,6 +160,17 @@ pub mod metadata {
     {
         fn into_inner_quadrature_symbol_iter(self) -> I {
             self.inner
+        }
+    }
+
+    // Adds drop support to modemcf, necessary to work around rustc E0509.
+    struct ModemCFWrapper {
+        ptr: liquid_sys::modemcf,
+    }
+    impl Drop for ModemCFWrapper {
+        fn drop(&mut self) {
+            let status = unsafe { liquid_sys::modemcf_destroy(self.ptr) } as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
         }
     }
 }
