@@ -345,7 +345,12 @@ pub mod asset_writer {
                 }
                 match self.av_asset_writer.status() {
                     AVAssetWriterStatus::Writing => Ok(()),
-                    _ => Err("Failed to become ready to write.".into()),
+                    status => Err(format!(
+                        "Failed to become ready to write: {:?} {:?}.",
+                        status,
+                        self.av_asset_writer.error()
+                    )
+                    .into()),
                 }
             }
         }

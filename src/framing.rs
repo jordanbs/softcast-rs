@@ -358,6 +358,7 @@ mod tests {
     }
 
     use crate::asset_reader_writer::asset_reader::*;
+    use crate::asset_reader_writer::asset_writer::*;
     use crate::asset_reader_writer::pixel_buffer::*;
     use crate::asset_reader_writer::transform_block_3d::*;
     use crate::asset_reader_writer::*;
@@ -369,6 +370,7 @@ mod tests {
     use crate::modulation::slices::*;
     use crate::source_coding::chunk::ChunkIterFromExt;
     use crate::source_coding::chunk::*;
+    use crate::source_coding::transform_block_3d_dct::*;
 
     #[test]
     fn test_reader_to_frame_inverse_to_packets_equality() {
@@ -462,16 +464,8 @@ mod tests {
         assert_eq!(chunk_metadatas.len(), 6912);
 
         let num_slices = chunks_per_gop.next_power_of_two();
-        let mut dct_allocation: Box<_> = vec![
-                0f32;
-                num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2  // luma, matches resolution
-            ]
-        .into();
-        let mut array3d_view: ndarray::ArrayViewMut3<f32> = ndarray::ArrayViewMut3::from_shape(
-            (num_slices, chunk_dim.1, chunk_dim.2),
-            &mut dct_allocation,
-        )
-        .expect("Failed to create view.");
+        let mut array3d_view: ndarray::Array3<f32> =
+            ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2));
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
@@ -544,21 +538,14 @@ mod tests {
         assert_eq!(chunk_metadatas.len(), 6912);
 
         let num_slices = chunks_per_gop.next_power_of_two();
-        let mut dct_allocation: Box<_> = vec![
-                0f32;
-                num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2  // luma, matches resolution
-            ]
-        .into();
-        let mut array3d_view: ndarray::ArrayViewMut3<f32> = ndarray::ArrayViewMut3::from_shape(
-            (num_slices, chunk_dim.1, chunk_dim.2),
-            &mut dct_allocation,
-        )
-        .expect("Failed to create view.");
+
+        let mut array3d: ndarray::Array3<f32> =
+            ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2));
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
         let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
-            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d_view);
+            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d);
 
         let mut slice_and_metadatas = vec![];
         let mut chunk_metadata_iter = chunk_metadatas.into_iter();
@@ -604,5 +591,214 @@ mod tests {
             decompressor.map(|result| result.unwrap()).collect();
 
         assert_eq!(chunk_metadata, new_chunk_metatata);
+    }
+
+    #[test]
+    #[cfg(false)] // too slow to run regularly
+    fn test_reader_to_frame_to_writer() {
+        let input_path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let output_path = "/tmp/bipbop-1920x1080-5s-framer.mp4";
+        let _ = std::fs::remove_file(output_path);
+        let mut reader = AssetReader::new(input_path);
+        let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
+        let asset_width: usize = asset_width.try_into().unwrap();
+        let asset_height: usize = asset_height.try_into().unwrap();
+        let asset_resolution = (asset_width, asset_height);
+        const GOP_LENGTH: usize = 4;
+
+        let writer_settings = AssetWritterSettings {
+            path: std::path::PathBuf::from(output_path),
+            codec: Codec::H264,
+            resolution: (asset_width as i32, asset_height as i32),
+            frame_rate: reader.frame_rate().expect("Failed to get frame rate"),
+        };
+        let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
+        writer.start_writing().expect("Failed to start writing");
+
+        let macro_block_3d_iterator: MacroBlock3DIterator<GOP_LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        fn framer<PixelType: HasPixelComponentType>(
+            dct_components: &mut TransformBlock3DDCT<GOP_LENGTH, PixelType>,
+            asset_resolution: (usize, usize),
+        ) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
+            let (frame_width, frame_height) = (
+                asset_resolution.0 / PixelType::TYPE.interleave_step(),
+                asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
+            );
+
+            let mut chunks_iter: std::iter::Peekable<_> = dct_components.chunks_iter().peekable();
+            let first_chunk = chunks_iter.peek().expect("No chunks.");
+            let chunk_dim = first_chunk.values.dim();
+            let chunks_per_gop = (GOP_LENGTH * frame_height * frame_width)
+                / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+
+            let y_slices_and_metadata: Box<_> =
+                chunks_iter.into_slice_iter(chunks_per_gop).collect();
+
+            let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
+                .iter()
+                .map(|slice| &slice.chunk_metadata)
+                .into();
+            let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
+            let packetizer: Packetizer = y_compressed_metadata.into();
+            let metadata_modulator: MetadataModulator<_> = packetizer.into();
+            let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+            let framer: OFDMFrameGenerator<_> =
+                metadata_modulator.flatten().chain(slice_modulator).into();
+
+            (framer, chunk_dim)
+        }
+
+        fn transform_block_3d_dct_generator<
+            PixelType: HasPixelComponentType,
+            O: Iterator<Item = OFDMSymbol>,
+        >(
+            ofdm_symbol_iter: &mut O,
+            asset_resolution: (usize, usize),
+            chunk_dim: (usize, usize, usize),
+            dct_allocation: &mut ndarray::Array3<f32>,
+        ) -> impl Iterator<Item = TransformBlock3DDCT<GOP_LENGTH, PixelType>> {
+            let (frame_width, frame_height) = (
+                asset_resolution.0 / PixelType::TYPE.interleave_step(),
+                asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
+            );
+            let chunks_per_gop = (GOP_LENGTH * frame_height * frame_width)
+                / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+
+            let synchonizer: OFDMFrameSynchronizer<_> = ofdm_symbol_iter.into();
+            let metadata_demodulator: MetadataDemodulator<_> = synchonizer.into();
+            let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+
+            let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+            let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
+                .by_ref()
+                .take(chunks_per_gop)
+                .map(|r| r.unwrap())
+                .collect();
+            assert!(!chunk_metadatas.is_empty());
+
+            let synchronizer: OFDMFrameSynchronizer<_> =
+                metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+            let slice_demodulator: SliceDemodulator<'_, GOP_LENGTH, PixelType, _> =
+                SliceDemodulator::new(chunk_dim, synchronizer, dct_allocation);
+
+            let mut slice_and_metadatas = vec![];
+            let mut chunk_metadata_iter = chunk_metadatas.into_iter();
+
+            for slice in slice_demodulator {
+                // there will be more slices than chunk_metadatas
+                let chunk_metadata = chunk_metadata_iter.next().unwrap_or_default();
+                let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
+                slice_and_metadatas.push(slice_and_metadata);
+            }
+            let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
+
+            let chunks_iter: ChunkIter<_, _, _> =
+                slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
+            let transform_block_3d_dct_iter =
+                chunks_iter.into_transform_block_3d_dct_iter(asset_resolution);
+
+            transform_block_3d_dct_iter
+        }
+
+        fn slices_allocation<PixelType: HasPixelComponentType>(
+            asset_resolution: (usize, usize),
+            chunk_dim: (usize, usize, usize),
+        ) -> ndarray::Array3<f32> {
+            let (frame_width, frame_height) = (
+                asset_resolution.0 / PixelType::TYPE.interleave_step(),
+                asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
+            );
+            let chunks_per_gop = (GOP_LENGTH * frame_height * frame_width)
+                / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+            let num_slices = chunks_per_gop.next_power_of_two();
+
+            ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2))
+        }
+
+        let mut pixel_buffers_writen = 0;
+        for macro_block in macro_block_3d_iterator {
+            // encoder
+            let MacroBlock3D {
+                y_components,
+                cb_components,
+                cr_components,
+            } = macro_block;
+
+            let mut y_dct_in: TransformBlock3DDCT<_, _> = y_components.into();
+            let (y_framer, y_chunk_dim) = framer(&mut y_dct_in, asset_resolution);
+
+            let mut cb_dct_in: TransformBlock3DDCT<_, _> = cb_components.into();
+            let (cb_framer, cb_chunk_dim) = framer(&mut cb_dct_in, asset_resolution);
+
+            let mut cr_dct_in: TransformBlock3DDCT<_, _> = cr_components.into();
+            let (cr_framer, cr_chunk_dim) = framer(&mut cr_dct_in, asset_resolution);
+
+            let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
+
+            //decoder
+            let y_dct_out = {
+                let mut y_allocation =
+                    slices_allocation::<YPixelComponentType>(asset_resolution, y_chunk_dim);
+                let mut y_transform_3d_dct_iter =
+                    transform_block_3d_dct_generator::<YPixelComponentType, _>(
+                        &mut encoder,
+                        asset_resolution,
+                        y_chunk_dim,
+                        &mut y_allocation,
+                    );
+                let y_dct = y_transform_3d_dct_iter.next().expect("No y_dct.");
+                y_dct
+            };
+
+            let cb_dct_out = {
+                let mut cb_allocation =
+                    slices_allocation::<CbPixelComponentType>(asset_resolution, cb_chunk_dim);
+                let mut cb_transform_3d_dct_iter =
+                    transform_block_3d_dct_generator::<CbPixelComponentType, _>(
+                        &mut encoder,
+                        asset_resolution,
+                        cb_chunk_dim,
+                        &mut cb_allocation,
+                    );
+                let cb_dct = cb_transform_3d_dct_iter.next().expect("No cb_dct.");
+                cb_dct
+            };
+
+            let cr_dct_out = {
+                let mut cr_allocation =
+                    slices_allocation::<CrPixelComponentType>(asset_resolution, cr_chunk_dim);
+                let mut cr_transform_3d_dct_iter =
+                    transform_block_3d_dct_generator::<CrPixelComponentType, _>(
+                        &mut encoder,
+                        asset_resolution,
+                        cr_chunk_dim,
+                        &mut cr_allocation,
+                    );
+                let cr_dct = cr_transform_3d_dct_iter.next().expect("No cr_dct.");
+                cr_dct
+            };
+            let new_macro_block_3d = MacroBlock3D {
+                y_components: y_dct_out.into(),
+                cb_components: cb_dct_out.into(),
+                cr_components: cr_dct_out.into(),
+            };
+
+            let pixel_buffer_iterator = [new_macro_block_3d].into_iter().pixel_buffer_iter();
+
+            for pixel_buffer in pixel_buffer_iterator {
+                pixel_buffers_writen += 1;
+                writer
+                    .append_pixel_buffer(pixel_buffer)
+                    .expect("Failed to append pixel buffer");
+                writer
+                    .wait_for_writer_to_be_ready()
+                    .expect("Failed to become ready after writing some pixels.");
+            }
+        }
+        writer.finish_writing().expect("Failed to finish writing.");
+        assert_eq!(pixel_buffers_writen, 304);
     }
 }

@@ -154,6 +154,7 @@ pub mod slice {
             }
         }
     }
+
     impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
         for ChunkIter<'a, DCT_LENGTH, PixelType, I>
     where
