@@ -597,6 +597,10 @@ mod tests {
     #[cfg(false)] // too slow to run regularly
     fn test_reader_to_frame_to_writer() {
         use crate::asset_reader_writer::asset_writer::*;
+        use crate::asset_reader_writer::pixel_buffer::*;
+        use crate::asset_reader_writer::transform_block_3d::*;
+        use crate::channel_coding::slice::*;
+        use crate::source_coding::chunk::*;
         use crate::source_coding::transform_block_3d_dct::*;
 
         let input_path = "sample-media/bipbop-1920x1080-5s.mp4";
@@ -721,6 +725,22 @@ mod tests {
             ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2))
         }
 
+        fn decode_into_dct<PixelType: HasPixelComponentType, O: Iterator<Item = OFDMSymbol>>(
+            asset_resolution: (usize, usize),
+            chunk_dim: (usize, usize, usize),
+            ofdm_symbol_iter: &mut O,
+        ) -> TransformBlock3DDCT<GOP_LENGTH, PixelType> {
+            let mut allocation = slices_allocation::<PixelType>(asset_resolution, chunk_dim);
+            let mut transform_3d_dct_iter = transform_block_3d_dct_generator::<PixelType, _>(
+                ofdm_symbol_iter,
+                asset_resolution,
+                chunk_dim,
+                &mut allocation,
+            );
+            let dct = transform_3d_dct_iter.next().expect("No dct.");
+            dct
+        }
+
         let mut pixel_buffers_writen = 0;
         for macro_block in macro_block_3d_iterator {
             // encoder
@@ -742,47 +762,10 @@ mod tests {
             let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
             //decoder
-            let y_dct_out = {
-                let mut y_allocation =
-                    slices_allocation::<YPixelComponentType>(asset_resolution, y_chunk_dim);
-                let mut y_transform_3d_dct_iter =
-                    transform_block_3d_dct_generator::<YPixelComponentType, _>(
-                        &mut encoder,
-                        asset_resolution,
-                        y_chunk_dim,
-                        &mut y_allocation,
-                    );
-                let y_dct = y_transform_3d_dct_iter.next().expect("No y_dct.");
-                y_dct
-            };
+            let y_dct_out = decode_into_dct(asset_resolution, y_chunk_dim, &mut encoder);
+            let cb_dct_out = decode_into_dct(asset_resolution, cb_chunk_dim, &mut encoder);
+            let cr_dct_out = decode_into_dct(asset_resolution, cr_chunk_dim, &mut encoder);
 
-            let cb_dct_out = {
-                let mut cb_allocation =
-                    slices_allocation::<CbPixelComponentType>(asset_resolution, cb_chunk_dim);
-                let mut cb_transform_3d_dct_iter =
-                    transform_block_3d_dct_generator::<CbPixelComponentType, _>(
-                        &mut encoder,
-                        asset_resolution,
-                        cb_chunk_dim,
-                        &mut cb_allocation,
-                    );
-                let cb_dct = cb_transform_3d_dct_iter.next().expect("No cb_dct.");
-                cb_dct
-            };
-
-            let cr_dct_out = {
-                let mut cr_allocation =
-                    slices_allocation::<CrPixelComponentType>(asset_resolution, cr_chunk_dim);
-                let mut cr_transform_3d_dct_iter =
-                    transform_block_3d_dct_generator::<CrPixelComponentType, _>(
-                        &mut encoder,
-                        asset_resolution,
-                        cr_chunk_dim,
-                        &mut cr_allocation,
-                    );
-                let cr_dct = cr_transform_3d_dct_iter.next().expect("No cr_dct.");
-                cr_dct
-            };
             let new_macro_block_3d = MacroBlock3D {
                 y_components: y_dct_out.into(),
                 cb_components: cb_dct_out.into(),
