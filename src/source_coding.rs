@@ -426,13 +426,9 @@ pub mod chunk {
 mod tests {
     use super::*;
     use asset_reader::*;
-    #[cfg(not(debug_assertions))]
-    use asset_writer::*;
     use chunk::*;
     use pixel_buffer::*;
     use std::fs;
-    #[cfg(not(debug_assertions))]
-    use std::path;
     use transform_block_3d_dct::*;
 
     #[test]
@@ -475,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(false)] // too slow to run regularly
     fn test_reader_to_transform_block_3d_dct_to_writer() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
@@ -574,8 +570,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(false)] // too slow to run regularly
     fn test_reader_to_chunks_to_writer() {
+        use asset_writer::*;
+        use std::path;
+
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 

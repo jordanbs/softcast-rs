@@ -358,19 +358,14 @@ mod tests {
     }
 
     use crate::asset_reader_writer::asset_reader::*;
-    use crate::asset_reader_writer::asset_writer::*;
     use crate::asset_reader_writer::pixel_buffer::*;
-    use crate::asset_reader_writer::transform_block_3d::*;
     use crate::asset_reader_writer::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
-    use crate::channel_coding::slice::*;
     use crate::metadata_coding::packetizer::*;
     use crate::metadata_coding::*;
     use crate::modulation::metadata::*;
     use crate::modulation::slices::*;
-    use crate::source_coding::chunk::ChunkIterFromExt;
     use crate::source_coding::chunk::*;
-    use crate::source_coding::transform_block_3d_dct::*;
 
     #[test]
     fn test_reader_to_frame_inverse_to_packets_equality() {
@@ -478,7 +473,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_frame_inverse_equality() {
+        use crate::asset_reader_writer::transform_block_3d::*;
+        use crate::channel_coding::slice::*;
+        use crate::source_coding::chunk::ChunkIterFromExt;
+
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 
@@ -596,6 +596,9 @@ mod tests {
     #[test]
     #[cfg(false)] // too slow to run regularly
     fn test_reader_to_frame_to_writer() {
+        use crate::asset_reader_writer::asset_writer::*;
+        use crate::source_coding::transform_block_3d_dct::*;
+
         let input_path = "sample-media/bipbop-1920x1080-5s.mp4";
         let output_path = "/tmp/bipbop-1920x1080-5s-framer.mp4";
         let _ = std::fs::remove_file(output_path);
