@@ -477,7 +477,7 @@ mod tests {
     fn test_reader_to_frame_inverse_equality() {
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
-        use crate::source_coding::chunk::ChunkIterFromExt;
+        use crate::source_coding::transform_block_3d_dct::*;
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
@@ -499,6 +499,7 @@ mod tests {
         } = macro_block.clone();
 
         let mut y_dct = macro_block.y_components.into_dct();
+        //         let original_y_dct_components = y_dct.values.clone();
 
         // Expensive.. can I defer?
         let chunks: Vec<_> = y_dct.chunks_iter().collect();
@@ -539,8 +540,16 @@ mod tests {
 
         let num_slices = chunks_per_gop.next_power_of_two();
 
-        let mut array3d: ndarray::Array3<f32> =
-            ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2));
+        let allocation_gop_length_with_padding =
+            ((num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2) as f32
+                / (asset_height * asset_width) as f32)
+                .ceil() as usize;
+
+        let mut array3d: ndarray::Array3<f32> = ndarray::Array3::zeros((
+            allocation_gop_length_with_padding,
+            asset_height,
+            asset_width,
+        ));
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
@@ -550,7 +559,7 @@ mod tests {
         let mut slice_and_metadatas = vec![];
         let mut chunk_metadata_iter = chunk_metadatas.into_iter();
 
-        for slice in slice_demodulator {
+        for slice in slice_demodulator.take(num_slices) {
             // there will be more slices than chunk_metadatas
             let chunk_metadata = chunk_metadata_iter.next().unwrap_or_default();
             let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
@@ -560,12 +569,24 @@ mod tests {
 
         let chunks_iter: ChunkIter<_, _, _> =
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
-        let mut transform_block_3d_dct_iter =
-            chunks_iter.into_transform_block_3d_dct_iter((asset_width, asset_height));
 
-        let y_dct_components = transform_block_3d_dct_iter
-            .next()
-            .expect("No y_dct_components");
+        let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
+        let chunk_metadatas_new: Box<_> = chunks
+            .iter()
+            .map(|chunk| chunk.metadata)
+            .take(chunks_per_gop)
+            .collect();
+
+        let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
+            array3d,
+            &chunk_metadatas_new,
+            (asset_width, asset_height),
+            chunk_dim,
+        );
+        //         let y_dct_components =
+        //             TransformBlock3DDCT::from_chunks(&chunks, (asset_width, asset_height));
+
+        //         assert_eq!(original_y_dct_components, y_dct_components.values);
         let new_y_components: TransformBlock3D<_, _> = y_dct_components.into();
 
         assert_eq!(original_y_components, new_y_components);
@@ -658,15 +679,14 @@ mod tests {
             (framer, chunk_dim)
         }
 
-        fn transform_block_3d_dct_generator<
+        fn into_transform_block_3d_dct<
             PixelType: HasPixelComponentType,
             O: Iterator<Item = OFDMSymbol>,
         >(
             ofdm_symbol_iter: &mut O,
             asset_resolution: (usize, usize),
             chunk_dim: (usize, usize, usize),
-            dct_allocation: &mut ndarray::Array3<f32>,
-        ) -> impl Iterator<Item = TransformBlock3DDCT<GOP_LENGTH, PixelType>> {
+        ) -> TransformBlock3DDCT<GOP_LENGTH, PixelType> {
             let (frame_width, frame_height) = (
                 asset_resolution.0 / PixelType::TYPE.interleave_step(),
                 asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
@@ -688,13 +708,16 @@ mod tests {
 
             let synchronizer: OFDMFrameSynchronizer<_> =
                 metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+
+            let mut dct_allocation = slices_allocation::<PixelType>(asset_resolution, chunk_dim);
             let slice_demodulator: SliceDemodulator<'_, GOP_LENGTH, PixelType, _> =
-                SliceDemodulator::new(chunk_dim, synchronizer, dct_allocation);
+                SliceDemodulator::new(chunk_dim, synchronizer, &mut dct_allocation);
 
             let mut slice_and_metadatas = vec![];
             let mut chunk_metadata_iter = chunk_metadatas.into_iter();
+            let num_slices = chunks_per_gop.next_power_of_two();
 
-            for slice in slice_demodulator {
+            for slice in slice_demodulator.take(num_slices) {
                 // there will be more slices than chunk_metadatas
                 let chunk_metadata = chunk_metadata_iter.next().unwrap_or_default();
                 let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
@@ -704,10 +727,18 @@ mod tests {
 
             let chunks_iter: ChunkIter<_, _, _> =
                 slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
-            let transform_block_3d_dct_iter =
-                chunks_iter.into_transform_block_3d_dct_iter(asset_resolution);
+            let chunk_metadatas: Box<_> = chunks_iter
+                .map(|chunk| chunk.metadata)
+                .take(chunks_per_gop)
+                .collect();
+            assert_eq!(chunks_per_gop, chunk_metadatas.len());
 
-            transform_block_3d_dct_iter
+            TransformBlock3DDCT::from_chunks_owned(
+                dct_allocation,
+                &chunk_metadatas,
+                asset_resolution,
+                chunk_dim,
+            )
         }
 
         fn slices_allocation<PixelType: HasPixelComponentType>(
@@ -722,23 +753,16 @@ mod tests {
                 / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
             let num_slices = chunks_per_gop.next_power_of_two();
 
-            ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2))
-        }
+            let allocation_gop_length_with_padding =
+                ((num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2) as f32
+                    / (frame_width * frame_height) as f32)
+                    .ceil() as usize;
 
-        fn decode_into_dct<PixelType: HasPixelComponentType, O: Iterator<Item = OFDMSymbol>>(
-            asset_resolution: (usize, usize),
-            chunk_dim: (usize, usize, usize),
-            ofdm_symbol_iter: &mut O,
-        ) -> TransformBlock3DDCT<GOP_LENGTH, PixelType> {
-            let mut allocation = slices_allocation::<PixelType>(asset_resolution, chunk_dim);
-            let mut transform_3d_dct_iter = transform_block_3d_dct_generator::<PixelType, _>(
-                ofdm_symbol_iter,
-                asset_resolution,
-                chunk_dim,
-                &mut allocation,
-            );
-            let dct = transform_3d_dct_iter.next().expect("No dct.");
-            dct
+            ndarray::Array3::zeros((
+                allocation_gop_length_with_padding,
+                frame_height,
+                frame_width,
+            ))
         }
 
         let mut pixel_buffers_writen = 0;
@@ -762,9 +786,12 @@ mod tests {
             let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
             //decoder
-            let y_dct_out = decode_into_dct(asset_resolution, y_chunk_dim, &mut encoder);
-            let cb_dct_out = decode_into_dct(asset_resolution, cb_chunk_dim, &mut encoder);
-            let cr_dct_out = decode_into_dct(asset_resolution, cr_chunk_dim, &mut encoder);
+            let y_dct_out =
+                into_transform_block_3d_dct(&mut encoder, asset_resolution, y_chunk_dim);
+            let cb_dct_out =
+                into_transform_block_3d_dct(&mut encoder, asset_resolution, cb_chunk_dim);
+            let cr_dct_out =
+                into_transform_block_3d_dct(&mut encoder, asset_resolution, cr_chunk_dim);
 
             let new_macro_block_3d = MacroBlock3D {
                 y_components: y_dct_out.into(),

@@ -284,6 +284,61 @@ pub mod transform_block_3d_dct {
                 _marker: std::marker::PhantomData,
             }
         }
+
+        pub fn from_chunks_owned(
+            mut owned: ndarray::Array3<f32>,
+            chunk_metadatas: &[ChunkMetadata],
+            frame_resolution: (usize, usize),
+            chunk_dimensions: (usize, usize, usize),
+        ) -> Self {
+            assert!(owned.is_standard_layout());
+            let (component_frame_width, component_frame_height) = (
+                frame_resolution.0 / PixelType::TYPE.interleave_step(),
+                frame_resolution.1 / PixelType::TYPE.vertical_subsampling(),
+            );
+            assert_eq!(
+                LENGTH * component_frame_width * component_frame_height,
+                chunk_metadatas.len()
+                    * chunk_dimensions.0
+                    * chunk_dimensions.1
+                    * chunk_dimensions.2
+            );
+
+            let chunk_energies: Box<[f32]> = chunk_metadatas
+                .iter()
+                .map(|metadata| metadata.energy)
+                .collect();
+            let compute_cache = std::cell::OnceCell::new();
+
+            for (metadata, mut chunk_values) in chunk_metadatas
+                .iter()
+                .zip(owned.exact_chunks_mut(chunk_dimensions))
+            {
+                let power_scale = Self::power_scale(
+                    chunk_dimensions,
+                    metadata.energy,
+                    &chunk_energies,
+                    &compute_cache,
+                );
+                if power_scale.is_normal() {
+                    chunk_values /= power_scale;
+                } // else assume all zeros
+
+                chunk_values += metadata.mean;
+            }
+            let dct_dimensions = (LENGTH, component_frame_height, component_frame_width);
+            let (mut owned_vec, offset) = owned.into_raw_vec_and_offset(); // truncate padding slices
+            assert_eq!(0, offset.unwrap());
+
+            owned_vec.truncate(dct_dimensions.0 * dct_dimensions.1 * dct_dimensions.2);
+            let owned: ndarray::Array3<f32> =
+                ndarray::Array3::from_shape_vec(dct_dimensions, owned_vec)
+                    .expect("Failed to convert from chunk dimensions to dct dimensions.");
+            TransformBlock3DDCT {
+                values: owned,
+                _marker: std::marker::PhantomData,
+            }
+        }
     }
 }
 
@@ -319,18 +374,17 @@ pub mod chunk {
         'a,
         const DCT_LENGTH: usize,
         PixelType: HasPixelComponentType,
-        I,
-    >
-    where
         I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-    {
+    > {
         chunk_iter: I,
-        frame_resolution: (usize, usize),
+        component_frame_resolution: (usize, usize),
     }
-    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
-    where
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    impl<
+            'a,
+            const DCT_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+        > TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     {
         fn new(chunk_iter: I, frame_resolution: (usize, usize)) -> Self {
             let (frame_width, frame_height) = frame_resolution;
@@ -341,15 +395,17 @@ pub mod chunk {
             );
             TransformBlock3DDCTIter {
                 chunk_iter: chunk_iter,
-                frame_resolution: component_frame_resolution,
+                component_frame_resolution,
             }
         }
     }
 
-    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I> Iterator
-        for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
-    where
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    impl<
+            'a,
+            const DCT_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+        > Iterator for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     {
         type Item = TransformBlock3DDCT<DCT_LENGTH, PixelType>;
 
@@ -357,7 +413,7 @@ pub mod chunk {
             use std::cell::OnceCell;
 
             let num_transform_block_3d_dct_values =
-                DCT_LENGTH * self.frame_resolution.0 * self.frame_resolution.1;
+                DCT_LENGTH * self.component_frame_resolution.0 * self.component_frame_resolution.1;
             let chunks_needed = OnceCell::new();
             let chunk_dim = OnceCell::new();
             let mut chunks_to_consume = OnceCell::new();
@@ -381,8 +437,8 @@ pub mod chunk {
                     let num_chunk_values =
                         chunk.values.dim().0 * chunk.values.dim().1 * chunk.values.dim().2;
                     assert_eq!(DCT_LENGTH % chunk.values.dim().0, 0);
-                    assert_eq!(self.frame_resolution.0 % chunk.values.dim().2, 0); // width
-                    assert_eq!(self.frame_resolution.1 % chunk.values.dim().1, 0); // height
+                    assert_eq!(self.component_frame_resolution.0 % chunk.values.dim().2, 0); // width
+                    assert_eq!(self.component_frame_resolution.1 % chunk.values.dim().1, 0); // height
                     assert_eq!(num_transform_block_3d_dct_values % num_chunk_values, 0);
                     num_transform_block_3d_dct_values / num_chunk_values
                 });
@@ -392,8 +448,10 @@ pub mod chunk {
                 chunks_to_consume.push(chunk);
 
                 if *chunks_needed == chunks_to_consume.len() {
-                    let transform_block_3d_dct =
-                        TransformBlock3DDCT::from_chunks(chunks_to_consume, self.frame_resolution);
+                    let transform_block_3d_dct = TransformBlock3DDCT::from_chunks(
+                        chunks_to_consume,
+                        self.component_frame_resolution,
+                    );
                     return Some(transform_block_3d_dct);
                 }
             }
@@ -408,10 +466,12 @@ pub mod chunk {
             frame_resolution: (usize, usize),
         ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self>;
     }
-    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType, I>
-        ChunkIterFromExt<'a, DCT_LENGTH, PixelType> for I
-    where
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    impl<
+            'a,
+            const DCT_LENGTH: usize,
+            PixelType: HasPixelComponentType,
+            I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+        > ChunkIterFromExt<'a, DCT_LENGTH, PixelType> for I
     {
         fn into_transform_block_3d_dct_iter(
             self,
