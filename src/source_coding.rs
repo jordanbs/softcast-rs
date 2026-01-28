@@ -212,7 +212,7 @@ pub mod transform_block_3d_dct {
                         Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
                     // needs a comment
                     if power_scale.is_normal() {
-                        chunk *= power_scale;
+                        chunk.mapv_inplace(|elm| elm * power_scale);
                     }
                 });
 
@@ -321,10 +321,10 @@ pub mod transform_block_3d_dct {
                     &compute_cache,
                 );
                 if power_scale.is_normal() {
-                    chunk_values /= power_scale;
+                    chunk_values.mapv_inplace(|elm| elm / power_scale);
                 } // else assume all zeros
 
-                chunk_values += metadata.mean;
+                chunk_values.mapv_inplace(|elm| elm + metadata.mean);
             }
             let dct_dimensions = (LENGTH, component_frame_height, component_frame_width);
             let (mut owned_vec, offset) = owned.into_raw_vec_and_offset(); // truncate padding slices

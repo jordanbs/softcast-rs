@@ -205,15 +205,18 @@ impl CallbackContext {
         subcarrier_samples: &[Complex32],
         subcarrier_allocation: &[u8],
     ) {
-        let mut new_samples: std::collections::VecDeque<_> = subcarrier_samples
-            .iter()
-            .enumerate()
-            // ignore null and pilot subcarriers
-            .filter(|(idx, _)| {
-                liquid_sys::OFDMFRAME_SCTYPE_DATA == subcarrier_allocation[*idx].into()
-            })
-            .map(|(_, sample)| QuadratureSymbol { value: *sample })
-            .collect();
+        let mut new_samples: std::collections::VecDeque<_> =
+            std::collections::VecDeque::with_capacity(NUM_SUBCARRIERS);
+        new_samples.extend(
+            subcarrier_samples
+                .iter()
+                .enumerate()
+                // ignore null and pilot subcarriers
+                .filter(|(idx, _)| {
+                    liquid_sys::OFDMFRAME_SCTYPE_DATA == subcarrier_allocation[*idx].into()
+                })
+                .map(|(_, sample)| QuadratureSymbol { value: *sample }),
+        );
         self.time_domain_symbols.append(&mut new_samples);
     }
 }

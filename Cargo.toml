@@ -19,6 +19,11 @@ pkg-config = "0.3.32"
 rayon = "1.11.0"
 zstd = "0.13.3"
 
+[profile.bench]
+debug = 1
+
+[profile.release]
+debug = 1
 
 [workspace]
 members = [
