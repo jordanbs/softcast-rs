@@ -720,7 +720,7 @@ mod tests {
         let new_y_dct = y_slices
             .into_iter()
             .into_chunks_iter(LENGTH)
-            .into_transform_block_3d_dct_iter(frame_resolution)
+            .into_transform_block_3d_dct_iter(frame_resolution, std::iter::empty())
             .next()
             .expect("Failed to produce a Y 3D DCT");
 
@@ -732,7 +732,7 @@ mod tests {
         let new_cb_components = cb_slices
             .into_iter()
             .into_chunks_iter(LENGTH)
-            .into_transform_block_3d_dct_iter(frame_resolution)
+            .into_transform_block_3d_dct_iter(frame_resolution, std::iter::empty())
             .next()
             .expect("Failed to produce a Cb 3D DCT")
             .into();
@@ -741,7 +741,7 @@ mod tests {
         let new_cr_components = cr_slices
             .into_iter()
             .into_chunks_iter(LENGTH)
-            .into_transform_block_3d_dct_iter(frame_resolution)
+            .into_transform_block_3d_dct_iter(frame_resolution, std::iter::empty())
             .next()
             .expect("Failed to produce a Cr 3D DCT")
             .into();
