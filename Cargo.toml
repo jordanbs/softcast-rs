@@ -7,6 +7,7 @@ edition = "2024"
 cmake = "0.1.57"
 liquid-sys = { path = "crates/liquid-sys" }
 ndarray = "0.17.1"
+ndarray-stats = "0.7.0"
 ndrustfft = "0.6.2"
 num-complex = "0.4.6"
 objc2 = "0.6.3"

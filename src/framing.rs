@@ -817,4 +817,130 @@ mod tests {
         writer.finish_writing().expect("Failed to finish writing.");
         assert_eq!(pixel_buffers_writen, 304);
     }
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_reader_to_frame_inverse_mean_squared_error() {
+        use crate::asset_reader_writer::transform_block_3d::*;
+        use crate::channel_coding::slice::*;
+        use crate::source_coding::transform_block_3d_dct::*;
+        use ndarray_stats::DeviationExt;
+
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
+        let asset_width: usize = asset_width.try_into().unwrap();
+        let asset_height: usize = asset_height.try_into().unwrap();
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let MacroBlock3D {
+            y_components: original_y_components,
+            cb_components: _,
+            cr_components: _,
+        } = macro_block.clone();
+
+        let mut y_dct = macro_block.y_components.into_dct();
+        //         let original_y_dct_components = y_dct.values.clone();
+
+        // Expensive.. can I defer?
+        let chunks: Vec<_> = y_dct.chunks_iter().collect();
+
+        let first_chunk = chunks.first().expect("No chunks.");
+        let chunk_dim = first_chunk.values.dim();
+        let chunks_per_gop =
+            (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+
+        let y_slices_and_metadata: Box<_> =
+            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+
+        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
+            .iter()
+            .map(|slice| &slice.chunk_metadata)
+            .into();
+        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
+        let packetizer: Packetizer = y_compressed_metadata.into();
+        let metadata_modulator: MetadataModulator<_> = packetizer.into();
+        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let framer: OFDMFrameGenerator<_> =
+            metadata_modulator.flatten().chain(slice_modulator).into();
+
+        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
+        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+
+        let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+        let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
+            .by_ref()
+            .take(chunks_per_gop)
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(!chunk_metadatas.is_empty());
+        assert_eq!(chunk_metadatas.len(), 6912);
+
+        let num_slices = chunks_per_gop.next_power_of_two();
+
+        let allocation_gop_length_with_padding =
+            ((num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2) as f32
+                / (asset_height * asset_width) as f32)
+                .ceil() as usize;
+
+        let mut array3d: ndarray::Array3<f32> = ndarray::Array3::zeros((
+            allocation_gop_length_with_padding,
+            asset_height,
+            asset_width,
+        ));
+
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d);
+
+        let mut slice_and_metadatas = vec![];
+        let mut chunk_metadata_iter = chunk_metadatas.into_iter();
+
+        for slice in slice_demodulator.take(num_slices) {
+            // there will be more slices than chunk_metadatas
+            let chunk_metadata = chunk_metadata_iter.next().unwrap_or_default();
+            let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
+            slice_and_metadatas.push(slice_and_metadata);
+        }
+        let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
+
+        let chunks_iter: ChunkIter<_, _, _> =
+            slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
+
+        let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
+        let chunk_metadatas_new: Box<_> = chunks
+            .iter()
+            .map(|chunk| chunk.metadata)
+            .take(chunks_per_gop)
+            .collect();
+
+        let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
+            array3d,
+            &chunk_metadatas_new,
+            (asset_width, asset_height),
+            chunk_dim,
+        );
+        //         let y_dct_components =
+        //             TransformBlock3DDCT::from_chunks(&chunks, (asset_width, asset_height));
+
+        //         assert_eq!(original_y_dct_components, y_dct_components.values);
+        let new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> =
+            y_dct_components.into();
+
+        let mean_sq_error = original_y_components
+            .values()
+            .mean_sq_err(new_y_components.values())
+            .unwrap();
+        assert_eq!(mean_sq_error, 0f64);
+    }
 }
