@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bitvec = "1.0.1"
 cmake = "0.1.57"
 liquid-sys = { path = "crates/liquid-sys" }
 ndarray = "0.17.1"

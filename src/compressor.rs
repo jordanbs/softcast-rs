@@ -17,10 +17,78 @@
 
 use crate::asset_reader_writer::*;
 use crate::source_coding::chunk::*;
+use std::io::{Read, Write};
 
 #[derive(Default)]
-pub struct CompressionMetadata {
-    bitmap: Box<[bool]>,
+pub struct MetadataBitmap {
+    bitmap: bitvec::boxed::BitBox<usize, bitvec::order::Lsb0>,
+}
+
+pub struct RunLengthBitmapCompressor {
+    bitmap_iter: std::iter::Peekable<bitvec::boxed::IntoIter<usize, bitvec::order::Lsb0>>,
+    has_written_starting_bit: bool,
+    iter_is_finished: bool,
+}
+
+impl From<MetadataBitmap> for RunLengthBitmapCompressor {
+    fn from(metadata_bitmap: MetadataBitmap) -> Self {
+        RunLengthBitmapCompressor {
+            bitmap_iter: metadata_bitmap.bitmap.into_iter().peekable(),
+            has_written_starting_bit: false,
+            iter_is_finished: false,
+        }
+    }
+}
+
+impl Read for RunLengthBitmapCompressor {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if 0 == buf.len() {
+            return Ok(0);
+        }
+        if self.iter_is_finished {
+            return Ok(0);
+        }
+        let buf_len = buf.len();
+        let mut buf_cursor = std::io::Cursor::new(buf);
+
+        let mut bytes_read = 0usize;
+        loop {
+            let remaining = buf_len - buf_cursor.position() as usize;
+            if remaining < size_of::<u32>() {
+                assert_ne!(0, bytes_read, "Buf too small for a single read");
+                return Ok(bytes_read);
+            }
+
+            let bit = self.bitmap_iter.next();
+            if bit.is_none() {
+                self.iter_is_finished = true;
+                return Ok(bytes_read);
+            }
+            let bit = bit.unwrap();
+
+            if !self.has_written_starting_bit {
+                assert!(
+                    1 + size_of::<u32>() <= remaining,
+                    "buf too small for a single read."
+                );
+
+                buf_cursor.write_all(&[bit as u8])?; // keep this buffer byte aligned for zstd performance
+                bytes_read += 1;
+                self.has_written_starting_bit = true;
+            }
+
+            let mut run_length = 1u32;
+            while let Some(&next_bit) = self.bitmap_iter.peek()
+                && next_bit == bit
+            {
+                run_length += 1;
+            }
+
+            let run_length_bytes = run_length.to_be_bytes();
+            buf_cursor.write_all(&run_length_bytes)?;
+            bytes_read += run_length_bytes.len();
+        }
+    }
 }
 
 pub struct Compressor<
@@ -37,15 +105,15 @@ pub struct Compressor<
 struct LoadedCompressor<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
     filter_predicate: Box<dyn Fn(&Chunk<'a, GOP_LENGTH, PixelType>) -> bool>,
     chunks_cloned_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
-    metadata_bitmap: Option<CompressionMetadata>,
+    metadata_bitmap: Option<MetadataBitmap>,
 }
 
 impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
-    > Compressor<'a, GOP_LENGTH, PixelType, I>
+    'a,
+    const GOP_LENGTH: usize,
+    PixelType: HasPixelComponentType,
+    I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
+> Compressor<'a, GOP_LENGTH, PixelType, I>
 {
     pub fn new(chunk_iter: I, compression_ratio: f64) -> Self {
         assert!(compression_ratio > 0f64);
@@ -57,7 +125,7 @@ impl<
         }
     }
 
-    pub fn take_metadata_bitmap(&mut self) -> CompressionMetadata {
+    pub fn take_metadata_bitmap(&mut self) -> MetadataBitmap {
         let loader = self.load_mut();
         loader
             .metadata_bitmap
@@ -91,7 +159,7 @@ impl<
             };
             let filter_predicate = Box::new(filter_predicate);
 
-            let metadata_bitmap = CompressionMetadata {
+            let metadata_bitmap = MetadataBitmap {
                 bitmap: chunks.iter().map(&filter_predicate).collect(),
             };
 
@@ -111,11 +179,11 @@ impl<
 }
 
 impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
-    > Iterator for Compressor<'a, GOP_LENGTH, PixelType, I>
+    'a,
+    const GOP_LENGTH: usize,
+    PixelType: HasPixelComponentType,
+    I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
+> Iterator for Compressor<'a, GOP_LENGTH, PixelType, I>
 {
     type Item = Chunk<'a, GOP_LENGTH, PixelType>;
     fn next(&mut self) -> Option<Self::Item> {
