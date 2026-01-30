@@ -81,6 +81,7 @@ impl Read for RunLengthBitmapCompressor {
             while let Some(&next_bit) = self.bitmap_iter.peek()
                 && next_bit == bit
             {
+                let _ = self.bitmap_iter.next();
                 run_length += 1;
             }
 
