@@ -457,7 +457,7 @@ impl PixelComponentType {
     }
 }
 
-pub trait HasPixelComponentType {
+pub trait HasPixelComponentType: std::fmt::Debug {
     const TYPE: PixelComponentType;
 }
 

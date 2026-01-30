@@ -352,6 +352,7 @@ pub mod chunk {
         pub energy: f32,
     }
 
+    #[derive(Debug)]
     pub struct Chunk<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub values: ndarray::ArrayViewMut3<'a, f32>,
         pub metadata: ChunkMetadata,

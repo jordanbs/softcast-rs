@@ -17,6 +17,7 @@
 
 pub mod asset_reader_writer;
 pub mod channel_coding;
+pub mod compressor;
 pub mod framing;
 pub mod metadata_coding;
 pub mod modulation;
