@@ -198,11 +198,11 @@ pub mod slices {
     }
 
     impl<
-            'a,
-            const GOP_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
-        > From<I> for SliceModulator<'a, GOP_LENGTH, PixelType, I>
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+    > From<I> for SliceModulator<'a, GOP_LENGTH, PixelType, I>
     {
         fn from(slice_iter: I) -> Self {
             Self {
@@ -214,11 +214,11 @@ pub mod slices {
     }
 
     impl<
-            'a,
-            const GOP_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
-        > SliceModulator<'a, GOP_LENGTH, PixelType, I>
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+    > SliceModulator<'a, GOP_LENGTH, PixelType, I>
     {
         fn next_real(&mut self) -> Option<f32> {
             if self.working_slice.is_none() {
@@ -240,11 +240,11 @@ pub mod slices {
     }
 
     impl<
-            'a,
-            const GOP_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
-        > Iterator for SliceModulator<'a, GOP_LENGTH, PixelType, I>
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+    > Iterator for SliceModulator<'a, GOP_LENGTH, PixelType, I>
     {
         type Item = QuadratureSymbol;
 
@@ -269,11 +269,11 @@ pub mod slices {
     }
 
     impl<
-            'a,
-            const GOP_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = QuadratureSymbol>,
-        > SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = QuadratureSymbol>,
+    > SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
     {
         pub fn new(
             slice_dimensions: (usize, usize, usize),
@@ -289,11 +289,11 @@ pub mod slices {
     }
 
     impl<
-            'a,
-            const GOP_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = QuadratureSymbol>,
-        > Iterator for SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
+        'a,
+        const GOP_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = QuadratureSymbol>,
+    > Iterator for SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
     {
         type Item = Slice<'a, GOP_LENGTH, PixelType>;
 

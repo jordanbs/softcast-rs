@@ -28,17 +28,17 @@ use objc2_av_foundation::{
     AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
 };
 
-use objc2_core_foundation::{kCFAllocatorDefault, CFRetained, CFString};
+use objc2_core_foundation::{CFRetained, CFString, kCFAllocatorDefault};
 
 use objc2_core_media::CMTime;
 
 use objc2_core_video::{
-    kCVPixelBufferHeightKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
-    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, CVImageBuffer, CVPixelBuffer,
-    CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
-    CVPixelBufferGetHeight, CVPixelBufferGetHeightOfPlane, CVPixelBufferGetWidth,
-    CVPixelBufferIsPlanar, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
-    CVPixelBufferUnlockBaseAddress,
+    CVImageBuffer, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
+    CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight, CVPixelBufferGetHeightOfPlane,
+    CVPixelBufferGetWidth, CVPixelBufferIsPlanar, CVPixelBufferLockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress, kCVPixelBufferHeightKey,
+    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
+    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
 };
 
 use std::thread::sleep;

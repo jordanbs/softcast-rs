@@ -381,11 +381,11 @@ pub mod chunk {
         component_frame_resolution: (usize, usize),
     }
     impl<
-            'a,
-            const DCT_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-        > TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    > TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     {
         fn new(chunk_iter: I, frame_resolution: (usize, usize)) -> Self {
             let (frame_width, frame_height) = frame_resolution;
@@ -402,11 +402,11 @@ pub mod chunk {
     }
 
     impl<
-            'a,
-            const DCT_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-        > Iterator for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    > Iterator for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
     {
         type Item = TransformBlock3DDCT<DCT_LENGTH, PixelType>;
 
@@ -468,11 +468,11 @@ pub mod chunk {
         ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self>;
     }
     impl<
-            'a,
-            const DCT_LENGTH: usize,
-            PixelType: HasPixelComponentType,
-            I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-        > ChunkIterFromExt<'a, DCT_LENGTH, PixelType> for I
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    > ChunkIterFromExt<'a, DCT_LENGTH, PixelType> for I
     {
         fn into_transform_block_3d_dct_iter(
             self,

@@ -346,9 +346,9 @@ pub mod packetizer {
     }
 
     impl<
-            I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
-            QI: Iterator<Item = QuadratureSymbol>,
-        > IntoInnerQuadratureSymbolIter<QI> for Depacketizer<I, QI>
+        I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
+        QI: Iterator<Item = QuadratureSymbol>,
+    > IntoInnerQuadratureSymbolIter<QI> for Depacketizer<I, QI>
     {
         fn into_inner_quadrature_symbol_iter(self) -> QI {
             self.packet_iter.into_inner_quadrature_symbol_iter()
