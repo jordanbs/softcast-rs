@@ -24,23 +24,75 @@ pub struct MetadataBitmap {
     bitmap: bitvec::boxed::BitBox<usize, bitvec::order::Lsb0>,
 }
 
-pub struct RunLengthBitmapCompressor {
-    bitmap_iter: std::iter::Peekable<bitvec::boxed::IntoIter<usize, bitvec::order::Lsb0>>,
+pub struct RunLengthBitmapCompressor<I: Iterator<Item = bool>> {
+    bit_iter: std::iter::Peekable<I>,
     has_written_starting_bit: bool,
     iter_is_finished: bool,
 }
 
-impl From<MetadataBitmap> for RunLengthBitmapCompressor {
-    fn from(metadata_bitmap: MetadataBitmap) -> Self {
+impl<I: Iterator<Item = bool>> From<I> for RunLengthBitmapCompressor<I> {
+    fn from(bit_iter: I) -> Self {
         RunLengthBitmapCompressor {
-            bitmap_iter: metadata_bitmap.bitmap.into_iter().peekable(),
+            bit_iter: bit_iter.peekable(),
             has_written_starting_bit: false,
             iter_is_finished: false,
         }
     }
 }
 
-impl Read for RunLengthBitmapCompressor {
+pub struct RunLengthBitmapDecompressor<R: Read> {
+    buf_reader: R,
+    current_value: Option<bool>,
+    run_count_remaining: u32,
+}
+
+impl<R: Read> From<R> for RunLengthBitmapDecompressor<R> {
+    fn from(buf_reader: R) -> Self {
+        Self {
+            buf_reader,
+            current_value: None,
+            run_count_remaining: 0u32,
+        }
+    }
+}
+
+impl<R: Read> Iterator for RunLengthBitmapDecompressor<R> {
+    type Item = Result<bool, std::io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current_value = if 0 != self.run_count_remaining {
+            // vend the current value
+            self.current_value.expect("current_value is not set.")
+        } else {
+            // get the next value to vend
+            let current_value = match self.current_value {
+                Some(value) => !value, // new value, flip
+                None => {
+                    // first val, read it from buffer
+                    let mut byte_buf = [0u8; size_of::<u8>()];
+                    if let Some(err) = self.buf_reader.read_exact(&mut byte_buf).err() {
+                        return Some(Err(err));
+                    }
+                    let first_byte = u8::from_be_bytes(byte_buf);
+                    self.current_value = Some(0 != first_byte);
+                    self.current_value.unwrap()
+                }
+            };
+            let mut run_count_bytes = [0u8; size_of::<u32>()];
+
+            if let Some(err) = self.buf_reader.read_exact(&mut run_count_bytes).err() {
+                // returns EoF if buffer is emptied
+                return Some(Err(err));
+            }
+            self.run_count_remaining = u32::from_be_bytes(run_count_bytes);
+            current_value
+        };
+        self.run_count_remaining -= 1;
+        Some(Ok(current_value))
+    }
+}
+
+impl<I: Iterator<Item = bool>> Read for RunLengthBitmapCompressor<I> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if 0 == buf.len() {
             return Ok(0);
@@ -59,7 +111,7 @@ impl Read for RunLengthBitmapCompressor {
                 return Ok(bytes_read);
             }
 
-            let bit = self.bitmap_iter.next();
+            let bit = self.bit_iter.next();
             if bit.is_none() {
                 self.iter_is_finished = true;
                 return Ok(bytes_read);
@@ -72,16 +124,18 @@ impl Read for RunLengthBitmapCompressor {
                     "buf too small for a single read."
                 );
 
-                buf_cursor.write_all(&[bit as u8])?; // keep this buffer byte aligned for zstd performance
+                // keep this buffer byte aligned for zstd performance
+                let bit_buf = (bit as u8).to_be_bytes();
+                buf_cursor.write_all(&bit_buf)?;
                 bytes_read += 1;
                 self.has_written_starting_bit = true;
             }
 
             let mut run_length = 1u32;
-            while let Some(&next_bit) = self.bitmap_iter.peek()
+            while let Some(&next_bit) = self.bit_iter.peek()
                 && next_bit == bit
             {
-                let _ = self.bitmap_iter.next();
+                let _ = self.bit_iter.next();
                 run_length += 1;
             }
 
@@ -106,7 +160,7 @@ pub struct Compressor<
 struct LoadedCompressor<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
     filter_predicate: Box<dyn Fn(&Chunk<'a, GOP_LENGTH, PixelType>) -> bool>,
     chunks_cloned_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
-    metadata_bitmap: Option<MetadataBitmap>,
+    metadata_bitmap: Option<MetadataBitmap>, // can be consumed
 }
 
 impl<
@@ -126,6 +180,7 @@ impl<
         }
     }
 
+    // TODO: can this be an iter?
     pub fn take_metadata_bitmap(&mut self) -> MetadataBitmap {
         let loader = self.load_mut();
         loader
@@ -195,5 +250,67 @@ impl<
         } = self.load_mut();
 
         chunks_cloned_iter.filter(filter_predicate).next()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitvec::prelude::*;
+
+    #[test]
+    fn test_compressor_basic() {
+        let bytes = vec![0x00, 0x00u8, 0x00u8, 0x01u8] // 0x1F zeros followed by one 1
+            .iter()
+            .map(|n| n.to_be_bytes())
+            .flatten()
+            .collect();
+        let bits: BitVec<u8, Msb0> = BitVec::from_vec(bytes);
+        let mut rle_compressor: RunLengthBitmapCompressor<_> = bits.into_iter().into();
+
+        let mut actual = vec![];
+        let bytes_read = rle_compressor
+            .read_to_end(&mut actual)
+            .expect("Failed to read to end.");
+
+        let mut expected: Vec<u8> = vec![0x00; 1]; // first value
+        let mut run_lengths: Vec<u8> = [0x1Fu32, 0x01u32]
+            .iter()
+            .map(|n| n.to_be_bytes())
+            .flatten()
+            .collect();
+        expected.append(&mut run_lengths);
+
+        assert_eq!(expected.len(), bytes_read);
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_decompressor_basic() {
+        let mut rle_bytes: Vec<u8> = vec![0x00; 1]; // first value
+        let mut run_lengths: Vec<u8> = [0x1Fu32, 0x01u32]
+            .iter()
+            .map(|n| n.to_be_bytes())
+            .flatten()
+            .collect();
+        rle_bytes.append(&mut run_lengths);
+        let rle_cursor = std::io::Cursor::new(rle_bytes);
+
+        let num_values_to_take = 0x20;
+
+        let rle_decompressor: RunLengthBitmapDecompressor<_> = rle_cursor.into();
+        let decompressed_bits: BitVec<u8, Msb0> = rle_decompressor
+            .take(num_values_to_take)
+            .map(|r| r.expect("Error reading RLE-compressed bytes."))
+            .collect();
+        let decompressed_bytes: Vec<u8> = decompressed_bits.into();
+
+        let expected_bytes: Vec<u8> = vec![0x00, 0x00u8, 0x00u8, 0x01u8] // 0x1F zeros followed by one 1
+            .iter()
+            .map(|n| n.to_be_bytes())
+            .flatten()
+            .collect();
+
+        assert_eq!(expected_bytes, decompressed_bytes);
     }
 }
