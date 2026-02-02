@@ -19,9 +19,8 @@ use crate::asset_reader_writer::*;
 use crate::source_coding::chunk::*;
 use std::io::{Read, Write};
 
-#[derive(Default)]
 pub struct MetadataBitmap {
-    bitmap: bitvec::boxed::BitBox<usize, bitvec::order::Lsb0>,
+    pub rle_encoded_bytes: Box<[u8]>,
 }
 
 pub struct RunLengthBitmapCompressor<I: Iterator<Item = bool>> {
@@ -53,6 +52,12 @@ impl<R: Read> From<R> for RunLengthBitmapDecompressor<R> {
             current_value: None,
             run_count_remaining: 0u32,
         }
+    }
+}
+
+impl<R: Read> RunLengthBitmapDecompressor<R> {
+    pub fn into_inner(self) -> R {
+        self.buf_reader
     }
 }
 
@@ -152,15 +157,31 @@ pub struct Compressor<
     PixelType: HasPixelComponentType,
     I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
 > {
-    chunk_iter: Option<I>,
+    chunk_iter: Option<I>, // for input
     compression_ratio: f64,
     loader: std::cell::OnceCell<LoadedCompressor<'a, GOP_LENGTH, PixelType>>,
 }
 
 struct LoadedCompressor<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
     filter_predicate: Box<dyn Fn(&Chunk<'a, GOP_LENGTH, PixelType>) -> bool>,
-    chunks_cloned_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
+    chunks_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
     metadata_bitmap: Option<MetadataBitmap>, // can be consumed
+}
+
+impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
+    LoadedCompressor<'a, GOP_LENGTH, PixelType>
+{
+    pub fn new(
+        filter_predicate: Box<dyn Fn(&Chunk<'a, GOP_LENGTH, PixelType>) -> bool>,
+        chunks_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
+        metadata_bitmap: MetadataBitmap,
+    ) -> Self {
+        Self {
+            filter_predicate,
+            chunks_iter,
+            metadata_bitmap: Some(metadata_bitmap),
+        }
+    }
 }
 
 impl<
@@ -191,7 +212,7 @@ impl<
 
     fn load(&mut self) -> &LoadedCompressor<'a, GOP_LENGTH, PixelType> {
         self.loader.get_or_init(|| {
-            // consume self.chunk_iter
+            // consume self.chunk_iter, share it between LoadedCompressor and MetadataBitmap
             let chunks: Box<_> = self.chunk_iter.take().unwrap().collect();
             // if this invariant changes, must not consume chunks_iter
             assert_eq!(GOP_LENGTH, chunks.len());
@@ -215,17 +236,19 @@ impl<
             };
             let filter_predicate = Box::new(filter_predicate);
 
+            // RLE the metadata
+            // avoid storing the expanded bitmap, to limit peak memory usage
+            let mut rle_compressor: RunLengthBitmapCompressor<_> =
+                chunks.iter().map(&filter_predicate).into();
+            let mut rle_encoded_metadata = vec![];
+            let _ = rle_compressor
+                .read_to_end(&mut rle_encoded_metadata)
+                .expect("Failed to run-length-encode metadata.");
+
             let metadata_bitmap = MetadataBitmap {
-                bitmap: chunks.iter().map(&filter_predicate).collect(),
+                rle_encoded_bytes: rle_encoded_metadata.into(),
             };
-
-            let chunks_cloned_iter = chunks.into_iter();
-
-            LoadedCompressor {
-                filter_predicate,
-                chunks_cloned_iter,
-                metadata_bitmap: Some(metadata_bitmap),
-            }
+            LoadedCompressor::new(filter_predicate, chunks.into_iter(), metadata_bitmap)
         })
     }
     fn load_mut(&mut self) -> &mut LoadedCompressor<'a, GOP_LENGTH, PixelType> {
@@ -245,11 +268,11 @@ impl<
     fn next(&mut self) -> Option<Self::Item> {
         let LoadedCompressor {
             filter_predicate,
-            chunks_cloned_iter,
+            chunks_iter,
             ..
         } = self.load_mut();
 
-        chunks_cloned_iter.filter(filter_predicate).next()
+        chunks_iter.filter(filter_predicate).next()
     }
 }
 
