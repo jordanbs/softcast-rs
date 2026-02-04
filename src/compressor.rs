@@ -19,8 +19,12 @@ use crate::asset_reader_writer::*;
 use crate::source_coding::chunk::*;
 use std::io::{Read, Write};
 
-pub struct MetadataBitmap {
+pub struct RunLengthEncodedMetadataBitmap {
     pub rle_encoded_bytes: Box<[u8]>,
+}
+
+pub struct MetadataBitmap {
+    pub values: bitvec::boxed::BitBox<u8, bitvec::order::Lsb0>,
 }
 
 pub struct RunLengthBitmapEncoder<I: Iterator<Item = bool>> {
@@ -250,18 +254,11 @@ impl<
             };
             let filter_predicate = Box::new(filter_predicate);
 
-            // RLE the metadata
-            // avoid storing the expanded bitmap, to limit peak memory usage
-            let mut rle_compressor: RunLengthBitmapEncoder<_> =
-                chunks.iter().map(&filter_predicate).into();
-            let mut rle_encoded_metadata = Vec::new(); // Hard to get a size hint
-            let _ = rle_compressor
-                .read_to_end(&mut rle_encoded_metadata)
-                .expect("Failed to run-length-encode metadata.");
-
+            // bitvec + zstd tends to compress better than u16 rle + zstd
             let metadata_bitmap = MetadataBitmap {
-                rle_encoded_bytes: rle_encoded_metadata.into(),
+                values: chunks.iter().map(&filter_predicate).collect(),
             };
+
             LoadedCompressor::new(filter_predicate, chunks.into_iter(), metadata_bitmap)
         })
     }
@@ -406,7 +403,7 @@ mod tests {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
         let mut reader = AssetReader::new(path);
 
-        const LENGTH: usize = 8;
+        const LENGTH: usize = 2;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -419,35 +416,24 @@ mod tests {
         let mut compressor = Compressor::new(y_chunks_iter, compression_ratio);
         let metadata_bitmap = compressor.take_metadata_bitmap();
 
-        let buf_reader = std::io::Cursor::new(&metadata_bitmap.rle_encoded_bytes);
-        let rle_decoder: RunLengthBitmapDecoder<_> = buf_reader.into();
-
-        let sum = rle_decoder
-            .map(|r| r.expect("Error decoding."))
-            .map(|(_value, run_length)| run_length as usize)
-            .sum();
-        let num_chunks: usize = 8 * 1920 * 1080 / (30 * 40);
+        let sum = metadata_bitmap.values.len();
+        let num_chunks: usize = 2 * 1920 * 1080 / (30 * 40);
         assert_eq!(num_chunks, sum);
 
-        let buf_reader = std::io::Cursor::new(&metadata_bitmap.rle_encoded_bytes);
-        let rle_decoder: RunLengthBitmapDecoder<_> = buf_reader.into();
-
-        let sum_trues = rle_decoder
-            .map(|r| r.expect("Error decoding."))
-            .filter(|(value, _run_length)| *value)
-            .map(|(_value, run_length)| run_length as usize)
-            .sum();
+        let sum_trues = metadata_bitmap
+            .values
+            .iter()
+            .by_vals()
+            .filter(|&value| value)
+            .count();
         assert_eq!(
             (num_chunks as f64 * compression_ratio).floor() as usize,
             sum_trues
         );
-
-        let buf_size = metadata_bitmap.rle_encoded_bytes.len();
-        let rle_compression_ratio = buf_size as f64 * 8.0 / sum as f64;
-        eprintln!("RLE compression ratio: {:.2}", rle_compression_ratio); // lower is better
     }
 
     #[test]
+    //     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_compressor_zstd() {
         use crate::asset_reader_writer::pixel_buffer::*;
         use crate::source_coding::transform_block_3d_dct::*;
@@ -459,7 +445,7 @@ mod tests {
         let path2 = "sample-media/sample-5s.mp4"; // more suitable for testing compression
         let mut reader = AssetReader::new(path2);
 
-        const LENGTH: usize = 90;
+        const LENGTH: usize = 9;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -472,7 +458,13 @@ mod tests {
         let mut compressor = Compressor::new(y_chunks_iter, compression_ratio);
         let metadata_bitmap = compressor.take_metadata_bitmap();
 
-        let buf_reader = std::io::Cursor::new(&metadata_bitmap.rle_encoded_bytes);
+        let mut rle_encoder: RunLengthBitmapEncoder<_> =
+            metadata_bitmap.values.iter().by_vals().into();
+        let mut rle_encoded_bytes = vec![];
+        let _ = rle_encoder
+            .read_to_end(&mut rle_encoded_bytes)
+            .expect("Failed to rle_encode.");
+        let buf_reader = std::io::Cursor::new(&rle_encoded_bytes);
         let rle_decoder: RunLengthBitmapDecoder<_> = buf_reader.into();
 
         let bitvec: bitvec::vec::BitVec<u8> = rle_decoder
@@ -485,9 +477,8 @@ mod tests {
             zstd::encode_all(std::io::Cursor::new(bitvec.as_raw_slice()), 0)
                 .expect("zstd encode failed");
 
-        let zstd_rle_compressed =
-            zstd::encode_all(std::io::Cursor::new(&metadata_bitmap.rle_encoded_bytes), 0)
-                .expect("zstd encode failed.");
+        let zstd_rle_compressed = zstd::encode_all(std::io::Cursor::new(&rle_encoded_bytes), 0)
+            .expect("zstd encode failed.");
         let rle_compressed_size = zstd_rle_compressed.len();
         let bitvec_compressed_size = zstd_bitvec_compressed.len();
 
@@ -497,7 +488,7 @@ mod tests {
 
         eprintln!(
             "RLE {} w/ zstd: {} bitvec {} w/ zstd: {} ",
-            metadata_bitmap.rle_encoded_bytes.len(),
+            rle_encoded_bytes.len(),
             rle_compressed_size,
             bitvec.as_raw_slice().len(),
             bitvec_compressed_size
