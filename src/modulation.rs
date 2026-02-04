@@ -496,7 +496,8 @@ mod tests {
         let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
 
         let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(depacketizer, chunk_metadata.len());
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
 
@@ -516,7 +517,8 @@ mod tests {
 
         let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
         let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(depacketizer, chunk_metadata.len());
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
 

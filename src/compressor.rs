@@ -23,6 +23,7 @@ pub struct RunLengthEncodedMetadataBitmap {
     pub rle_encoded_bytes: Box<[u8]>,
 }
 
+#[derive(Debug)]
 pub struct MetadataBitmap {
     pub values: bitvec::boxed::BitBox<u8, bitvec::order::Lsb0>,
 }

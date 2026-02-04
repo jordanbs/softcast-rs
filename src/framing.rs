@@ -432,17 +432,14 @@ mod tests {
         let chunks_per_gop =
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-        let y_slices_and_metadata: Box<_> =
-            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
-
-        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
-            .iter()
-            .map(|slice| &slice.chunk_metadata)
-            .into();
-        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
-
+        let y_compressed_metadata: CompressedMetadata =
+            chunks.iter().map(|chunk| &chunk.metadata).into();
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+        let y_slices_and_metadata: Box<_> =
+            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
@@ -452,7 +449,7 @@ mod tests {
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
-        let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+        let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
             .by_ref()
             .take(chunks_per_gop)
@@ -512,17 +509,16 @@ mod tests {
         let chunks_per_gop =
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-        let y_slices_and_metadata: Box<_> =
-            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
-
-        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
-            .iter()
-            .map(|slice| &slice.chunk_metadata)
-            .into();
-        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+        let y_compressed_metadata: CompressedMetadata =
+            chunks.iter().map(|chunk| &chunk.metadata).into();
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+        let y_slices_and_metadata: Box<_> =
+            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
@@ -532,7 +528,7 @@ mod tests {
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
-        let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+        let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
             .by_ref()
             .take(chunks_per_gop)
@@ -610,7 +606,8 @@ mod tests {
         let ofdm_synchronizer: OFDMFrameSynchronizer<_> = ofdm_generator.into();
         let metadata_demodulator: MetadataDemodulator<_> = ofdm_synchronizer.into();
         let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(depacketizer, chunk_metadata.len());
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
 
@@ -658,23 +655,21 @@ mod tests {
                 asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
             );
 
-            let mut chunks_iter: std::iter::Peekable<_> = dct_components.chunks_iter().peekable();
-            let first_chunk = chunks_iter.peek().expect("No chunks.");
+            let chunks: Box<_> = dct_components.chunks_iter().collect();
+            let first_chunk = chunks.first().expect("No chunks.");
             let chunk_dim = first_chunk.values.dim();
             let chunks_per_gop = (GOP_LENGTH * frame_height * frame_width)
                 / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-            let y_slices_and_metadata: Box<_> =
-                chunks_iter.into_slice_iter(chunks_per_gop).collect();
-
-            let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
-                .iter()
-                .map(|slice| &slice.chunk_metadata)
-                .into();
-            let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
-
+            let y_compressed_metadata: CompressedMetadata =
+                chunks.iter().map(|chunk| &chunk.metadata).into();
             let packetizer: Packetizer = y_compressed_metadata.into();
             let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+            let y_slices_and_metadata: Box<_> =
+                chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+            let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
             let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
             let framer: OFDMFrameGenerator<_> =
                 metadata_modulator.flatten().chain(slice_modulator).into();
@@ -701,7 +696,7 @@ mod tests {
             let metadata_demodulator: MetadataDemodulator<_> = synchonizer.into();
             let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
-            let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+            let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
             let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
                 .by_ref()
                 .take(chunks_per_gop)
@@ -856,17 +851,16 @@ mod tests {
         let chunks_per_gop =
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-        let y_slices_and_metadata: Box<_> =
-            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
-
-        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
-            .iter()
-            .map(|slice| &slice.chunk_metadata)
-            .into();
-        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+        let y_compressed_metadata: CompressedMetadata =
+            chunks.iter().map(|chunk| &chunk.metadata).into();
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+        let y_slices_and_metadata: Box<_> =
+            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+        let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
@@ -876,7 +870,7 @@ mod tests {
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
-        let mut metadata_decompressor: MetadataDecompressor<_, _> = depacketizer.into();
+        let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
             .by_ref()
             .take(chunks_per_gop)

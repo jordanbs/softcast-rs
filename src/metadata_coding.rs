@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::compressor::*;
 use crate::modulation::IntoInnerQuadratureSymbolIter;
 use crate::modulation::QuadratureSymbol;
 use crate::source_coding::chunk::*;
@@ -24,10 +25,6 @@ use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
 // TODO: consider using protobuf or similar for metadata binary format
-
-trait ToBytes<const SERIALIZED_SIZE: usize> {
-    fn to_bytes(&self) -> [u8; SERIALIZED_SIZE];
-}
 
 trait SerializedSize {
     const SERIALIZED_SIZE: usize;
@@ -55,13 +52,8 @@ impl From<&[u8; ChunkMetadata::SERIALIZED_SIZE]> for ChunkMetadata {
     }
 }
 
-impl ToBytes<{ Self::SERIALIZED_SIZE }> for ChunkMetadata {
-    fn to_bytes(&self) -> [u8; Self::SERIALIZED_SIZE] {
-        self.into()
-    }
-}
-
 fn compress_metadata<'a, I>(
+    metadata_bitmap: MetadataBitmap,
     chunk_metadata_iter: I,
 ) -> Result<CompressedMetadata, Box<dyn std::error::Error>>
 where
@@ -72,8 +64,18 @@ where
     let cursor = std::io::Cursor::new(write_buf);
 
     let mut encoder = zstd::stream::Encoder::new(cursor, 0)?;
-    for metadata in chunk_metadata_iter {
-        encoder.write_all(&metadata.to_bytes())?
+
+    // [bitmap (len == num_chunks)]
+    // [chunk.mean; (chunk.energy if bitmap==1)]
+
+    encoder.write_all(metadata_bitmap.values.as_raw_slice())?;
+
+    // compress chunks
+    for (idx, chunk_metadata) in chunk_metadata_iter.enumerate() {
+        encoder.write_all(&chunk_metadata.mean.to_be_bytes())?;
+        if metadata_bitmap.values[idx] {
+            encoder.write_all(&chunk_metadata.energy.to_be_bytes())?;
+        }
     }
     let compressed_bytes = encoder.finish()?.into_inner();
 
@@ -84,58 +86,137 @@ where
 
 pub struct MetadataDecompressor<QI, R: Read> {
     reader: Option<R>,
-    decoder: std::cell::OnceCell<
-        Result<zstd::stream::read::Decoder<'static, std::io::BufReader<R>>, std::io::Error>,
-    >,
-    had_error: bool,
+    decoder: std::cell::OnceCell<zstd::stream::read::Decoder<'static, std::io::BufReader<R>>>,
+    error: Option<std::rc::Rc<dyn std::error::Error>>,
+    num_chunks: usize,
+    chunk_idx: usize,
+    metadata_bitmap: std::cell::OnceCell<MetadataBitmap>,
     _marker: std::marker::PhantomData<QI>,
 }
 
-impl<QI, R: Read> From<R> for MetadataDecompressor<QI, R> {
-    fn from(reader: R) -> Self {
+impl<QI, R: Read> MetadataDecompressor<QI, R> {
+    pub fn new(reader: R, num_chunks: usize) -> Self {
         Self {
             reader: Some(reader),
             decoder: std::cell::OnceCell::new(),
-            had_error: false,
+            error: None,
+            num_chunks,
+            chunk_idx: 0,
+            metadata_bitmap: std::cell::OnceCell::new(),
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn metadata_bitmap(
+        &mut self,
+    ) -> Result<&MetadataBitmap, std::rc::Rc<dyn std::error::Error>> {
+        self.ensure_metadata_bitmap()?;
+        Ok(self.metadata_bitmap.get().unwrap())
+    }
+
+    fn ensure_metadata_bitmap(&mut self) -> Result<(), std::rc::Rc<dyn std::error::Error>> {
+        if let Some(err) = self.error.as_ref() {
+            return Err(err.clone());
+        }
+
+        if self.metadata_bitmap.get().is_none() {
+            self.ensure_decoder()?;
+            let decoder = self.decoder.get_mut().unwrap();
+            let mut bitmap = bitvec::bitbox!(u8, bitvec::order::Lsb0; 0; self.num_chunks);
+            if let Some(err) = decoder.read_exact(bitmap.as_raw_mut_slice()).err() {
+                return Err(self.set_err(err));
+            }
+            self.metadata_bitmap
+                .set(MetadataBitmap { values: bitmap })
+                .expect("metadata_bitmap already set");
+        }
+        Ok(())
+    }
+
+    fn ensure_decoder(&mut self) -> Result<(), std::rc::Rc<dyn std::error::Error>> {
+        if let Some(err) = self.error.as_ref() {
+            return Err(err.clone());
+        }
+
+        // zstd will return an error when parsing the dictionary failed.
+        if self.decoder.get().is_none() {
+            let reader = self.reader.take().unwrap(); // move into decoder
+            let decoder = match zstd::stream::read::Decoder::new(reader) {
+                Ok(decoder) => decoder,
+                Err(err) => return Err(self.set_err(err)),
+            };
+            let _ = self.decoder.set(decoder);
+        };
+        Ok(())
+    }
+
+    fn set_err<E: std::error::Error + 'static>(
+        &mut self,
+        err: E,
+    ) -> std::rc::Rc<dyn std::error::Error> {
+        let rc_error = std::rc::Rc::new(err);
+        self.error = Some(rc_error.clone());
+        rc_error
     }
 }
 
 impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
-    type Item = Result<ChunkMetadata, Box<dyn std::error::Error>>;
+    type Item = Result<ChunkMetadata, std::rc::Rc<dyn std::error::Error>>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.had_error {
+        if self.error.is_some() {
+            return None;
+        }
+        if self.chunk_idx == self.num_chunks {
             return None;
         }
 
-        let mut buf = [0u8; ChunkMetadata::SERIALIZED_SIZE];
-
-        // zstd will return an error when parsing the dictionary failed.
-        {
-            let decoder = self.decoder.get_or_init(|| {
-                let reader = self.reader.take().unwrap(); // move into decoder
-                zstd::stream::read::Decoder::new(reader)
-            });
-            if decoder.is_err() {
-                self.had_error = true;
-                return Some(Err("zstd dictionary parse failed.".into())); // meh
-            }
+        if let Err(err) = self.ensure_decoder() {
+            return Some(Err(err));
         }
+        if let Err(err) = self.ensure_metadata_bitmap() {
+            return Some(Err(err));
+        }
+        let decoder = self.decoder.get_mut().unwrap();
+        let metadata_bitmap = self.metadata_bitmap.get().unwrap();
 
-        let decoder = self.decoder.get_mut().unwrap().as_mut().unwrap(); // this is safe
+        let mut buf = [0u8; size_of::<f32>()];
         match decoder.read_exact(&mut buf) {
             Ok(()) => {
-                let meta = ChunkMetadata::from(&buf);
+                let mean = f32::from_be_bytes(buf);
+                if !mean.is_finite() {
+                    let err = std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("mean idx:{} is not finite", self.chunk_idx),
+                    );
+                    return Some(Err(self.set_err(err)));
+                }
+
+                let energy = if metadata_bitmap.values[self.chunk_idx] {
+                    match decoder.read_exact(&mut buf) {
+                        Ok(()) => {
+                            let energy = f32::from_be_bytes(buf);
+                            if !energy.is_finite() {
+                                let err = std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!("energy idx:{} is not finite", self.chunk_idx),
+                                );
+                                return Some(Err(self.set_err(err)));
+                            }
+                            energy
+                        }
+                        Err(err) => return Some(Err(self.set_err(err))),
+                    }
+                } else {
+                    0f32
+                };
+                let meta = ChunkMetadata { mean, energy };
+                self.chunk_idx += 1;
                 Some(Ok(meta))
             }
             Err(err) => {
                 match err.kind() {
                     std::io::ErrorKind::UnexpectedEof => None, // expected EoF, no more metadata
-                    _ => {
-                        self.had_error = true;
-                        Some(Err(err.into()))
-                    }
+                    _ => Some(Err(self.set_err(err))),
                 }
             }
         }
@@ -146,12 +227,13 @@ impl<QI: Iterator<Item = QuadratureSymbol>, R: Read + IntoInnerQuadratureSymbolI
     IntoInnerQuadratureSymbolIter<QI> for MetadataDecompressor<QI, R>
 {
     fn into_inner_quadrature_symbol_iter(self) -> QI {
-        if let Some(reader) = self.reader {
-            return reader.into_inner_quadrature_symbol_iter();
-        }
-
-        let decoder = self.decoder.into_inner().unwrap().unwrap();
-        let reader = decoder.finish().into_inner();
+        let reader = match self.reader {
+            Some(reader) => reader,
+            None => {
+                let decoder = self.decoder.into_inner().unwrap();
+                decoder.finish().into_inner()
+            }
+        };
         reader.into_inner_quadrature_symbol_iter()
     }
 }
@@ -161,12 +243,29 @@ pub struct CompressedMetadata {
     data: Box<[u8]>,
 }
 
+impl CompressedMetadata {
+    pub fn new<'a, I: Iterator<Item = &'a ChunkMetadata>>(
+        metadata_bitmap: MetadataBitmap,
+        chunk_metadata_iter: I,
+    ) -> Self {
+        compress_metadata(metadata_bitmap, chunk_metadata_iter)
+            .expect("Compressing metadata failed.")
+    }
+}
+
 impl<'a, I> From<I> for CompressedMetadata
 where
     I: Iterator<Item = &'a ChunkMetadata>,
 {
     fn from(chunk_metadata_iter: I) -> Self {
-        compress_metadata(chunk_metadata_iter).expect("Compressing metadata failed.")
+        // keeping for legacy tests
+        let chunk_metadatas: Box<_> = chunk_metadata_iter.collect();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadatas.len()],
+        };
+        let chunk_metadata_iter = chunk_metadatas.into_iter();
+        compress_metadata(metadata_bitmap, chunk_metadata_iter)
+            .expect("Compressing metadata failed.")
     }
 }
 
@@ -518,17 +617,20 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
-        let y_compressed_metadata =
-            compress_metadata(y_slices.iter().map(|slice| &slice.chunk_metadata))
-                .expect("y_metadata failed");
+        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let num_chunks = y_chunks.len();
+        let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH).collect();
+        let y_compressed_metadata: CompressedMetadata =
+            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
+
         eprintln!(
             "orig_size:{} compressed size:{}",
             y_slices.len() * 2 * 4,
             y_compressed_metadata.data.len()
         );
         let reader = std::io::Cursor::new(y_compressed_metadata.data);
-        let decompressor: MetadataDecompressor<(), _> = reader.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(reader, num_chunks);
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
             decompressor.map(|r| r.unwrap()).collect();
 
@@ -542,16 +644,18 @@ mod tests {
 
     #[test]
     fn test_metatada_decompression() {
+        let num_chunks = 1024;
         let metadata_in = vec![
             ChunkMetadata {
                 mean: 5f32,
                 energy: 6f32,
             };
-            1024
+            num_chunks
         ];
         let compressed_metadata: CompressedMetadata = metadata_in.iter().into();
         let reader = std::io::Cursor::new(compressed_metadata.data);
-        let decompressor: MetadataDecompressor<(), _> = reader.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(reader, num_chunks);
 
         let medatadata_out: Vec<ChunkMetadata> = decompressor.map(|r| r.unwrap()).collect();
 
@@ -676,14 +780,17 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let num_chunks = y_chunks.len();
+        let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH).collect();
         let y_compressed_metadata: CompressedMetadata =
             y_slices.iter().map(|slice| &slice.chunk_metadata).into();
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
         let depacketizer: Depacketizer<_, ()> = Depacketizer::from(encoded_packets.into_iter());
-        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(depacketizer, num_chunks);
 
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
             decompressor.map(|r| r.unwrap()).collect();
@@ -709,14 +816,17 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let num_chunks = y_chunks.len();
+        let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH).collect();
         let y_compressed_metadata: CompressedMetadata =
             y_slices.iter().map(|slice| &slice.chunk_metadata).into();
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
         let depacketizer: Depacketizer<_, ()> = encoded_packets.into_iter().into();
-        let decompressor: MetadataDecompressor<(), _> = depacketizer.into();
+        let decompressor: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(depacketizer, num_chunks);
 
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
             decompressor.map(|r| r.unwrap()).collect();
