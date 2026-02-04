@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::compressor::*;
 use crate::metadata_coding::packetizer::*;
 use liquid_sys;
 use num_complex::Complex32;
@@ -265,6 +266,7 @@ pub mod slices {
     > {
         quadrature_symbol_iter: I,
         exact_array3_chunks_iter: ndarray::iter::ExactChunksIterMut<'a, f32, ndarray::Ix3>,
+        metadata_bitmap_iter: bitvec::boxed::IntoIter<u8>,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
@@ -277,11 +279,13 @@ pub mod slices {
     {
         pub fn new(
             slice_dimensions: (usize, usize, usize),
+            metadata_bitmap: MetadataBitmap,
             quadrature_symbol_iter: I,
             array3: &'a mut ndarray::Array3<f32>,
         ) -> Self {
             Self {
                 quadrature_symbol_iter,
+                metadata_bitmap_iter: metadata_bitmap.values.into_iter(),
                 exact_array3_chunks_iter: array3.exact_chunks_mut(slice_dimensions).into_iter(),
                 _marker: std::marker::PhantomData,
             }
@@ -298,7 +302,19 @@ pub mod slices {
         type Item = Slice<'a, GOP_LENGTH, PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
-            let slice_values = self.exact_array3_chunks_iter.next()?;
+            let slices_to_skip = self
+                .metadata_bitmap_iter
+                .by_ref()
+                .take_while(|bitval| !bitval)
+                .count(); // returns = when metadata_bitmap_iter is exhausted
+
+            // there will be padding slices beyond metadata_bitmap that are always included
+            let slice_values = self
+                .exact_array3_chunks_iter
+                .by_ref()
+                .skip(slices_to_skip)
+                .next()?;
+
             let mut slice: Slice<'a, GOP_LENGTH, PixelType> = Slice::from_view(slice_values);
 
             let mut iq_iter = self
@@ -368,8 +384,16 @@ mod tests {
 
         let mut array3_new = ndarray::Array3::<f32>::zeros(dim);
 
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; 1),
+        };
         let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
+            SliceDemodulator::new(
+                dim,
+                metadata_bitmap,
+                quadrature_symbols.into_iter(),
+                &mut array3_new,
+            );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 1);
@@ -396,14 +420,23 @@ mod tests {
             .into_iter()
             .map(|view| Slice::from_view(view))
             .collect();
+        let num_slices = slices_orig.len();
 
         let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
         let mut array3_new = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2));
 
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; num_slices),
+        };
         let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
+            SliceDemodulator::new(
+                dim,
+                metadata_bitmap,
+                quadrature_symbols.into_iter(),
+                &mut array3_new,
+            );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 5);
@@ -436,14 +469,23 @@ mod tests {
             .into_iter()
             .map(|view| Slice::from_view(view))
             .collect();
+        let num_slices = slices_orig.len();
 
         let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
         let mut array3_new = ndarray::Array3::<f32>::zeros(gop_dim);
 
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; num_slices),
+        };
         let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(dim, quadrature_symbols.into_iter(), &mut array3_new);
+            SliceDemodulator::new(
+                dim,
+                metadata_bitmap,
+                quadrature_symbols.into_iter(),
+                &mut array3_new,
+            );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 500);

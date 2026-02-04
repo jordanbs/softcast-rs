@@ -364,6 +364,7 @@ mod tests {
     use crate::asset_reader_writer::pixel_buffer::*;
     use crate::asset_reader_writer::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
+    use crate::compressor::*;
     use crate::metadata_coding::packetizer::*;
     use crate::metadata_coding::*;
     use crate::modulation::metadata::*;
@@ -465,8 +466,11 @@ mod tests {
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
+        };
         let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
-            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d_view);
+            SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d_view);
 
         let slices: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices.len(), 8192);
@@ -552,8 +556,12 @@ mod tests {
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
+        };
         let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
-            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d);
+            SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
         let mut slice_and_metadatas = vec![];
         let mut chunk_metadata_iter = chunk_metadatas.into_iter();
@@ -708,8 +716,16 @@ mod tests {
                 metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
             let mut dct_allocation = slices_allocation::<PixelType>(asset_resolution, chunk_dim);
+            let metadata_bitmap = MetadataBitmap {
+                values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
+            };
             let slice_demodulator: SliceDemodulator<'_, GOP_LENGTH, PixelType, _> =
-                SliceDemodulator::new(chunk_dim, synchronizer, &mut dct_allocation);
+                SliceDemodulator::new(
+                    chunk_dim,
+                    metadata_bitmap,
+                    synchronizer,
+                    &mut dct_allocation,
+                );
 
             let mut slice_and_metadatas = vec![];
             let mut chunk_metadata_iter = chunk_metadatas.into_iter();
@@ -894,8 +910,11 @@ mod tests {
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
+        };
         let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
-            SliceDemodulator::new(chunk_dim, synchronizer, &mut array3d);
+            SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
         let mut slice_and_metadatas = vec![];
         let mut chunk_metadata_iter = chunk_metadatas.into_iter();
