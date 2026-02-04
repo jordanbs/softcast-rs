@@ -323,7 +323,7 @@ pub mod slices {
                 .flat_map(|symbol| [symbol.value.re, symbol.value.im]);
 
             for dst in &mut slice.values_mut() {
-                *dst = iq_iter
+                *dst = iq_iter // TODO: use mapv_inplace
                     .next()
                     .expect("Not enough values to complete slices.");
             }
@@ -495,6 +495,62 @@ mod tests {
             .zip(array3_orig_clone.exact_chunks(dim).into_iter())
         {
             assert_eq!(view_orig, slice_new.values());
+        }
+    }
+
+    #[test]
+    fn test_skip_slices_1() {
+        let dim = (1, 10, 10);
+        let mut array3_orig = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2)); // 5 slices
+        const GOP_LEN: usize = 15;
+
+        let mut val = 0f32;
+        for dst in array3_orig.iter_mut() {
+            *dst = val;
+            val += 1f32;
+        }
+        let array3_orig_clone = array3_orig.clone();
+
+        let slices_orig: Vec<Slice<'_, GOP_LEN, YPixelComponentType>> = array3_orig
+            .exact_chunks_mut(dim)
+            .into_iter()
+            .map(|view| Slice::from_view(view))
+            .collect();
+        let num_slices = slices_orig.len();
+
+        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
+
+        let mut array3_new = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2));
+
+        let mut metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; num_slices),
+        };
+
+        metadata_bitmap.values.set(3, false);
+        metadata_bitmap.values.set(2, false);
+
+        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
+            SliceDemodulator::new(
+                dim,
+                metadata_bitmap,
+                quadrature_symbols.into_iter(),
+                &mut array3_new,
+            );
+
+        let slices_new: Vec<_> = slice_demodulator.collect();
+        assert_eq!(slices_new.len(), 3);
+        drop(slices_new);
+
+        let mut chunks_old_iter = array3_orig_clone.exact_chunks(dim).into_iter();
+        for (chunk_idx, chunk_new) in array3_new.exact_chunks(dim).into_iter().enumerate() {
+            if 3 == chunk_idx || 2 == chunk_idx {
+                let zeros = ndarray::Array3::<f32>::zeros(dim);
+                let _ = assert_eq!(zeros, chunk_new);
+            } else {
+                let chunk_old = chunks_old_iter.next().expect("ran out of chunks");
+                assert_eq!(chunk_old, chunk_new);
+            }
         }
     }
 
