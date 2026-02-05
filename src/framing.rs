@@ -481,6 +481,7 @@ mod tests {
     fn test_reader_to_frame_inverse_equality() {
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
+        use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
@@ -519,8 +520,8 @@ mod tests {
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-        let y_slices_and_metadata: Box<_> =
-            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+        let power_scaler = PowerScaler::new(chunks.into_iter());
+        let y_slices_and_metadata: Box<_> = power_scaler.into_slice_iter(chunks_per_gop).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
@@ -578,8 +579,8 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let chunk_metadatas_new: Box<_> = chunks
-            .iter()
+        let power_descaler = PowerScaler::inverse(chunks.into_iter());
+        let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
             .take(chunks_per_gop)
             .collect();
@@ -631,10 +632,11 @@ mod tests {
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
         use crate::source_coding::chunk::*;
+        use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
 
-        let input_path = "sample-media/bigbuck-5s.mov";
-        let output_path = "/tmp/bigbuck-5s.mp4";
+        let input_path = "sample-media/bigbuck-7.5s.mov";
+        let output_path = "/tmp/bigbuck-7.5s.mp4";
         //         let input_path = "sample-media/bipbop-1920x1080-5s.mp4";
         //         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
 
@@ -668,6 +670,7 @@ mod tests {
             let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
             let mut compressor = Compressor::new(chunks.into_iter(), 0.0645);
             let metadata_bitmap = compressor.take_metadata_bitmap();
+            let power_scaler = PowerScaler::new(compressor);
             let num_included_chunks = metadata_bitmap.values.count_ones();
             let compressed_metadata =
                 CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
@@ -675,7 +678,7 @@ mod tests {
             let packetizer: Packetizer = compressed_metadata.into();
             let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-            let slices_and_metadata: Box<_> = compressor
+            let slices_and_metadata: Box<_> = power_scaler
                 .into_iter()
                 .into_slice_iter(num_included_chunks)
                 .collect();
@@ -719,6 +722,12 @@ mod tests {
                 .take_metadata_bitmap()
                 .expect("Failed to decode metadata_bitmap");
 
+            let included_chunk_metadatas: Box<_> = metadata_bitmap
+                .values
+                .iter_ones()
+                .map(|idx| chunk_metadatas[idx])
+                .collect();
+
             let num_included_chunks = metadata_bitmap.values.count_ones();
             let num_included_slices = num_included_chunks.next_power_of_two();
 
@@ -739,18 +748,20 @@ mod tests {
                 );
 
             let mut slice_and_metadatas = vec![];
-
+            let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
             for slice in slice_demodulator.take(num_included_slices) {
                 // there will be more slices than chunk_metadatas
-                let slice_and_metadata =
-                    SliceAndChunkMetadata::new(slice, ChunkMetadata::default());
+                let chunk_metadata = included_chunk_metadatas_iter.next().unwrap_or_default();
+                let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
                 slice_and_metadatas.push(slice_and_metadata);
             }
             let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-            let chunks_iter: ChunkIter<_, _, _> =
-                slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
-            let _chunks: Box<_> = chunks_iter.take(num_included_chunks).collect(); // discard.. runs fwht
+            let chunks_iter = slice_and_chunk_metadata_iter
+                .into_chunks_iter(num_included_chunks)
+                .take(num_included_chunks);
+            let power_descaler = PowerScaler::inverse(chunks_iter);
+            let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
             TransformBlock3DDCT::from_chunks_owned(
                 dct_allocation,
@@ -804,6 +815,21 @@ mod tests {
 
             let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
+            /*
+            use rand::Rng;
+            let mut encoder_plus_noise = encoder.map(|mut ofdmsymbol| {
+                let mut rng = rand::rng();
+                for iq in ofdmsymbol.time_domain_symbols.iter_mut() {
+                    let distortion_power = 0.57;
+                    let i_distortion = rng.random_range(-distortion_power..distortion_power);
+                    let q_distortion = rng.random_range(-distortion_power..distortion_power);
+                    iq.re += i_distortion;
+                    iq.im += q_distortion;
+                }
+                ofdmsymbol
+            });
+            */
+
             //decoder
             let y_dct_out =
                 into_transform_block_3d_dct(&mut encoder, asset_resolution, y_chunk_dim);
@@ -837,6 +863,7 @@ mod tests {
     fn test_reader_to_frame_inverse_mean_squared_error() {
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
+        use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
@@ -876,8 +903,9 @@ mod tests {
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-        let y_slices_and_metadata: Box<_> =
-            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+        let power_scaler = PowerScaler::new(chunks.into_iter());
+
+        let y_slices_and_metadata: Box<_> = power_scaler.into_slice_iter(chunks_per_gop).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
@@ -934,8 +962,9 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let chunk_metadatas_new: Box<_> = chunks
-            .iter()
+        let power_descaler = PowerScaler::inverse(chunks.into_iter());
+
+        let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
             .take(chunks_per_gop)
             .collect();
@@ -976,7 +1005,7 @@ mod tests {
         let asset_width: usize = asset_width.try_into().unwrap();
         let asset_height: usize = asset_height.try_into().unwrap();
 
-        const LENGTH: usize = 90;
+        const LENGTH: usize = 4;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -1093,6 +1122,7 @@ mod tests {
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
+        use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
@@ -1134,6 +1164,7 @@ mod tests {
         let compression_ratio = 0.3;
         let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
         let metadata_bitmap = compressor.take_metadata_bitmap();
+        let power_scaler = PowerScaler::new(compressor);
         let num_included_chunks = metadata_bitmap.values.count_ones();
 
         assert_eq!(
@@ -1148,7 +1179,7 @@ mod tests {
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
         let cb_slices_and_metadata: Box<_> =
-            compressor.into_slice_iter(num_included_chunks).collect();
+            power_scaler.into_slice_iter(num_included_chunks).collect();
         assert_eq!(
             ((chunks_per_gop as f64 * compression_ratio).floor() as usize).next_power_of_two(),
             cb_slices_and_metadata.len()
@@ -1171,7 +1202,7 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert!(!chunk_metadatas.is_empty());
-        assert_eq!(chunk_metadatas.len(), 1728);
+        assert_eq!(chunk_metadatas.len(), 432 * LENGTH);
 
         let metadata_bitmap = metadata_decompressor
             .take_metadata_bitmap()
@@ -1211,7 +1242,13 @@ mod tests {
 
         let chunks_iter: ChunkIter<_, _, _> =
             slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
-        let _chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect(); // discard.. runs fwht
+        let chunks_iter = chunks_iter.zip(chunk_metadatas.iter()).map(
+            |(chunk, metadata)| -> Chunk<'_, LENGTH, CbPixelComponentType> {
+                Chunk::new(chunk.values, *metadata)
+            },
+        );
+        let power_descaler = PowerScaler::inverse(chunks_iter);
+        let _chunks: Box<_> = power_descaler.take(num_included_chunks).collect(); // discard.. runs fwht
 
         let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
@@ -1222,6 +1259,7 @@ mod tests {
 
         let new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> =
             cb_dct_components.into();
+        //         assert_eq!(original_cb_components, new_cb_components);
 
         let mean_sq_error = original_cb_components
             .values()

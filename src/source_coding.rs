@@ -133,34 +133,6 @@ pub mod transform_block_3d_dct {
             self.values
         }
 
-        fn power_scale(
-            chunk_dimensions: (usize, usize, usize),
-            chunk_energy: f32,
-            chunk_energies: &[f32],
-            sqrt_p_over_sum_sqrt_energies: &std::cell::OnceCell<f32>,
-        ) -> f32 {
-            // must check that return value is normal
-
-            let num_chunks = chunk_energies.len();
-
-            // average transmit power per chunk = 1
-            let power_budget = num_chunks as f32
-                / (chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2) as f32;
-
-            // skip math if energy is 0
-            if chunk_energy.abs() < f32::EPSILON {
-                return f32::NAN;
-            }
-
-            // scale each chunk by g_i = λ_i^(-0.25)*√(P/Σ_i(√λ_i))
-            let sqrt_p_over_sum_sqrt_energies = sqrt_p_over_sum_sqrt_energies.get_or_init(|| {
-                let sum_sqrt_energies: f32 = chunk_energies.iter().map(|&λ| λ.sqrt()).sum();
-                (power_budget / sum_sqrt_energies).sqrt()
-            });
-
-            chunk_energy.powf(-0.25) * sqrt_p_over_sum_sqrt_energies
-        }
-
         pub fn chunks_iter(&mut self) -> impl Iterator<Item = Chunk<'_, LENGTH, PixelType>> {
             const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 30, 44);
             let (length, height, width) = self.values.dim();
@@ -203,19 +175,6 @@ pub mod transform_block_3d_dct {
                 .map(|chunk| chunk.pow2().sum() / chunk.len() as f32)
                 .collect();
 
-            let compute_cache = std::cell::OnceCell::new();
-            energies
-                .iter()
-                .zip(self.values.exact_chunks_mut(chunk_dimensions))
-                .for_each(|(&energy, mut chunk)| {
-                    let power_scale =
-                        Self::power_scale(chunk_dimensions, energy, &energies, &compute_cache);
-                    // needs a comment
-                    if power_scale.is_normal() {
-                        chunk.mapv_inplace(|elm| elm * power_scale);
-                    }
-                });
-
             //          TODO: Make distortion iterator
             //             {
             //                 use rand::Rng;
@@ -254,10 +213,6 @@ pub mod transform_block_3d_dct {
                 chunks.len() * chunk_dimensions.0 * chunk_dimensions.1 * chunk_dimensions.2
             );
 
-            let chunk_energies: Box<[f32]> =
-                chunks.iter().map(|chunk| chunk.metadata.energy).collect();
-            let compute_cache = std::cell::OnceCell::new();
-
             // Could be optimized by iterating over dst or src in memory order.
             values
                 .exact_chunks_mut(chunk_dimensions)
@@ -265,17 +220,7 @@ pub mod transform_block_3d_dct {
                 .zip(chunks)
                 // .par_bridge() <-- parallelism doesn't seem to help for O(n) operations.
                 .for_each(|(mut dst, src)| {
-                    let power_scale = Self::power_scale(
-                        chunk_dimensions,
-                        src.metadata.energy,
-                        &chunk_energies,
-                        &compute_cache,
-                    );
-                    if power_scale.is_normal() {
-                        dst.assign(&src.values);
-                        dst /= power_scale;
-                    } // else assume all zeros
-
+                    dst.assign(&src.values);
                     dst += src.metadata.mean;
                 });
 
@@ -304,26 +249,10 @@ pub mod transform_block_3d_dct {
                     * chunk_dimensions.2
             );
 
-            let chunk_energies: Box<[f32]> = chunk_metadatas
-                .iter()
-                .map(|metadata| metadata.energy)
-                .collect();
-            let compute_cache = std::cell::OnceCell::new();
-
             for (metadata, mut chunk_values) in chunk_metadatas
                 .iter()
                 .zip(owned.exact_chunks_mut(chunk_dimensions))
             {
-                let power_scale = Self::power_scale(
-                    chunk_dimensions,
-                    metadata.energy,
-                    &chunk_energies,
-                    &compute_cache,
-                );
-                if power_scale.is_normal() {
-                    chunk_values.mapv_inplace(|elm| elm / power_scale);
-                } // else assume all zeros
-
                 chunk_values.mapv_inplace(|elm| elm + metadata.mean);
             }
             let dct_dimensions = (LENGTH, component_frame_height, component_frame_width);
@@ -338,6 +267,107 @@ pub mod transform_block_3d_dct {
                 values: owned,
                 _marker: std::marker::PhantomData,
             }
+        }
+    }
+}
+
+pub mod power_scaling {
+    use super::*;
+    use chunk::*;
+
+    fn power_scale(
+        chunk_energy: f32,
+        chunk_energies: &[f32],
+        sqrt_p_over_sum_sqrt_energies: &std::cell::OnceCell<f32>,
+    ) -> f32 {
+        let num_chunks = chunk_energies.len();
+
+        // target RMS of iq samples ~0.5-1.
+        let power_budget = num_chunks as f32;
+
+        // skip math if energy is 0
+        if chunk_energy.abs() < f32::EPSILON {
+            return f32::NAN;
+        }
+
+        // scale each chunk by g_i = λ_i^(-0.25)*√(P/Σ_i(√λ_i))
+        let sqrt_p_over_sum_sqrt_energies = sqrt_p_over_sum_sqrt_energies.get_or_init(|| {
+            let sum_sqrt_energies: f32 = chunk_energies.iter().map(|&λ| λ.sqrt()).sum();
+            (power_budget / sum_sqrt_energies).sqrt()
+        });
+
+        chunk_energy.powf(-0.25) * sqrt_p_over_sum_sqrt_energies
+    }
+
+    pub struct PowerScaler<
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    > {
+        inner1: Option<I>,
+        inner2: std::cell::OnceCell<std::vec::IntoIter<Chunk<'a, DCT_LENGTH, PixelType>>>,
+        chunk_energies: std::cell::OnceCell<Box<[f32]>>,
+        compute_cache: std::cell::OnceCell<f32>,
+        inverse: bool,
+    }
+    impl<
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    > PowerScaler<'a, DCT_LENGTH, PixelType, I>
+    {
+        pub fn new(chunks_iter: I) -> Self {
+            Self {
+                inner1: Some(chunks_iter),
+                inner2: std::cell::OnceCell::new(),
+                chunk_energies: std::cell::OnceCell::new(),
+                compute_cache: std::cell::OnceCell::new(),
+                inverse: false,
+            }
+        }
+        pub fn inverse(chunks_iter: I) -> Self {
+            Self {
+                inner1: Some(chunks_iter),
+                inner2: std::cell::OnceCell::new(),
+                chunk_energies: std::cell::OnceCell::new(),
+                compute_cache: std::cell::OnceCell::new(),
+                inverse: true,
+            }
+        }
+    }
+    impl<
+        'a,
+        const DCT_LENGTH: usize,
+        PixelType: HasPixelComponentType,
+        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+    > Iterator for PowerScaler<'a, DCT_LENGTH, PixelType, I>
+    {
+        type Item = Chunk<'a, DCT_LENGTH, PixelType>;
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.chunk_energies.get().is_none() {
+                let chunks: Box<_> = self.inner1.take().unwrap().collect();
+                let chunk_energies: Box<_> =
+                    chunks.iter().map(|chunk| chunk.metadata.energy).collect();
+                self.chunk_energies
+                    .set(chunk_energies)
+                    .expect("already set");
+                self.inner2.set(chunks.into_iter()).expect("already set");
+            }
+            let chunk_energies = self.chunk_energies.get().unwrap();
+            let mut chunk = self.inner2.get_mut().unwrap().next()?;
+
+            let power_scale =
+                power_scale(chunk.metadata.energy, &chunk_energies, &self.compute_cache);
+            if power_scale.is_normal() {
+                if self.inverse {
+                    chunk.values.mapv_inplace(|elm| elm / power_scale);
+                } else {
+                    chunk.values.mapv_inplace(|elm| elm * power_scale);
+                }
+            } // else assume all zeros
+            Some(chunk)
         }
     }
 }
