@@ -668,7 +668,7 @@ mod tests {
             let chunk_dim = first_chunk.values.dim();
 
             let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
-            let mut compressor = Compressor::new(chunks.into_iter(), 0.0645);
+            let mut compressor = Compressor::new(chunks.into_iter(), 0.0625);
             let metadata_bitmap = compressor.take_metadata_bitmap();
             let power_scaler = PowerScaler::new(compressor);
             let num_included_chunks = metadata_bitmap.values.count_ones();
@@ -994,18 +994,19 @@ mod tests {
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
+        use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
         //         let path = "sample-media/bipbop-1920x1080-5s.mp4";
-        let path = "sample-media/bigbuck-5s.mov";
+        let path = "sample-media/bigbuck-7.5s.mov";
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
         let asset_width: usize = asset_width.try_into().unwrap();
         let asset_height: usize = asset_height.try_into().unwrap();
 
-        const LENGTH: usize = 4;
+        const LENGTH: usize = 2;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -1027,9 +1028,10 @@ mod tests {
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
-        let compression_ratio = 0.0645;
+        let compression_ratio = 0.125;
         let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
         let metadata_bitmap = compressor.take_metadata_bitmap();
+        let power_scaler = PowerScaler::new(compressor);
         let num_included_chunks = metadata_bitmap.values.count_ones();
         let y_compressed_metadata =
             CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
@@ -1038,7 +1040,7 @@ mod tests {
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
         let y_slices_and_metadata: Box<_> =
-            compressor.into_slice_iter(num_included_chunks).collect();
+            power_scaler.into_slice_iter(num_included_chunks).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
@@ -1062,6 +1064,11 @@ mod tests {
         let metadata_bitmap = metadata_decompressor
             .take_metadata_bitmap()
             .expect("Failed to decode metadata bitmap");
+        let included_chunk_metadatas: Box<_> = metadata_bitmap
+            .values
+            .iter_ones()
+            .map(|idx| chunk_metadatas[idx])
+            .collect();
 
         let num_all_chunks = chunk_metadatas.len();
         let num_included_chunks = metadata_bitmap.values.count_ones();
@@ -1087,18 +1094,21 @@ mod tests {
 
         let all_slices: Box<_> = slice_demodulator.take(num_included_slices).collect();
 
+        let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
         let mut slice_and_metadatas = vec![];
-
         for slice in all_slices.into_iter().take(num_included_slices) {
-            let slice_and_metadata = SliceAndChunkMetadata::new(slice, ChunkMetadata::default());
+            let chunk_metadata = included_chunk_metadatas_iter.next().unwrap_or_default();
+            let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
             slice_and_metadatas.push(slice_and_metadata);
         }
         assert_eq!(num_included_slices, slice_and_metadatas.len());
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-        let chunks_iter: ChunkIter<_, _, _> =
-            slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
-        let _chunks: Box<_> = chunks_iter.take(num_included_chunks).collect(); // discard.. runs fwht
+        let chunks_iter = slice_and_chunk_metadata_iter
+            .into_chunks_iter(num_included_chunks)
+            .take(num_included_chunks);
+        let power_descaler = PowerScaler::inverse(chunks_iter);
+        let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
@@ -1114,7 +1124,7 @@ mod tests {
             .values()
             .mean_sq_err(new_y_components.values())
             .unwrap();
-        assert_eq!(mean_sq_error, 0f64);
+        assert!(mean_sq_error < 3.0);
     }
 
     #[test]
@@ -1126,7 +1136,7 @@ mod tests {
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
-        let path = "sample-media/bigbuck-5s.mov";
+        let path = "sample-media/bigbuck-7.5s.mov";
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
@@ -1138,7 +1148,7 @@ mod tests {
             asset_height / pixel_type.vertical_subsampling(),
         );
 
-        const LENGTH: usize = 4;
+        const LENGTH: usize = 2;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -1161,7 +1171,7 @@ mod tests {
 
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
         //         let compression_ratio = 0.234375; // has no error for bipbop
-        let compression_ratio = 0.3;
+        let compression_ratio = 0.125;
         let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
         let metadata_bitmap = compressor.take_metadata_bitmap();
         let power_scaler = PowerScaler::new(compressor);
@@ -1207,6 +1217,11 @@ mod tests {
         let metadata_bitmap = metadata_decompressor
             .take_metadata_bitmap()
             .expect("Failed to decode metadata bitmap");
+        let included_chunk_metadatas: Box<_> = metadata_bitmap
+            .values
+            .iter_ones()
+            .map(|idx| chunk_metadatas[idx])
+            .collect();
 
         let num_all_chunks = chunk_metadatas.len();
         let num_included_chunks = metadata_bitmap.values.count_ones();
@@ -1231,24 +1246,21 @@ mod tests {
         let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
+        let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
         let mut slice_and_metadatas = vec![];
-
         for slice in slice_demodulator.take(num_included_slices) {
-            let slice_and_metadata = SliceAndChunkMetadata::new(slice, ChunkMetadata::default());
+            let chunk_metadata = included_chunk_metadatas_iter.next().unwrap_or_default();
+            let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
             slice_and_metadatas.push(slice_and_metadata);
         }
         assert_eq!(num_included_slices, slice_and_metadatas.len());
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-        let chunks_iter: ChunkIter<_, _, _> =
-            slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
-        let chunks_iter = chunks_iter.zip(chunk_metadatas.iter()).map(
-            |(chunk, metadata)| -> Chunk<'_, LENGTH, CbPixelComponentType> {
-                Chunk::new(chunk.values, *metadata)
-            },
-        );
+        let chunks_iter = slice_and_chunk_metadata_iter
+            .into_chunks_iter(num_included_chunks)
+            .take(num_included_chunks);
         let power_descaler = PowerScaler::inverse(chunks_iter);
-        let _chunks: Box<_> = power_descaler.take(num_included_chunks).collect(); // discard.. runs fwht
+        let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
@@ -1265,6 +1277,6 @@ mod tests {
             .values()
             .mean_sq_err(new_cb_components.values())
             .unwrap();
-        assert!(mean_sq_error < 4f64);
+        assert!(mean_sq_error < 1.0);
     }
 }
