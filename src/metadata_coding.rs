@@ -90,7 +90,8 @@ pub struct MetadataDecompressor<QI, R: Read> {
     error: Option<std::rc::Rc<dyn std::error::Error>>,
     num_chunks: usize,
     chunk_idx: usize,
-    metadata_bitmap: std::cell::OnceCell<MetadataBitmap>,
+    metadata_bitmap: Option<MetadataBitmap>,
+    has_decoded_metadata_bitmap: bool,
     _marker: std::marker::PhantomData<QI>,
 }
 
@@ -102,7 +103,8 @@ impl<QI, R: Read> MetadataDecompressor<QI, R> {
             error: None,
             num_chunks,
             chunk_idx: 0,
-            metadata_bitmap: std::cell::OnceCell::new(),
+            metadata_bitmap: None,
+            has_decoded_metadata_bitmap: false,
             _marker: std::marker::PhantomData,
         }
     }
@@ -111,7 +113,14 @@ impl<QI, R: Read> MetadataDecompressor<QI, R> {
         &mut self,
     ) -> Result<&MetadataBitmap, std::rc::Rc<dyn std::error::Error>> {
         self.ensure_metadata_bitmap()?;
-        Ok(self.metadata_bitmap.get().unwrap())
+        Ok(self.metadata_bitmap.as_ref().unwrap())
+    }
+
+    pub fn take_metadata_bitmap(
+        &mut self,
+    ) -> Result<MetadataBitmap, std::rc::Rc<dyn std::error::Error>> {
+        self.ensure_metadata_bitmap()?;
+        Ok(self.metadata_bitmap.take().unwrap())
     }
 
     fn ensure_metadata_bitmap(&mut self) -> Result<(), std::rc::Rc<dyn std::error::Error>> {
@@ -119,16 +128,20 @@ impl<QI, R: Read> MetadataDecompressor<QI, R> {
             return Err(err.clone());
         }
 
-        if self.metadata_bitmap.get().is_none() {
+        if self.metadata_bitmap.is_none() {
+            assert!(
+                !self.has_decoded_metadata_bitmap,
+                "metadata_bitmap already taken"
+            );
+
             self.ensure_decoder()?;
             let decoder = self.decoder.get_mut().unwrap();
             let mut bitmap = bitvec::bitbox!(u8, bitvec::order::Lsb0; 0; self.num_chunks);
             if let Some(err) = decoder.read_exact(bitmap.as_raw_mut_slice()).err() {
                 return Err(self.set_err(err));
             }
-            self.metadata_bitmap
-                .set(MetadataBitmap { values: bitmap })
-                .expect("metadata_bitmap already set");
+            self.has_decoded_metadata_bitmap = true;
+            self.metadata_bitmap = Some(MetadataBitmap { values: bitmap });
         }
         Ok(())
     }
@@ -177,7 +190,7 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
             return Some(Err(err));
         }
         let decoder = self.decoder.get_mut().unwrap();
-        let metadata_bitmap = self.metadata_bitmap.get().unwrap();
+        let metadata_bitmap = self.metadata_bitmap.as_ref().unwrap();
 
         let mut buf = [0u8; size_of::<f32>()];
         match decoder.read_exact(&mut buf) {

@@ -23,6 +23,7 @@ pub mod slice {
     use super::*;
     use fwht;
 
+    // TODO: there is no reason for slices to carry chunk metadata
     pub struct SliceAndChunkMetadata<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
         pub slice: Slice<'a, GOP_LENGTH, PixelType>,
         pub chunk_metadata: ChunkMetadata,
@@ -120,11 +121,6 @@ pub mod slice {
                 if chunks.is_empty() {
                     return None;
                 }
-                assert_eq!(
-                    chunks.len(),
-                    self.chunks_per_gop,
-                    "Not enough chunks for a GOP."
-                );
 
                 let slices = fwht::fwht_chunks(chunks).expect("Failed to create slices.");
                 self.inner_slice_iter = slices.into_iter();
