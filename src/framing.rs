@@ -629,18 +629,22 @@ mod tests {
         use crate::asset_reader_writer::pixel_buffer::*;
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
+        use crate::compressor::*;
         use crate::source_coding::chunk::*;
         use crate::source_coding::transform_block_3d_dct::*;
 
-        let input_path = "sample-media/bipbop-1920x1080-5s.mp4";
-        let output_path = "/tmp/bipbop-1920x1080-5s-framer.mp4";
+        let input_path = "sample-media/bigbuck-5s.mov";
+        let output_path = "/tmp/bigbuck-5s.mp4";
+        //         let input_path = "sample-media/bipbop-1920x1080-5s.mp4";
+        //         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
+
         let _ = std::fs::remove_file(output_path);
         let mut reader = AssetReader::new(input_path);
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
         let asset_width: usize = asset_width.try_into().unwrap();
         let asset_height: usize = asset_height.try_into().unwrap();
         let asset_resolution = (asset_width, asset_height);
-        const GOP_LENGTH: usize = 4;
+        const GOP_LENGTH: usize = 90;
 
         let writer_settings = AssetWritterSettings {
             path: std::path::PathBuf::from(output_path),
@@ -656,29 +660,28 @@ mod tests {
 
         fn framer<PixelType: HasPixelComponentType>(
             dct_components: &mut TransformBlock3DDCT<GOP_LENGTH, PixelType>,
-            asset_resolution: (usize, usize),
         ) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
-            let (frame_width, frame_height) = (
-                asset_resolution.0 / PixelType::TYPE.interleave_step(),
-                asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
-            );
-
             let chunks: Box<_> = dct_components.chunks_iter().collect();
             let first_chunk = chunks.first().expect("No chunks.");
             let chunk_dim = first_chunk.values.dim();
-            let chunks_per_gop = (GOP_LENGTH * frame_height * frame_width)
-                / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-            let y_compressed_metadata: CompressedMetadata =
-                chunks.iter().map(|chunk| &chunk.metadata).into();
-            let packetizer: Packetizer = y_compressed_metadata.into();
+            let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
+            let mut compressor = Compressor::new(chunks.into_iter(), 0.0645);
+            let metadata_bitmap = compressor.take_metadata_bitmap();
+            let num_included_chunks = metadata_bitmap.values.count_ones();
+            let compressed_metadata =
+                CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
+
+            let packetizer: Packetizer = compressed_metadata.into();
             let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-            let y_slices_and_metadata: Box<_> =
-                chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
-            let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
+            let slices_and_metadata: Box<_> = compressor
+                .into_iter()
+                .into_slice_iter(num_included_chunks)
+                .collect();
+            let slices_iter = slices_and_metadata.into_iter().map(|slice| slice.slice);
 
-            let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+            let slice_modulator: SliceModulator<'_, _, _, _> = slices_iter.into();
             let framer: OFDMFrameGenerator<_> =
                 metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -712,13 +715,21 @@ mod tests {
                 .collect();
             assert!(!chunk_metadatas.is_empty());
 
+            let metadata_bitmap = metadata_decompressor
+                .take_metadata_bitmap()
+                .expect("Failed to decode metadata_bitmap");
+
+            let num_included_chunks = metadata_bitmap.values.count_ones();
+            let num_included_slices = num_included_chunks.next_power_of_two();
+
             let synchronizer: OFDMFrameSynchronizer<_> =
                 metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
-            let mut dct_allocation = slices_allocation::<PixelType>(asset_resolution, chunk_dim);
-            let metadata_bitmap = MetadataBitmap {
-                values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
-            };
+            let mut dct_allocation = slices_allocation::<PixelType>(
+                asset_resolution,
+                chunk_dim,
+                num_included_slices - num_included_chunks,
+            );
             let slice_demodulator: SliceDemodulator<'_, GOP_LENGTH, PixelType, _> =
                 SliceDemodulator::new(
                     chunk_dim,
@@ -728,24 +739,18 @@ mod tests {
                 );
 
             let mut slice_and_metadatas = vec![];
-            let mut chunk_metadata_iter = chunk_metadatas.into_iter();
-            let num_slices = chunks_per_gop.next_power_of_two();
 
-            for slice in slice_demodulator.take(num_slices) {
+            for slice in slice_demodulator.take(num_included_slices) {
                 // there will be more slices than chunk_metadatas
-                let chunk_metadata = chunk_metadata_iter.next().unwrap_or_default();
-                let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
+                let slice_and_metadata =
+                    SliceAndChunkMetadata::new(slice, ChunkMetadata::default());
                 slice_and_metadatas.push(slice_and_metadata);
             }
             let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
             let chunks_iter: ChunkIter<_, _, _> =
-                slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
-            let chunk_metadatas: Box<_> = chunks_iter
-                .map(|chunk| chunk.metadata)
-                .take(chunks_per_gop)
-                .collect();
-            assert_eq!(chunks_per_gop, chunk_metadatas.len());
+                slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
+            let _chunks: Box<_> = chunks_iter.take(num_included_chunks).collect(); // discard.. runs fwht
 
             TransformBlock3DDCT::from_chunks_owned(
                 dct_allocation,
@@ -758,6 +763,7 @@ mod tests {
         fn slices_allocation<PixelType: HasPixelComponentType>(
             asset_resolution: (usize, usize),
             chunk_dim: (usize, usize, usize),
+            num_padding_slices: usize,
         ) -> ndarray::Array3<f32> {
             let (frame_width, frame_height) = (
                 asset_resolution.0 / PixelType::TYPE.interleave_step(),
@@ -765,11 +771,11 @@ mod tests {
             );
             let chunks_per_gop = (GOP_LENGTH * frame_height * frame_width)
                 / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
-            let num_slices = chunks_per_gop.next_power_of_two();
 
             let allocation_gop_length_with_padding =
-                ((num_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2) as f32
-                    / (frame_width * frame_height) as f32)
+                (((chunks_per_gop + num_padding_slices) * chunk_dim.0 * chunk_dim.1 * chunk_dim.2)
+                    as f64
+                    / (frame_width * frame_height) as f64)
                     .ceil() as usize;
 
             ndarray::Array3::zeros((
@@ -779,7 +785,6 @@ mod tests {
             ))
         }
 
-        let mut pixel_buffers_writen = 0;
         for macro_block in macro_block_3d_iterator {
             // encoder
             let MacroBlock3D {
@@ -789,13 +794,13 @@ mod tests {
             } = macro_block;
 
             let mut y_dct_in: TransformBlock3DDCT<_, _> = y_components.into();
-            let (y_framer, y_chunk_dim) = framer(&mut y_dct_in, asset_resolution);
+            let (y_framer, y_chunk_dim) = framer(&mut y_dct_in);
 
             let mut cb_dct_in: TransformBlock3DDCT<_, _> = cb_components.into();
-            let (cb_framer, cb_chunk_dim) = framer(&mut cb_dct_in, asset_resolution);
+            let (cb_framer, cb_chunk_dim) = framer(&mut cb_dct_in);
 
             let mut cr_dct_in: TransformBlock3DDCT<_, _> = cr_components.into();
-            let (cr_framer, cr_chunk_dim) = framer(&mut cr_dct_in, asset_resolution);
+            let (cr_framer, cr_chunk_dim) = framer(&mut cr_dct_in);
 
             let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
@@ -816,7 +821,6 @@ mod tests {
             let pixel_buffer_iterator = [new_macro_block_3d].into_iter().pixel_buffer_iter();
 
             for pixel_buffer in pixel_buffer_iterator {
-                pixel_buffers_writen += 1;
                 writer
                     .append_pixel_buffer(pixel_buffer)
                     .expect("Failed to append pixel buffer");
@@ -826,7 +830,6 @@ mod tests {
             }
         }
         writer.finish_writing().expect("Failed to finish writing.");
-        assert_eq!(pixel_buffers_writen, 304);
     }
 
     #[test]
@@ -958,21 +961,22 @@ mod tests {
     }
 
     #[test]
-    fn test_reader_to_frame_inverse_compression_mean_squared_error() {
+    fn test_reader_to_frame_inverse_compression_mean_squared_error_y() {
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        //         let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bigbuck-5s.mov";
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
         let asset_width: usize = asset_width.try_into().unwrap();
         let asset_height: usize = asset_height.try_into().unwrap();
 
-        const LENGTH: usize = 4;
+        const LENGTH: usize = 90;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator();
 
@@ -994,15 +998,18 @@ mod tests {
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
-        let mut compressor = Compressor::new(chunks.into_iter(), 0.25);
+        let compression_ratio = 0.0645;
+        let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
         let metadata_bitmap = compressor.take_metadata_bitmap();
+        let num_included_chunks = metadata_bitmap.values.count_ones();
         let y_compressed_metadata =
             CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-        let y_slices_and_metadata: Box<_> = compressor.into_slice_iter(chunks_per_gop).collect();
+        let y_slices_and_metadata: Box<_> =
+            compressor.into_slice_iter(num_included_chunks).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
@@ -1021,20 +1028,21 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert!(!chunk_metadatas.is_empty());
-        assert_eq!(chunk_metadatas.len(), 6912);
+        assert_eq!(chunk_metadatas.len(), 1728 * LENGTH);
 
         let metadata_bitmap = metadata_decompressor
             .take_metadata_bitmap()
             .expect("Failed to decode metadata bitmap");
 
         let num_all_chunks = chunk_metadatas.len();
-        let num_all_slices = num_all_chunks.next_power_of_two();
         let num_included_chunks = metadata_bitmap.values.count_ones();
         let num_included_slices = num_included_chunks.next_power_of_two();
+        let num_padding_slices = num_included_slices - num_included_chunks;
 
         let allocation_gop_length_with_padding =
-            ((num_all_slices * chunk_dim.0 * chunk_dim.1 * chunk_dim.2) as f32
-                / (asset_height * asset_width) as f32)
+            (((num_all_chunks + num_padding_slices) * chunk_dim.0 * chunk_dim.1 * chunk_dim.2)
+                as f64
+                / (asset_height * asset_width) as f64)
                 .ceil() as usize;
 
         let mut array3d: ndarray::Array3<f32> = ndarray::Array3::zeros((
@@ -1048,17 +1056,20 @@ mod tests {
         let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
+        let all_slices: Box<_> = slice_demodulator.take(num_included_slices).collect();
+
         let mut slice_and_metadatas = vec![];
 
-        for slice in slice_demodulator.take(num_included_slices) {
+        for slice in all_slices.into_iter().take(num_included_slices) {
             let slice_and_metadata = SliceAndChunkMetadata::new(slice, ChunkMetadata::default());
             slice_and_metadatas.push(slice_and_metadata);
         }
+        assert_eq!(num_included_slices, slice_and_metadatas.len());
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
         let chunks_iter: ChunkIter<_, _, _> =
             slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
-        let _chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect(); // discard.. runs fwht
+        let _chunks: Box<_> = chunks_iter.take(num_included_chunks).collect(); // discard.. runs fwht
 
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
@@ -1075,5 +1086,147 @@ mod tests {
             .mean_sq_err(new_y_components.values())
             .unwrap();
         assert_eq!(mean_sq_error, 0f64);
+    }
+
+    #[test]
+    fn test_reader_to_frame_inverse_compression_mean_squared_error_cb() {
+        use crate::asset_reader_writer::transform_block_3d::*;
+        use crate::channel_coding::slice::*;
+        use crate::compressor::*;
+        use crate::source_coding::transform_block_3d_dct::*;
+        use ndarray_stats::DeviationExt;
+
+        let path = "sample-media/bigbuck-5s.mov";
+        let mut reader = AssetReader::new(path);
+
+        let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
+        let asset_width: usize = asset_width.try_into().unwrap();
+        let asset_height: usize = asset_height.try_into().unwrap();
+        let pixel_type = PixelComponentType::Cb;
+        let (frame_width, frame_height) = (
+            asset_width / pixel_type.interleave_step(),
+            asset_height / pixel_type.vertical_subsampling(),
+        );
+
+        const LENGTH: usize = 4;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let MacroBlock3D {
+            y_components: _,
+            cb_components: original_cb_components,
+            cr_components: _,
+        } = macro_block.clone();
+
+        let mut cb_dct = macro_block.cb_components.into_dct();
+
+        let chunks: Box<_> = cb_dct.chunks_iter().collect();
+
+        let first_chunk = chunks.first().expect("No chunks.");
+        let chunk_dim = first_chunk.values.dim();
+        let chunks_per_gop =
+            (LENGTH * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+
+        let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
+        //         let compression_ratio = 0.234375; // has no error for bipbop
+        let compression_ratio = 0.3;
+        let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
+        let metadata_bitmap = compressor.take_metadata_bitmap();
+        let num_included_chunks = metadata_bitmap.values.count_ones();
+
+        assert_eq!(
+            (chunks_per_gop as f64 * compression_ratio).floor() as usize,
+            num_included_chunks
+        );
+
+        let y_compressed_metadata =
+            CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
+
+        let packetizer: Packetizer = y_compressed_metadata.into();
+        let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+        let cb_slices_and_metadata: Box<_> =
+            compressor.into_slice_iter(num_included_chunks).collect();
+        assert_eq!(
+            ((chunks_per_gop as f64 * compression_ratio).floor() as usize).next_power_of_two(),
+            cb_slices_and_metadata.len()
+        );
+        let cb_slices_iter = cb_slices_and_metadata.into_iter().map(|slice| slice.slice);
+
+        let slice_modulator: SliceModulator<'_, _, _, _> = cb_slices_iter.into();
+        let framer: OFDMFrameGenerator<_> =
+            metadata_modulator.flatten().chain(slice_modulator).into();
+
+        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
+        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+
+        let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
+        let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
+            .by_ref()
+            .take(chunks_per_gop)
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(!chunk_metadatas.is_empty());
+        assert_eq!(chunk_metadatas.len(), 1728);
+
+        let metadata_bitmap = metadata_decompressor
+            .take_metadata_bitmap()
+            .expect("Failed to decode metadata bitmap");
+
+        let num_all_chunks = chunk_metadatas.len();
+        let num_included_chunks = metadata_bitmap.values.count_ones();
+        let num_included_slices = num_included_chunks.next_power_of_two();
+
+        let allocation_gop_length_with_padding = (((num_included_slices
+            + (num_all_chunks as f64 * 1.0 - compression_ratio).ceil() as usize)
+            * chunk_dim.0
+            * chunk_dim.1
+            * chunk_dim.2) as f64
+            / (frame_height * frame_width) as f64)
+            .ceil() as usize;
+
+        let mut array3d: ndarray::Array3<f32> = ndarray::Array3::zeros((
+            allocation_gop_length_with_padding,
+            frame_height,
+            frame_width,
+        ));
+
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+            SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
+
+        let mut slice_and_metadatas = vec![];
+
+        for slice in slice_demodulator.take(num_included_slices) {
+            let slice_and_metadata = SliceAndChunkMetadata::new(slice, ChunkMetadata::default());
+            slice_and_metadatas.push(slice_and_metadata);
+        }
+        assert_eq!(num_included_slices, slice_and_metadatas.len());
+        let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
+
+        let chunks_iter: ChunkIter<_, _, _> =
+            slice_and_chunk_metadata_iter.into_chunks_iter(num_included_chunks);
+        let _chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect(); // discard.. runs fwht
+
+        let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(
+            array3d,
+            &chunk_metadatas,
+            (asset_width, asset_height),
+            chunk_dim,
+        );
+
+        let new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> =
+            cb_dct_components.into();
+
+        let mean_sq_error = original_cb_components
+            .values()
+            .mean_sq_err(new_cb_components.values())
+            .unwrap();
+        assert!(mean_sq_error < 4f64);
     }
 }

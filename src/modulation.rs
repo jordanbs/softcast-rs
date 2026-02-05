@@ -306,7 +306,7 @@ pub mod slices {
                 .metadata_bitmap_iter
                 .by_ref()
                 .take_while(|bitval| !bitval)
-                .count(); // returns = when metadata_bitmap_iter is exhausted
+                .count(); // returns 0 when metadata_bitmap_iter is exhausted
 
             // there will be padding slices beyond metadata_bitmap that are always included
             let slice_values = self

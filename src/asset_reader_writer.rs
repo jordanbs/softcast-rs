@@ -422,7 +422,7 @@ impl Codec {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PixelComponentType {
     Y,
     Cb,
