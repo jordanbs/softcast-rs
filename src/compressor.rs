@@ -28,6 +28,33 @@ pub struct MetadataBitmap {
     pub values: bitvec::boxed::BitBox<u8, bitvec::order::Lsb0>,
 }
 
+impl MetadataBitmap {
+    pub fn new<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>(
+        chunks: &[Chunk<'a, GOP_LENGTH, PixelType>],
+        compression_ratio: f64,
+    ) -> Self {
+        assert!(compression_ratio > 0f64);
+        assert!(compression_ratio <= 1f64);
+
+        let cutoff_energy = {
+            let mut energies: Box<[f32]> =
+                chunks.iter().map(|chunk| chunk.metadata.energy).collect();
+
+            let cutoff_idx = ((1f64 - compression_ratio) * chunks.len() as f64).ceil() as usize; // conservative
+            let (_, cutoff, _) = energies.select_nth_unstable_by(cutoff_idx, |e1, e2| {
+                e1.partial_cmp(&e2).expect("Unexpected NaN")
+            });
+            *cutoff
+        };
+        let bitmap = chunks
+            .iter()
+            .map(|chunk| cutoff_energy <= chunk.metadata.energy)
+            .collect();
+        // bitvec + zstd tends to compress better than u16 rle + zstd
+        Self { values: bitmap }
+    }
+}
+
 pub struct RunLengthBitmapEncoder<I: Iterator<Item = bool>> {
     bit_iter: std::iter::Peekable<I>,
     has_written_starting_bit: bool,
@@ -180,31 +207,9 @@ pub struct Compressor<
     PixelType: HasPixelComponentType,
     I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
 > {
-    chunk_iter: Option<I>, // for input
-    compression_ratio: f64,
-    loader: std::cell::OnceCell<LoadedCompressor<'a, GOP_LENGTH, PixelType>>,
-}
-
-struct LoadedCompressor<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType> {
-    filter_predicate: Box<dyn Fn(&Chunk<'a, GOP_LENGTH, PixelType>) -> bool>,
-    chunks_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
-    metadata_bitmap: Option<MetadataBitmap>, // can be consumed
-}
-
-impl<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>
-    LoadedCompressor<'a, GOP_LENGTH, PixelType>
-{
-    pub fn new(
-        filter_predicate: Box<dyn Fn(&Chunk<'a, GOP_LENGTH, PixelType>) -> bool>,
-        chunks_iter: std::vec::IntoIter<Chunk<'a, GOP_LENGTH, PixelType>>,
-        metadata_bitmap: MetadataBitmap,
-    ) -> Self {
-        Self {
-            filter_predicate,
-            chunks_iter,
-            metadata_bitmap: Some(metadata_bitmap),
-        }
-    }
+    chunk_iter: I,
+    metadata_bitmap: MetadataBitmap,
+    chunk_idx: usize,
 }
 
 impl<
@@ -214,58 +219,12 @@ impl<
     I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
 > Compressor<'a, GOP_LENGTH, PixelType, I>
 {
-    pub fn new(chunk_iter: I, compression_ratio: f64) -> Self {
-        assert!(compression_ratio > 0f64);
-        assert!(compression_ratio <= 1f64);
+    pub fn new(chunk_iter: I, metadata_bitmap: MetadataBitmap) -> Self {
         Self {
-            chunk_iter: Some(chunk_iter),
-            compression_ratio,
-            loader: std::cell::OnceCell::new(),
+            chunk_iter,
+            metadata_bitmap,
+            chunk_idx: 0,
         }
-    }
-
-    pub fn take_metadata_bitmap(&mut self) -> MetadataBitmap {
-        let loader = self.load_mut();
-        loader
-            .metadata_bitmap
-            .take()
-            .expect("Metadata bitmap already taken.")
-    }
-
-    fn load(&mut self) -> &LoadedCompressor<'a, GOP_LENGTH, PixelType> {
-        self.loader.get_or_init(|| {
-            let chunks: Box<_> = self.chunk_iter.take().unwrap().collect();
-
-            let cutoff_energy = {
-                let mut chunks_clone: Box<_> = chunks.iter().collect();
-
-                let cutoff_idx =
-                    ((1f64 - self.compression_ratio) * chunks.len() as f64).ceil() as usize; // conservative
-                let (_, cutoff, _) = chunks_clone.select_nth_unstable_by(cutoff_idx, |c1, c2| {
-                    c1.metadata
-                        .energy
-                        .partial_cmp(&c2.metadata.energy)
-                        .expect("Unexpected NaN")
-                });
-                cutoff.metadata.energy
-                // drop chunks_clone, because order is unstable.
-            };
-            let filter_predicate = move |chunk: &Chunk<'a, GOP_LENGTH, PixelType>| {
-                cutoff_energy <= chunk.metadata.energy
-            };
-            let filter_predicate = Box::new(filter_predicate);
-
-            // bitvec + zstd tends to compress better than u16 rle + zstd
-            let metadata_bitmap = MetadataBitmap {
-                values: chunks.iter().map(&filter_predicate).collect(),
-            };
-
-            LoadedCompressor::new(filter_predicate, chunks.into_iter(), metadata_bitmap)
-        })
-    }
-    fn load_mut(&mut self) -> &mut LoadedCompressor<'a, GOP_LENGTH, PixelType> {
-        let _ = self.load();
-        self.loader.get_mut().unwrap()
     }
 }
 
@@ -278,13 +237,30 @@ impl<
 {
     type Item = Chunk<'a, GOP_LENGTH, PixelType>;
     fn next(&mut self) -> Option<Self::Item> {
-        let LoadedCompressor {
-            filter_predicate,
-            chunks_iter,
-            ..
-        } = self.load_mut();
+        if self.chunk_idx >= self.metadata_bitmap.values.len() {
+            return None; // terminates here if last chunk is 1
+        }
 
-        chunks_iter.filter(filter_predicate).next()
+        let skip_count = if self.metadata_bitmap.values[self.chunk_idx] {
+            0
+        } else {
+            // gives the next idx of a one, (incl. offset by chunk_idx)
+            // iter_ones is fast
+            match self.metadata_bitmap.values[self.chunk_idx..]
+                .iter_ones()
+                .next()
+            {
+                Some(next_one_idx) => next_one_idx,
+                None => return None, // out of ones
+            }
+        };
+        self.chunk_idx += 1 + skip_count;
+
+        self.chunk_iter.by_ref().skip(skip_count).next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let count = self.metadata_bitmap.values.count_ones();
+        (count, Some(count))
     }
 }
 
@@ -396,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compressor_basic() {
+    fn test_metadata_bitmap_basic() {
         use crate::asset_reader_writer::pixel_buffer::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
@@ -411,22 +387,16 @@ mod tests {
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
         let mut y_dct: TransformBlock3DDCT<_, _> = macro_block.y_components.into();
-        let y_chunks_iter = y_dct.chunks_iter();
+        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
 
         let compression_ratio = 0.02;
-        let mut compressor = Compressor::new(y_chunks_iter, compression_ratio);
-        let metadata_bitmap = compressor.take_metadata_bitmap();
-
+        let metadata_bitmap = MetadataBitmap::new(&y_chunks, compression_ratio);
         let sum = metadata_bitmap.values.len();
+        let sum_trues = metadata_bitmap.values.count_ones();
+
         let num_chunks: usize = 2 * 1920 * 1080 / (30 * 40);
         assert_eq!(num_chunks, sum);
 
-        let sum_trues = metadata_bitmap
-            .values
-            .iter()
-            .by_vals()
-            .filter(|&value| value)
-            .count();
         assert_eq!(
             (num_chunks as f64 * compression_ratio).floor() as usize,
             sum_trues
@@ -435,7 +405,7 @@ mod tests {
 
     #[test]
     //     #[cfg(not(debug_assertions))] // too slow on debug
-    fn test_compressor_zstd() {
+    fn test_metadata_bitmap_zstd() {
         use crate::asset_reader_writer::pixel_buffer::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
@@ -453,11 +423,10 @@ mod tests {
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
         let mut y_dct: TransformBlock3DDCT<_, _> = macro_block.y_components.into();
-        let y_chunks_iter = y_dct.chunks_iter();
+        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
 
         let compression_ratio = 0.25;
-        let mut compressor = Compressor::new(y_chunks_iter, compression_ratio);
-        let metadata_bitmap = compressor.take_metadata_bitmap();
+        let metadata_bitmap = MetadataBitmap::new(&y_chunks, compression_ratio);
 
         let mut rle_encoder: RunLengthBitmapEncoder<_> =
             metadata_bitmap.values.iter().by_vals().into();
@@ -496,5 +465,44 @@ mod tests {
         );
 
         // bitvec + zstd wins...
+    }
+
+    #[test]
+    fn test_compressor_basic() {
+        use crate::asset_reader_writer::pixel_buffer::*;
+        use crate::source_coding::transform_block_3d_dct::*;
+        use asset_reader::*; // idk why this only works here..
+
+        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let mut reader = AssetReader::new(path);
+
+        const LENGTH: usize = 2;
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator();
+
+        let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
+
+        let mut y_dct: TransformBlock3DDCT<_, _> = macro_block.y_components.into();
+        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+
+        let compression_ratio = 0.02;
+        let expected_chunks = (compression_ratio * y_chunks.len() as f64).floor() as usize;
+
+        let metadata_bitmap = MetadataBitmap::new(&y_chunks, compression_ratio);
+        let y_chunks_metadata_clone: Box<_> = y_chunks.iter().map(|chunk| chunk.metadata).collect();
+        let bitmap_clone = metadata_bitmap.values.clone();
+        let filtered_y_chunk_metadata_iter = bitmap_clone
+            .iter_ones()
+            .map(|idx| y_chunks_metadata_clone[idx]);
+
+        let compressor = Compressor::new(y_chunks.into_iter(), metadata_bitmap);
+        let compressed_chunks: Box<_> = compressor.collect();
+        assert_eq!(expected_chunks, compressed_chunks.len());
+
+        for (compressed_chunk, filtered_chunk_metadata) in
+            compressed_chunks.iter().zip(filtered_y_chunk_metadata_iter)
+        {
+            assert_eq!(compressed_chunk.metadata, filtered_chunk_metadata);
+        }
     }
 }

@@ -824,6 +824,13 @@ pub mod pixel_buffer {
             }
         }
     }
+    impl<'a, const LENGTH: usize> From<asset_reader::PixelBufferIterator<'a>>
+        for MacroBlock3DIterator<LENGTH, asset_reader::PixelBufferIterator<'a>>
+    {
+        fn from(pixel_buffer_iterator: asset_reader::PixelBufferIterator<'a>) -> Self {
+            pixel_buffer_iterator.macro_block_3d_iterator()
+        }
+    }
 
     impl<const LENGTH: usize, PixelBufferIterator> Iterator
         for MacroBlock3DIterator<LENGTH, PixelBufferIterator>

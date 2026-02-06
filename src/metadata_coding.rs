@@ -53,7 +53,7 @@ impl From<&[u8; ChunkMetadata::SERIALIZED_SIZE]> for ChunkMetadata {
 }
 
 fn compress_metadata<'a, I>(
-    metadata_bitmap: MetadataBitmap,
+    metadata_bitmap: &MetadataBitmap,
     chunk_metadata_iter: I,
 ) -> Result<CompressedMetadata, Box<dyn std::error::Error>>
 where
@@ -258,7 +258,7 @@ pub struct CompressedMetadata {
 
 impl CompressedMetadata {
     pub fn new<'a, I: Iterator<Item = &'a ChunkMetadata>>(
-        metadata_bitmap: MetadataBitmap,
+        metadata_bitmap: &MetadataBitmap,
         chunk_metadata_iter: I,
     ) -> Self {
         compress_metadata(metadata_bitmap, chunk_metadata_iter)
@@ -277,7 +277,7 @@ where
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadatas.len()],
         };
         let chunk_metadata_iter = chunk_metadatas.into_iter();
-        compress_metadata(metadata_bitmap, chunk_metadata_iter)
+        compress_metadata(&metadata_bitmap, chunk_metadata_iter)
             .expect("Compressing metadata failed.")
     }
 }

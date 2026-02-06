@@ -1029,12 +1029,12 @@ mod tests {
 
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
         let compression_ratio = 0.125;
-        let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
-        let metadata_bitmap = compressor.take_metadata_bitmap();
-        let power_scaler = PowerScaler::new(compressor);
-        let num_included_chunks = metadata_bitmap.values.count_ones();
+        let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
         let y_compressed_metadata =
-            CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
+            CompressedMetadata::new(&metadata_bitmap, chunk_metadatas.iter());
+        let num_included_chunks = metadata_bitmap.values.count_ones();
+        let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
+        let power_scaler = PowerScaler::new(compressor);
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
@@ -1172,18 +1172,18 @@ mod tests {
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
         //         let compression_ratio = 0.234375; // has no error for bipbop
         let compression_ratio = 0.125;
-        let mut compressor = Compressor::new(chunks.into_iter(), compression_ratio);
-        let metadata_bitmap = compressor.take_metadata_bitmap();
-        let power_scaler = PowerScaler::new(compressor);
+        let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
+        let y_compressed_metadata =
+            CompressedMetadata::new(&metadata_bitmap, chunk_metadatas.iter());
         let num_included_chunks = metadata_bitmap.values.count_ones();
+        let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
+
+        let power_scaler = PowerScaler::new(compressor);
 
         assert_eq!(
             (chunks_per_gop as f64 * compression_ratio).floor() as usize,
             num_included_chunks
         );
-
-        let y_compressed_metadata =
-            CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();

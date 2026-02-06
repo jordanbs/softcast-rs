@@ -194,8 +194,6 @@ pub mod transform_block_3d_dct {
                 .zip(energies.into_iter())
                 .map(|((chunk, mean), energy)| Chunk::new(chunk, ChunkMetadata { mean, energy }));
 
-            // TODO: Add option to sort chunks by energy, for compression
-
             chunked_transform_blocks
         }
 
