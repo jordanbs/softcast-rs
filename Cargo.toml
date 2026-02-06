@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bitvec = "1.0.1"
+clap = { version = "4.5.57", features = ["derive"] }
 cmake = "0.1.57"
 liquid-sys = { path = "crates/liquid-sys" }
 ndarray = "0.17.1"
