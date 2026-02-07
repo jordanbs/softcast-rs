@@ -377,7 +377,7 @@ mod tests {
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 2;
@@ -413,7 +413,7 @@ mod tests {
         use zstd;
 
         //         let path1 = "sample-media/bipbop-1920x1080-5s.mp4";
-        let path2 = "sample-media/sample-5s.mp4"; // more suitable for testing compression
+        let path2 = "sample-media/sample-5s.mp4".into(); // more suitable for testing compression
         let mut reader = AssetReader::new(path2);
 
         const LENGTH: usize = 9;
@@ -473,7 +473,7 @@ mod tests {
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 2;

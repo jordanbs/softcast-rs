@@ -54,9 +54,9 @@ pub mod asset_reader {
     }
 
     impl AssetReader {
-        pub fn new(file_path: &str) -> Self {
+        pub fn new(file_path: std::path::PathBuf) -> Self {
             AssetReader {
-                path: path::PathBuf::from(file_path),
+                path: file_path,
                 loaded_reader: None,
             }
         }
@@ -213,6 +213,24 @@ pub mod asset_reader {
             self.asset_reader
                 .get_next_pixel_buffer()
                 .expect("Failed to get next pixel buffer.")
+        }
+    }
+
+    pub struct IntoPixelBufferIterator {
+        asset_reader: AssetReader,
+    }
+    impl From<AssetReader> for IntoPixelBufferIterator {
+        fn from(asset_reader: AssetReader) -> Self {
+            Self { asset_reader }
+        }
+    }
+    impl Iterator for IntoPixelBufferIterator {
+        type Item = PixelBuffer;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.asset_reader
+                .get_next_pixel_buffer()
+                .expect("Failed to get next pixel buffer.")
+            // TODO: better error handling
         }
     }
 }
@@ -808,27 +826,21 @@ pub mod pixel_buffer {
         }
     }
 
-    pub struct MacroBlock3DIterator<const LENGTH: usize, PixelBufferIterator>
-    where
-        PixelBufferIterator: Iterator<Item = PixelBuffer>,
-    {
-        pixel_buffer_iterator: PixelBufferIterator,
+    pub struct MacroBlock3DIterator<const LENGTH: usize, I: Iterator<Item = PixelBuffer>> {
+        pixel_buffer_iterator: I,
     }
-    impl<const LENGTH: usize, PixelBufferIterator> MacroBlock3DIterator<LENGTH, PixelBufferIterator>
-    where
-        PixelBufferIterator: Iterator<Item = PixelBuffer>,
-    {
-        pub(super) fn new(pixel_buffer_iterator: PixelBufferIterator) -> Self {
+    impl<const LENGTH: usize, I: Iterator<Item = PixelBuffer>> MacroBlock3DIterator<LENGTH, I> {
+        pub(super) fn new(pixel_buffer_iterator: I) -> Self {
             MacroBlock3DIterator {
                 pixel_buffer_iterator: pixel_buffer_iterator,
             }
         }
     }
-    impl<'a, const LENGTH: usize> From<asset_reader::PixelBufferIterator<'a>>
-        for MacroBlock3DIterator<LENGTH, asset_reader::PixelBufferIterator<'a>>
+    impl<'a, const LENGTH: usize, I: Iterator<Item = PixelBuffer>> From<I>
+        for MacroBlock3DIterator<LENGTH, I>
     {
-        fn from(pixel_buffer_iterator: asset_reader::PixelBufferIterator<'a>) -> Self {
-            pixel_buffer_iterator.macro_block_3d_iterator()
+        fn from(pixel_buffer_iterator: I) -> Self {
+            Self::new(pixel_buffer_iterator)
         }
     }
 
@@ -1098,7 +1110,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_writer_0() {
-        let mut reader = AssetReader::new("sample-media/sample-5s.mp4");
+        let mut reader = AssetReader::new("sample-media/sample-5s.mp4".into());
         let output_file = "/tmp/sample-5s-0.mp4";
 
         let writer_settings = AssetWritterSettings {
@@ -1129,7 +1141,7 @@ mod tests {
     #[test]
     fn test_get_transform_blocks_3d() {
         const GOP_SIZE: usize = 30;
-        let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4"); // 301 frames long
+        let mut reader = AssetReader::new("sample-media/bipbop-1920x1080-5s.mp4".into()); // 301 frames long
 
         let num_frames_processed = reader
             .pixel_buffer_iter()
@@ -1145,7 +1157,7 @@ mod tests {
 
     #[test]
     fn test_macro_block_3d_move() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const MACRO_BLOCK_LEN: usize = 60;
@@ -1170,8 +1182,8 @@ mod tests {
     #[test]
     fn test_reader_to_transform_block_3d_to_pb_exact_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4";
-        let mut reader_1 = AssetReader::new(path);
-        let mut reader_2 = AssetReader::new(path);
+        let mut reader_1 = AssetReader::new(path.into());
+        let mut reader_2 = AssetReader::new(path.into());
 
         // reader -> pixel buffer -> macro_block_3d (3x TransformBlock3D) -> PixelBuffer
         let pb1 = reader_1
@@ -1195,7 +1207,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_transform_block_3d_to_writer() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let output_path = "/tmp/bipbop-1920x1080-3d-5s.mp4";

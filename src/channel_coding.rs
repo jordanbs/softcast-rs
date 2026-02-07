@@ -689,7 +689,7 @@ mod tests {
         use crate::channel_coding::slice::{ChunkIterIntoExt, SliceIterExt};
         use asset_reader::*; // idk why this only works here..
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");

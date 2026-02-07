@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_slice_metadata_inverse_equality() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_packet_inverse_equality() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
@@ -818,7 +818,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_packet_inverse_equality_reader() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;

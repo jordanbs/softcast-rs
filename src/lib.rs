@@ -21,4 +21,5 @@ pub mod compressor;
 pub mod framing;
 pub mod metadata_coding;
 pub mod modulation;
+pub mod simulator;
 pub mod source_coding;

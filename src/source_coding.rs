@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_print_3d_dct() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
         const LENGTH: usize = 18;
 
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_print_chunk_means() {
-        let path = "sample-media/sample-5s.mp4";
+        let path = "sample-media/sample-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let mut transform_block_3d_dct: TransformBlock3DDCT<4, YPixelComponentType> = reader
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     #[cfg(false)] // too slow to run regularly
     fn test_reader_to_transform_block_3d_dct_to_writer() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_dct2_inverse_equality() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
@@ -664,7 +664,7 @@ mod tests {
         use asset_writer::*;
         use std::path;
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_chunked_dct_inverse_equality() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
@@ -807,7 +807,7 @@ mod tests {
         let path2 = "sample-media/sample-5s.mp4";
 
         fn print_zero_values(path: &'static str) {
-            let mut reader = AssetReader::new(path);
+            let mut reader = AssetReader::new(path.into());
 
             const LENGTH: usize = 30;
             let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =

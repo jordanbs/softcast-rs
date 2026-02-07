@@ -23,12 +23,13 @@ pub const NUM_SUBCARRIERS: usize = 64;
 const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
 const FRAME_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
+pub const OFDM_SYMBOL_LEN: usize = FRAME_LEN;
 
 static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug)]
 pub struct OFDMSymbol {
-    time_domain_symbols: [Complex32; FRAME_LEN],
+    pub time_domain_symbols: [Complex32; FRAME_LEN],
 }
 
 impl Default for OFDMSymbol {
@@ -373,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_frame_inverse_to_packets_equality() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
@@ -411,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_frame_inverse_num_slices() {
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
@@ -484,7 +485,7 @@ mod tests {
         use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
@@ -867,7 +868,7 @@ mod tests {
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4";
+        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
@@ -999,7 +1000,7 @@ mod tests {
         use ndarray_stats::DeviationExt;
 
         //         let path = "sample-media/bipbop-1920x1080-5s.mp4";
-        let path = "sample-media/bigbuck-7.5s.mov";
+        let path = "sample-media/bigbuck-7.5s.mov".into();
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
@@ -1136,7 +1137,7 @@ mod tests {
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
 
-        let path = "sample-media/bigbuck-7.5s.mov";
+        let path = "sample-media/bigbuck-7.5s.mov".into();
         let mut reader = AssetReader::new(path);
 
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
