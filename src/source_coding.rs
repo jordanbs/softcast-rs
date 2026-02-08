@@ -24,9 +24,15 @@ pub mod transform_block_3d_dct {
     use chunk::*;
 
     #[derive(Debug)]
-    pub struct TransformBlock3DDCT<const LENGTH: usize, PixelType: HasPixelComponentType> {
+    pub struct TransformBlock3DDCT<PixelType: HasPixelComponentType> {
         pub values: ndarray::Array3<f32>,
         _marker: std::marker::PhantomData<PixelType>,
+        gop_len: usize,
+    }
+    impl<PixelType: HasPixelComponentType> GOPLen for TransformBlock3DDCT<PixelType> {
+        fn gop_len(&self) -> usize {
+            self.gop_len
+        }
     }
 
     fn forwards_scale_factor(idx: usize, axis_len: usize) -> f32 {
@@ -41,13 +47,14 @@ pub mod transform_block_3d_dct {
         1.0 / forwards_scale_factor(idx, axis_len)
     }
 
-    impl<const LENGTH: usize, PixelType: HasPixelComponentType>
-        From<TransformBlock3D<LENGTH, PixelType>> for TransformBlock3DDCT<LENGTH, PixelType>
+    impl<PixelType: HasPixelComponentType> From<TransformBlock3D<PixelType>>
+        for TransformBlock3DDCT<PixelType>
     {
-        fn from(transform_block: TransformBlock3D<LENGTH, PixelType>) -> Self {
+        fn from(transform_block: TransformBlock3D<PixelType>) -> Self {
+            let gop_len = transform_block.gop_len();
             let mut component_values = transform_block.consume_values();
             let (length, height, width) = component_values.dim();
-            assert_eq!(length, LENGTH);
+            assert_eq!(length, gop_len);
 
             for (axis_idx, axis_len) in [(0, length), (1, height), (2, width)] {
                 let handler = ndrustfft::DctHandler::new(axis_len)
@@ -70,9 +77,10 @@ pub mod transform_block_3d_dct {
                 .indexed_iter_mut()
                 .for_each(|((i, j, k), value)| *value *= i_scales[i] * j_scales[j] * k_scales[k]);
 
-            TransformBlock3DDCT::<LENGTH, PixelType> {
+            Self {
                 values: dct_values,
                 _marker: std::marker::PhantomData,
+                gop_len,
             }
         }
     }
@@ -82,22 +90,20 @@ pub mod transform_block_3d_dct {
         (1..=limit).rev().find(|i| value % i == 0).unwrap()
     }
 
-    impl<const LENGTH: usize, PixelType: HasPixelComponentType>
-        transform_block_3d::TransformBlock3D<LENGTH, PixelType>
-    {
-        pub fn into_dct(self) -> TransformBlock3DDCT<LENGTH, PixelType> {
+    impl<PixelType: HasPixelComponentType> transform_block_3d::TransformBlock3D<PixelType> {
+        pub fn into_dct(self) -> TransformBlock3DDCT<PixelType> {
             TransformBlock3DDCT::from(self)
         }
     }
 
-    impl<const LENGTH: usize, PixelType: HasPixelComponentType>
-        From<TransformBlock3DDCT<LENGTH, PixelType>>
-        for transform_block_3d::TransformBlock3D<LENGTH, PixelType>
+    impl<PixelType: HasPixelComponentType> From<TransformBlock3DDCT<PixelType>>
+        for transform_block_3d::TransformBlock3D<PixelType>
     {
-        fn from(transform_block_dct: TransformBlock3DDCT<LENGTH, PixelType>) -> Self {
+        fn from(transform_block_dct: TransformBlock3DDCT<PixelType>) -> Self {
+            let gop_len = transform_block_dct.gop_len();
             let mut dct_values = transform_block_dct.consume_values();
             let (length, height, width) = dct_values.dim();
-            assert_eq!(length, LENGTH);
+            assert_eq!(length, gop_len);
 
             let i_scales: Box<[f32]> = (0..length)
                 .map(|i| backwards_scale_factor(i, length))
@@ -128,12 +134,12 @@ pub mod transform_block_3d_dct {
         }
     }
 
-    impl<const LENGTH: usize, PixelType: HasPixelComponentType> TransformBlock3DDCT<LENGTH, PixelType> {
+    impl<PixelType: HasPixelComponentType> TransformBlock3DDCT<PixelType> {
         pub fn consume_values(self) -> ndarray::Array3<f32> {
             self.values
         }
 
-        pub fn chunks_iter(&mut self) -> impl Iterator<Item = Chunk<'_, LENGTH, PixelType>> {
+        pub fn chunks_iter(&mut self) -> impl Iterator<Item = Chunk<'_, PixelType>> {
             const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 30, 44);
             let (length, height, width) = self.values.dim();
             let chunk_length =
@@ -198,11 +204,12 @@ pub mod transform_block_3d_dct {
         }
 
         pub(super) fn from_chunks(
-            chunks: &[Chunk<'_, LENGTH, PixelType>],
+            chunks: &[Chunk<'_, PixelType>],
             frame_resolution: (usize, usize),
+            gop_len: usize,
         ) -> Self {
             let (dct_length, dct_height, dct_width) =
-                (LENGTH, frame_resolution.1, frame_resolution.0);
+                (gop_len, frame_resolution.1, frame_resolution.0);
             let mut values = ndarray::Array3::zeros((dct_length, dct_height, dct_width)); // TODO: eliminiate copy
             let chunk_dimensions = chunks.first().expect("chunks is empty").values.dim();
 
@@ -222,15 +229,17 @@ pub mod transform_block_3d_dct {
                     dst += src.metadata.mean;
                 });
 
-            TransformBlock3DDCT::<LENGTH, PixelType> {
+            Self {
                 values: values,
                 _marker: std::marker::PhantomData,
+                gop_len,
             }
         }
 
         pub fn from_chunks_owned(
             mut owned: ndarray::Array3<f32>,
             chunk_metadatas: &[ChunkMetadata],
+            gop_len: usize,
             frame_resolution: (usize, usize),
             chunk_dimensions: (usize, usize, usize),
         ) -> Self {
@@ -240,7 +249,7 @@ pub mod transform_block_3d_dct {
                 frame_resolution.1 / PixelType::TYPE.vertical_subsampling(),
             );
             assert_eq!(
-                LENGTH * component_frame_width * component_frame_height,
+                gop_len * component_frame_width * component_frame_height,
                 chunk_metadatas.len()
                     * chunk_dimensions.0
                     * chunk_dimensions.1
@@ -253,7 +262,7 @@ pub mod transform_block_3d_dct {
             {
                 chunk_values.mapv_inplace(|elm| elm + metadata.mean);
             }
-            let dct_dimensions = (LENGTH, component_frame_height, component_frame_width);
+            let dct_dimensions = (gop_len, component_frame_height, component_frame_width);
             let (mut owned_vec, offset) = owned.into_raw_vec_and_offset(); // truncate padding slices
             assert_eq!(0, offset.unwrap());
 
@@ -261,9 +270,10 @@ pub mod transform_block_3d_dct {
             let owned: ndarray::Array3<f32> =
                 ndarray::Array3::from_shape_vec(dct_dimensions, owned_vec)
                     .expect("Failed to convert from chunk dimensions to dct dimensions.");
-            TransformBlock3DDCT {
+            Self {
                 values: owned,
                 _marker: std::marker::PhantomData,
+                gop_len,
             }
         }
     }
@@ -299,22 +309,17 @@ pub mod power_scaling {
 
     pub struct PowerScaler<
         'a,
-        const DCT_LENGTH: usize,
         PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, PixelType>>,
     > {
         inner1: Option<I>,
-        inner2: std::cell::OnceCell<std::vec::IntoIter<Chunk<'a, DCT_LENGTH, PixelType>>>,
+        inner2: std::cell::OnceCell<std::vec::IntoIter<Chunk<'a, PixelType>>>,
         chunk_energies: std::cell::OnceCell<Box<[f32]>>,
         compute_cache: std::cell::OnceCell<f32>,
         inverse: bool,
     }
-    impl<
-        'a,
-        const DCT_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-    > PowerScaler<'a, DCT_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
+        PowerScaler<'a, PixelType, I>
     {
         pub fn new(chunks_iter: I) -> Self {
             Self {
@@ -335,14 +340,10 @@ pub mod power_scaling {
             }
         }
     }
-    impl<
-        'a,
-        const DCT_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-    > Iterator for PowerScaler<'a, DCT_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>> Iterator
+        for PowerScaler<'a, PixelType, I>
     {
-        type Item = Chunk<'a, DCT_LENGTH, PixelType>;
+        type Item = Chunk<'a, PixelType>;
         fn next(&mut self) -> Option<Self::Item> {
             if self.chunk_energies.get().is_none() {
                 let chunks: Box<_> = self.inner1.take().unwrap().collect();
@@ -381,15 +382,13 @@ pub mod chunk {
     }
 
     #[derive(Debug)]
-    pub struct Chunk<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType> {
+    pub struct Chunk<'a, PixelType: HasPixelComponentType> {
         pub values: ndarray::ArrayViewMut3<'a, f32>,
         pub metadata: ChunkMetadata,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
-    impl<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>
-        Chunk<'a, DCT_LENGTH, PixelType>
-    {
+    impl<'a, PixelType: HasPixelComponentType> Chunk<'a, PixelType> {
         pub fn new(values: ndarray::ArrayViewMut3<'a, f32>, metadata: ChunkMetadata) -> Self {
             Chunk {
                 values,
@@ -401,21 +400,17 @@ pub mod chunk {
 
     pub struct TransformBlock3DDCTIter<
         'a,
-        const DCT_LENGTH: usize,
         PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
+        I: Iterator<Item = Chunk<'a, PixelType>>,
     > {
         chunk_iter: I,
         component_frame_resolution: (usize, usize),
+        gop_len: usize,
     }
-    impl<
-        'a,
-        const DCT_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-    > TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
+        TransformBlock3DDCTIter<'a, PixelType, I>
     {
-        fn new(chunk_iter: I, frame_resolution: (usize, usize)) -> Self {
+        fn new(chunk_iter: I, frame_resolution: (usize, usize), gop_len: usize) -> Self {
             let (frame_width, frame_height) = frame_resolution;
             let pixel_type = PixelType::TYPE;
             let component_frame_resolution = (
@@ -425,24 +420,22 @@ pub mod chunk {
             TransformBlock3DDCTIter {
                 chunk_iter: chunk_iter,
                 component_frame_resolution,
+                gop_len,
             }
         }
     }
 
-    impl<
-        'a,
-        const DCT_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-    > Iterator for TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>> Iterator
+        for TransformBlock3DDCTIter<'a, PixelType, I>
     {
-        type Item = TransformBlock3DDCT<DCT_LENGTH, PixelType>;
+        type Item = TransformBlock3DDCT<PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
             use std::cell::OnceCell;
 
-            let num_transform_block_3d_dct_values =
-                DCT_LENGTH * self.component_frame_resolution.0 * self.component_frame_resolution.1;
+            let num_transform_block_3d_dct_values = self.gop_len
+                * self.component_frame_resolution.0
+                * self.component_frame_resolution.1;
             let chunks_needed = OnceCell::new();
             let chunk_dim = OnceCell::new();
             let mut chunks_to_consume = OnceCell::new();
@@ -465,7 +458,7 @@ pub mod chunk {
                 let chunks_needed = chunks_needed.get_or_init(|| {
                     let num_chunk_values =
                         chunk.values.dim().0 * chunk.values.dim().1 * chunk.values.dim().2;
-                    assert_eq!(DCT_LENGTH % chunk.values.dim().0, 0);
+                    assert_eq!(self.gop_len % chunk.values.dim().0, 0);
                     assert_eq!(self.component_frame_resolution.0 % chunk.values.dim().2, 0); // width
                     assert_eq!(self.component_frame_resolution.1 % chunk.values.dim().1, 0); // height
                     assert_eq!(num_transform_block_3d_dct_values % num_chunk_values, 0);
@@ -480,6 +473,7 @@ pub mod chunk {
                     let transform_block_3d_dct = TransformBlock3DDCT::from_chunks(
                         chunks_to_consume,
                         self.component_frame_resolution,
+                        self.gop_len,
                     );
                     return Some(transform_block_3d_dct);
                 }
@@ -487,26 +481,24 @@ pub mod chunk {
         }
     }
 
-    pub trait ChunkIterFromExt<'a, const DCT_LENGTH: usize, PixelType: HasPixelComponentType>:
-        Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>> + Sized
+    pub trait ChunkIterFromExt<'a, PixelType: HasPixelComponentType>:
+        Iterator<Item = Chunk<'a, PixelType>> + Sized
     {
         fn into_transform_block_3d_dct_iter(
             self,
             frame_resolution: (usize, usize),
-        ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self>;
+            gop_len: usize,
+        ) -> TransformBlock3DDCTIter<'a, PixelType, Self>;
     }
-    impl<
-        'a,
-        const DCT_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Chunk<'a, DCT_LENGTH, PixelType>>,
-    > ChunkIterFromExt<'a, DCT_LENGTH, PixelType> for I
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
+        ChunkIterFromExt<'a, PixelType> for I
     {
         fn into_transform_block_3d_dct_iter(
             self,
             frame_resolution: (usize, usize),
-        ) -> TransformBlock3DDCTIter<'a, DCT_LENGTH, PixelType, Self> {
-            TransformBlock3DDCTIter::new(self, frame_resolution)
+            gop_len: usize,
+        ) -> TransformBlock3DDCTIter<'a, PixelType, Self> {
+            TransformBlock3DDCTIter::new(self, frame_resolution, gop_len)
         }
     }
 }
@@ -516,7 +508,6 @@ mod tests {
     use super::*;
     use asset_reader::*;
     use chunk::*;
-    use pixel_buffer::*;
     use std::fs;
     use transform_block_3d_dct::*;
 
@@ -526,9 +517,9 @@ mod tests {
         let mut reader = AssetReader::new(path);
         const LENGTH: usize = 18;
 
-        let transform_block_3d_dct: TransformBlock3DDCT<LENGTH, YPixelComponentType> = reader
+        let transform_block_3d_dct: TransformBlock3DDCT<YPixelComponentType> = reader
             .pixel_buffer_iter()
-            .macro_block_3d_iterator()
+            .macro_block_3d_iterator(LENGTH)
             .map(|macro_block| macro_block.y_components.into_dct())
             .next()
             .expect("No DCT performed.");
@@ -542,9 +533,9 @@ mod tests {
         let path = "sample-media/sample-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
-        let mut transform_block_3d_dct: TransformBlock3DDCT<4, YPixelComponentType> = reader
+        let mut transform_block_3d_dct: TransformBlock3DDCT<YPixelComponentType> = reader
             .pixel_buffer_iter()
-            .macro_block_3d_iterator()
+            .macro_block_3d_iterator(4)
             .map(|macro_block| macro_block.y_components.into_dct())
             .next()
             .expect("No DCT performed.");
@@ -562,13 +553,15 @@ mod tests {
     #[test]
     #[cfg(false)] // too slow to run regularly
     fn test_reader_to_transform_block_3d_dct_to_writer() {
+        use asset_writer::*;
+
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
         let _ = fs::remove_file(output_path);
         let writer_settings = AssetWritterSettings {
-            path: path::PathBuf::from(output_path),
+            path: std::path::PathBuf::from(output_path),
             codec: Codec::H264,
             resolution: reader.resolution().expect("Failed to get resolution."),
             frame_rate: reader.frame_rate().expect("Failed to get frame rate"),
@@ -577,8 +570,7 @@ mod tests {
         writer.start_writing().expect("Failed to start writing");
 
         const LENGTH: usize = 8;
-        let macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let macro_block_3d_iterator = reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let mut pixel_buffers_consumed = 0;
 
@@ -587,17 +579,18 @@ mod tests {
             let cb_dct = macro_block.cb_components.into_dct();
             let cr_dct = macro_block.cr_components.into_dct();
 
-            let y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
-            let cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
-            let cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
+            let y_components: TransformBlock3D<YPixelComponentType> = y_dct.into();
+            let cb_components: TransformBlock3D<CbPixelComponentType> = cb_dct.into();
+            let cr_components: TransformBlock3D<CrPixelComponentType> = cr_dct.into();
 
             let new_macro_block = MacroBlock3D {
                 y_components,
                 cb_components,
                 cr_components,
+                gop_len: LENGTH,
             };
-
-            let pixel_buffer_iterator = [new_macro_block].into_iter().pixel_buffer_iter();
+            let pixel_buffer_iterator: transform_block_3d::PixelBufferIterator<_> =
+                new_macro_block.into();
 
             for pixel_buffer in pixel_buffer_iterator {
                 pixel_buffers_consumed += 1;
@@ -623,14 +616,15 @@ mod tests {
         let _ = fs::remove_file(output_path);
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
         let MacroBlock3D {
             y_components: original_y_components,
             cb_components: original_cb_components,
             cr_components: original_cr_components,
+            ..
         } = macro_block.clone();
 
         let y_dct = macro_block.y_components.into_dct();
@@ -649,9 +643,9 @@ mod tests {
             y_dct
         );
 
-        let new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> = y_dct.into();
-        let new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> = cb_dct.into();
-        let new_cr_components: TransformBlock3D<LENGTH, CrPixelComponentType> = cr_dct.into();
+        let new_y_components: TransformBlock3D<YPixelComponentType> = y_dct.into();
+        let new_cb_components: TransformBlock3D<CbPixelComponentType> = cb_dct.into();
+        let new_cr_components: TransformBlock3D<CrPixelComponentType> = cr_dct.into();
 
         assert_eq!(original_y_components, new_y_components);
         assert_eq!(original_cb_components, new_cb_components);
@@ -680,8 +674,7 @@ mod tests {
         writer.start_writing().expect("Failed to start writing");
 
         const LENGTH: usize = 8;
-        let macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let macro_block_3d_iterator = reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let mut pixel_buffers_consumed = 0;
 
@@ -694,6 +687,7 @@ mod tests {
                 y_components,
                 cb_components,
                 cr_components,
+                ..
             } = macro_block;
 
             let mut y_dct = y_components.into_dct();
@@ -702,29 +696,31 @@ mod tests {
 
             let mut y_dct_iter = y_dct
                 .chunks_iter()
-                .into_transform_block_3d_dct_iter(frame_resolution);
+                .into_transform_block_3d_dct_iter(frame_resolution, LENGTH);
             let y_dct = y_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
             assert!(y_dct_iter.next().is_none());
 
             let mut cb_dct_iter = cb_dct
                 .chunks_iter()
-                .into_transform_block_3d_dct_iter(frame_resolution);
+                .into_transform_block_3d_dct_iter(frame_resolution, LENGTH);
             let cb_dct = cb_dct_iter.next().expect("Failed to recreate Cb 3D DCT.");
             assert!(cb_dct_iter.next().is_none());
 
             let mut cr_dct_iter = cr_dct
                 .chunks_iter()
-                .into_transform_block_3d_dct_iter(frame_resolution);
+                .into_transform_block_3d_dct_iter(frame_resolution, LENGTH);
             let cr_dct = cr_dct_iter.next().expect("Failed to recreate Cr 3D DCT.");
             assert!(cr_dct_iter.next().is_none());
 
-            let new_macro_block = MacroBlock3D::<LENGTH> {
+            let new_macro_block = MacroBlock3D {
                 y_components: y_dct.into(),
                 cb_components: cb_dct.into(),
                 cr_components: cr_dct.into(),
+                gop_len: LENGTH,
             };
 
-            let pixel_buffer_iterator = [new_macro_block].into_iter().pixel_buffer_iter();
+            let pixel_buffer_iterator: transform_block_3d::PixelBufferIterator<_> =
+                new_macro_block.into();
 
             for pixel_buffer in pixel_buffer_iterator {
                 pixel_buffers_consumed += 1;
@@ -753,8 +749,8 @@ mod tests {
         let _ = fs::remove_file(output_path);
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -762,6 +758,7 @@ mod tests {
             y_components: original_y_components,
             cb_components: original_cb_components,
             cr_components: original_cr_components,
+            ..
         } = macro_block.clone();
 
         let mut y_dct = macro_block.y_components.into_dct();
@@ -772,7 +769,7 @@ mod tests {
 
         let new_y_dct = y_dct
             .chunks_iter()
-            .into_transform_block_3d_dct_iter(frame_resolution)
+            .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Y 3D DCT");
 
@@ -782,14 +779,14 @@ mod tests {
 
         let new_cb_components = cb_dct
             .chunks_iter()
-            .into_transform_block_3d_dct_iter(frame_resolution)
+            .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Cb 3D DCT")
             .into();
 
         let new_cr_components = cr_dct
             .chunks_iter()
-            .into_transform_block_3d_dct_iter(frame_resolution)
+            .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Cr 3D DCT")
             .into();
@@ -803,6 +800,8 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_count_zero_valued_chunk() {
+        use pixel_buffer::*;
+
         let path1 = "sample-media/bipbop-1920x1080-5s.mp4";
         let path2 = "sample-media/sample-5s.mp4";
 
@@ -810,8 +809,8 @@ mod tests {
             let mut reader = AssetReader::new(path.into());
 
             const LENGTH: usize = 30;
-            let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-                reader.pixel_buffer_iter().macro_block_3d_iterator();
+            let mut macro_block_3d_iterator: MacroBlock3DIterator<_> =
+                reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
             let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -819,10 +818,11 @@ mod tests {
                 y_components,
                 cb_components,
                 cr_components,
+                ..
             } = macro_block;
 
             fn count_zero_values<PixelType: HasPixelComponentType>(
-                transform_block_3d_dct: &mut TransformBlock3DDCT<LENGTH, PixelType>,
+                transform_block_3d_dct: &mut TransformBlock3DDCT<PixelType>,
             ) -> (usize, usize, f32, f32) {
                 transform_block_3d_dct.chunks_iter().fold(
                     (0, 0, 0f32, 0f32),

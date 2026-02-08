@@ -35,7 +35,7 @@ use rand::Rng;
 
 const GOP_LENGTH: usize = 90; // TODO: Remove this generic.
 pub struct EncoderDecoderSimulator {
-    macro_block_3d_iter: MacroBlock3DIterator<GOP_LENGTH, IntoPixelBufferIterator>,
+    macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator>,
     compression_ratio: f64,
     noise_power: f32,
     asset_resolution: (usize, usize),
@@ -63,7 +63,7 @@ impl EncoderDecoderSimulator {
         let asset_resolution = (asset_resolution.0 as usize, asset_resolution.1 as usize);
         let writer = AssetWriter::load_new(writer_settings)?;
         Ok(Self {
-            macro_block_3d_iter: pb_iter.into(),
+            macro_block_3d_iter: pb_iter.into_macro_block_3d_iter(GOP_LENGTH),
             compression_ratio,
             noise_power,
             asset_resolution,
@@ -72,8 +72,8 @@ impl EncoderDecoderSimulator {
     }
 }
 
-fn ofdm_framer<const GOP_LENGTH: usize, PixelType: HasPixelComponentType>(
-    dct_components: &mut TransformBlock3DDCT<GOP_LENGTH, PixelType>,
+fn ofdm_framer<PixelType: HasPixelComponentType>(
+    dct_components: &mut TransformBlock3DDCT<PixelType>,
     compression_ratio: f64,
 ) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
     let chunks: Box<_> = dct_components.chunks_iter().collect();
@@ -90,7 +90,7 @@ fn ofdm_framer<const GOP_LENGTH: usize, PixelType: HasPixelComponentType>(
     // slices
     let num_included_chunks = metadata_bitmap.values.count_ones();
     let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
-    let slice_modulator: SliceModulator<'_, _, _, _> = PowerScaler::new(compressor)
+    let slice_modulator: SliceModulator<'_, _, _> = PowerScaler::new(compressor)
         .into_slice_iter(num_included_chunks)
         .map(|slice_and_chunk_metadata| slice_and_chunk_metadata.slice)
         .into();
@@ -111,6 +111,7 @@ impl EncoderDecoderSimulator {
                 y_components,
                 cb_components,
                 cr_components,
+                ..
             } = macro_block;
 
             let mut y_dct = y_components.into();
@@ -160,11 +161,12 @@ impl EncoderDecoderSimulator {
                 y_components: y_dct_out.into(),
                 cb_components: cb_dct_out.into(),
                 cr_components: cr_dct_out.into(),
+                gop_len: GOP_LENGTH,
             };
+            let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_> =
+                new_macro_block_3d.into();
 
-            let pixel_buffer_iterator = [new_macro_block_3d].into_iter().pixel_buffer_iter();
-
-            for pixel_buffer in pixel_buffer_iterator {
+            for pixel_buffer in pixel_buffer_iter {
                 self.asset_writer.append_pixel_buffer(pixel_buffer)?;
                 self.asset_writer.wait_for_writer_to_be_ready()?;
             }
@@ -202,7 +204,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     ofdm_symbol_iter: &mut O,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
-) -> TransformBlock3DDCT<GOP_LENGTH, PixelType> {
+) -> TransformBlock3DDCT<PixelType> {
     let (frame_width, frame_height) = (
         asset_resolution.0 / PixelType::TYPE.interleave_step(),
         asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
@@ -243,7 +245,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
         chunk_dim,
         num_included_slices - num_included_chunks,
     );
-    let slice_demodulator: SliceDemodulator<'_, GOP_LENGTH, PixelType, _> = SliceDemodulator::new(
+    let slice_demodulator: SliceDemodulator<'_, PixelType, _> = SliceDemodulator::new(
         chunk_dim,
         metadata_bitmap,
         synchronizer,
@@ -269,6 +271,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     TransformBlock3DDCT::from_chunks_owned(
         dct_allocation,
         &chunk_metadatas,
+        GOP_LENGTH,
         asset_resolution,
         chunk_dim,
     )

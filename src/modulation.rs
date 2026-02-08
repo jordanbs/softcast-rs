@@ -189,21 +189,16 @@ pub mod slices {
 
     pub struct SliceModulator<
         'a,
-        const GOP_LENGTH: usize,
         PixelType: HasPixelComponentType,
-        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
+        I: Iterator<Item = Slice<'a, PixelType>>,
     > {
         slice_iter: I,
-        working_slice: Option<Slice<'a, GOP_LENGTH, PixelType>>,
+        working_slice: Option<Slice<'a, PixelType>>,
         working_idx: usize,
     }
 
-    impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
-    > From<I> for SliceModulator<'a, GOP_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Slice<'a, PixelType>>> From<I>
+        for SliceModulator<'a, PixelType, I>
     {
         fn from(slice_iter: I) -> Self {
             Self {
@@ -214,12 +209,8 @@ pub mod slices {
         }
     }
 
-    impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
-    > SliceModulator<'a, GOP_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Slice<'a, PixelType>>>
+        SliceModulator<'a, PixelType, I>
     {
         fn next_real(&mut self) -> Option<f32> {
             if self.working_slice.is_none() {
@@ -240,12 +231,8 @@ pub mod slices {
         }
     }
 
-    impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = Slice<'a, GOP_LENGTH, PixelType>>,
-    > Iterator for SliceModulator<'a, GOP_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Slice<'a, PixelType>>> Iterator
+        for SliceModulator<'a, PixelType, I>
     {
         type Item = QuadratureSymbol;
 
@@ -260,7 +247,6 @@ pub mod slices {
 
     pub struct SliceDemodulator<
         'a,
-        const GOP_LENGTH: usize,
         PixelType: HasPixelComponentType,
         I: Iterator<Item = QuadratureSymbol>,
     > {
@@ -270,12 +256,8 @@ pub mod slices {
         _marker: std::marker::PhantomData<PixelType>,
     }
 
-    impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = QuadratureSymbol>,
-    > SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = QuadratureSymbol>>
+        SliceDemodulator<'a, PixelType, I>
     {
         pub fn new(
             slice_dimensions: (usize, usize, usize),
@@ -292,14 +274,10 @@ pub mod slices {
         }
     }
 
-    impl<
-        'a,
-        const GOP_LENGTH: usize,
-        PixelType: HasPixelComponentType,
-        I: Iterator<Item = QuadratureSymbol>,
-    > Iterator for SliceDemodulator<'a, GOP_LENGTH, PixelType, I>
+    impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = QuadratureSymbol>> Iterator
+        for SliceDemodulator<'a, PixelType, I>
     {
-        type Item = Slice<'a, GOP_LENGTH, PixelType>;
+        type Item = Slice<'a, PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
             let slices_to_skip = self
@@ -315,7 +293,7 @@ pub mod slices {
                 .skip(slices_to_skip)
                 .next()?;
 
-            let mut slice: Slice<'a, GOP_LENGTH, PixelType> = Slice::from_view(slice_values);
+            let mut slice: Slice<'a, PixelType> = Slice::from_view(slice_values);
 
             let mut iq_iter = self
                 .quadrature_symbol_iter
@@ -366,7 +344,6 @@ mod tests {
     fn test_modulate_one_slice() {
         let dim = (1, 30, 44);
         let mut array3_orig = ndarray::Array3::<f32>::zeros(dim);
-        const GOP_LEN: usize = 15;
 
         let mut val = 0f32;
         for dst in array3_orig.iter_mut() {
@@ -376,10 +353,10 @@ mod tests {
 
         let array3_orig_clone = array3_orig.clone();
 
-        let slice_orig: Slice<'_, GOP_LEN, YPixelComponentType> = Slice::from_owned(array3_orig);
+        let slice_orig: Slice<'_, YPixelComponentType> = Slice::from_owned(array3_orig);
         let slices_orig = [slice_orig];
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let slice_modulator: SliceModulator<'_, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
         let mut array3_new = ndarray::Array3::<f32>::zeros(dim);
@@ -387,13 +364,12 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; 1),
         };
-        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(
-                dim,
-                metadata_bitmap,
-                quadrature_symbols.into_iter(),
-                &mut array3_new,
-            );
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> = SliceDemodulator::new(
+            dim,
+            metadata_bitmap,
+            quadrature_symbols.into_iter(),
+            &mut array3_new,
+        );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 1);
@@ -406,7 +382,6 @@ mod tests {
     fn test_modulate_multiple_slices_1() {
         let dim = (1, 30, 44);
         let mut array3_orig = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2)); // 5 slices
-        const GOP_LEN: usize = 15;
 
         let mut val = 0f32;
         for dst in array3_orig.iter_mut() {
@@ -415,14 +390,14 @@ mod tests {
         }
         let array3_orig_clone = array3_orig.clone();
 
-        let slices_orig: Vec<Slice<'_, GOP_LEN, YPixelComponentType>> = array3_orig
+        let slices_orig: Vec<Slice<'_, YPixelComponentType>> = array3_orig
             .exact_chunks_mut(dim)
             .into_iter()
             .map(|view| Slice::from_view(view))
             .collect();
         let num_slices = slices_orig.len();
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let slice_modulator: SliceModulator<'_, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
         let mut array3_new = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2));
@@ -430,13 +405,12 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; num_slices),
         };
-        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(
-                dim,
-                metadata_bitmap,
-                quadrature_symbols.into_iter(),
-                &mut array3_new,
-            );
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> = SliceDemodulator::new(
+            dim,
+            metadata_bitmap,
+            quadrature_symbols.into_iter(),
+            &mut array3_new,
+        );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 5);
@@ -455,7 +429,6 @@ mod tests {
         // 500 slices
         let gop_dim = (dim.0 * 5, dim.1 * 10, dim.2 * 10);
         let mut array3_orig = ndarray::Array3::<f32>::zeros(gop_dim);
-        const GOP_LEN: usize = 15;
 
         let mut val = 0f32;
         for dst in array3_orig.iter_mut() {
@@ -464,14 +437,14 @@ mod tests {
         }
         let array3_orig_clone = array3_orig.clone();
 
-        let slices_orig: Vec<Slice<'_, GOP_LEN, YPixelComponentType>> = array3_orig
+        let slices_orig: Vec<Slice<'_, YPixelComponentType>> = array3_orig
             .exact_chunks_mut(dim)
             .into_iter()
             .map(|view| Slice::from_view(view))
             .collect();
         let num_slices = slices_orig.len();
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let slice_modulator: SliceModulator<'_, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
         let mut array3_new = ndarray::Array3::<f32>::zeros(gop_dim);
@@ -479,13 +452,12 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; num_slices),
         };
-        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(
-                dim,
-                metadata_bitmap,
-                quadrature_symbols.into_iter(),
-                &mut array3_new,
-            );
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> = SliceDemodulator::new(
+            dim,
+            metadata_bitmap,
+            quadrature_symbols.into_iter(),
+            &mut array3_new,
+        );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 500);
@@ -502,7 +474,6 @@ mod tests {
     fn test_skip_slices_1() {
         let dim = (1, 10, 10);
         let mut array3_orig = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2)); // 5 slices
-        const GOP_LEN: usize = 15;
 
         let mut val = 0f32;
         for dst in array3_orig.iter_mut() {
@@ -511,14 +482,14 @@ mod tests {
         }
         let array3_orig_clone = array3_orig.clone();
 
-        let slices_orig: Vec<Slice<'_, GOP_LEN, YPixelComponentType>> = array3_orig
+        let slices_orig: Vec<Slice<'_, YPixelComponentType>> = array3_orig
             .exact_chunks_mut(dim)
             .into_iter()
             .map(|view| Slice::from_view(view))
             .collect();
         let num_slices = slices_orig.len();
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = slices_orig.into_iter().into();
+        let slice_modulator: SliceModulator<'_, _, _> = slices_orig.into_iter().into();
         let quadrature_symbols: Vec<QuadratureSymbol> = slice_modulator.collect();
 
         let mut array3_new = ndarray::Array3::<f32>::zeros((5, dim.1, dim.2));
@@ -530,13 +501,12 @@ mod tests {
         metadata_bitmap.values.set(3, false);
         metadata_bitmap.values.set(2, false);
 
-        let slice_demodulator: SliceDemodulator<'_, GOP_LEN, YPixelComponentType, _> =
-            SliceDemodulator::new(
-                dim,
-                metadata_bitmap,
-                quadrature_symbols.into_iter(),
-                &mut array3_new,
-            );
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> = SliceDemodulator::new(
+            dim,
+            metadata_bitmap,
+            quadrature_symbols.into_iter(),
+            &mut array3_new,
+        );
 
         let slices_new: Vec<_> = slice_demodulator.collect();
         assert_eq!(slices_new.len(), 3);

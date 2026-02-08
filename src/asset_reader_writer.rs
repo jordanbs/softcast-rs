@@ -200,10 +200,8 @@ pub mod asset_reader {
                 asset_reader: asset_reader,
             }
         }
-        pub fn macro_block_3d_iterator<const GOP_LENGTH: usize>(
-            self,
-        ) -> MacroBlock3DIterator<GOP_LENGTH, Self> {
-            pixel_buffer::MacroBlock3DIterator::new(self)
+        pub fn macro_block_3d_iterator(self, gop_len: usize) -> MacroBlock3DIterator<Self> {
+            pixel_buffer::MacroBlock3DIterator::new(self, gop_len)
         }
     }
 
@@ -222,6 +220,11 @@ pub mod asset_reader {
     impl From<AssetReader> for IntoPixelBufferIterator {
         fn from(asset_reader: AssetReader) -> Self {
             Self { asset_reader }
+        }
+    }
+    impl IntoPixelBufferIterator {
+        pub fn into_macro_block_3d_iter(self, gop_len: usize) -> MacroBlock3DIterator<Self> {
+            pixel_buffer::MacroBlock3DIterator::new(self, gop_len)
         }
     }
     impl Iterator for IntoPixelBufferIterator {
@@ -513,6 +516,10 @@ impl As<f32> for u8 {
     fn as_(&self) -> f32 {
         *self as f32
     }
+}
+
+pub trait GOPLen {
+    fn gop_len(&self) -> usize;
 }
 
 pub mod pixel_buffer {
@@ -826,39 +833,40 @@ pub mod pixel_buffer {
         }
     }
 
-    pub struct MacroBlock3DIterator<const LENGTH: usize, I: Iterator<Item = PixelBuffer>> {
-        pixel_buffer_iterator: I,
+    pub struct MacroBlock3DIterator<I: Iterator<Item = PixelBuffer>> {
+        pixel_buffer_iter: I,
+        gop_len: usize,
     }
-    impl<const LENGTH: usize, I: Iterator<Item = PixelBuffer>> MacroBlock3DIterator<LENGTH, I> {
-        pub(super) fn new(pixel_buffer_iterator: I) -> Self {
+    impl<I: Iterator<Item = PixelBuffer>> MacroBlock3DIterator<I> {
+        pub(super) fn new(pixel_buffer_iter: I, gop_len: usize) -> Self {
             MacroBlock3DIterator {
-                pixel_buffer_iterator: pixel_buffer_iterator,
+                pixel_buffer_iter,
+                gop_len,
             }
         }
-    }
-    impl<'a, const LENGTH: usize, I: Iterator<Item = PixelBuffer>> From<I>
-        for MacroBlock3DIterator<LENGTH, I>
-    {
-        fn from(pixel_buffer_iterator: I) -> Self {
-            Self::new(pixel_buffer_iterator)
+        pub fn pixel_buffer_iter(self) -> PixelBufferIterator<Self> {
+            PixelBufferIterator::from(self)
         }
     }
-
-    impl<const LENGTH: usize, PixelBufferIterator> Iterator
-        for MacroBlock3DIterator<LENGTH, PixelBufferIterator>
-    where
-        PixelBufferIterator: Iterator<Item = PixelBuffer>,
-    {
+    impl<I: Iterator<Item = PixelBuffer>> GOPLen for MacroBlock3DIterator<I> {
+        fn gop_len(&self) -> usize {
+            self.gop_len
+        }
+    }
+    impl<I: Iterator<Item = PixelBuffer>> Iterator for MacroBlock3DIterator<I> {
         // Output all three TransformBlocks at once to linearly process frames
-        type Item = MacroBlock3D<LENGTH>;
+        type Item = MacroBlock3D;
 
         fn next(&mut self) -> Option<Self::Item> {
-            let mut y_block = TransformBlock3D::new();
-            let mut cb_block = TransformBlock3D::new();
-            let mut cr_block = TransformBlock3D::new();
+            let MacroBlock3D {
+                y_components: mut y_block,
+                cb_components: mut cb_block,
+                cr_components: mut cr_block,
+                ..
+            } = MacroBlock3D::new(self.gop_len);
 
             let mut pixel_buffer_iterator_is_empty = true;
-            for pixel_buffer in self.pixel_buffer_iterator.by_ref().take(LENGTH) {
+            for pixel_buffer in self.pixel_buffer_iter.by_ref().take(self.gop_len) {
                 pixel_buffer.lock_base_address(true);
 
                 y_block
@@ -882,6 +890,7 @@ pub mod pixel_buffer {
                 y_components: y_block,
                 cb_components: cb_block,
                 cr_components: cr_block,
+                gop_len: self.gop_len,
             })
         }
     }
@@ -893,29 +902,37 @@ pub mod transform_block_3d {
     use std::cell::OnceCell;
 
     #[derive(Debug, Clone, PartialEq)]
-    pub struct TransformBlock3D<const LENGTH: usize, PixelType: HasPixelComponentType> {
+    pub struct TransformBlock3D<PixelType: HasPixelComponentType> {
         pub values_cell: OnceCell<ndarray::Array3<f32>>,
-        pub(super) len: usize,
+        pub(super) populated_frames_len: usize,
+        gop_len: usize,
         _marker: std::marker::PhantomData<PixelType>,
     }
-
-    impl<const LENGTH: usize, PixelType: HasPixelComponentType> TransformBlock3D<LENGTH, PixelType> {
-        pub(super) fn new() -> Self {
-            TransformBlock3D {
+    impl<PixelType: HasPixelComponentType> GOPLen for TransformBlock3D<PixelType> {
+        fn gop_len(&self) -> usize {
+            self.gop_len
+        }
+    }
+    impl<PixelType: HasPixelComponentType> TransformBlock3D<PixelType> {
+        pub fn new(gop_len: usize) -> Self {
+            Self {
                 values_cell: OnceCell::new(),
-                len: 0,
+                populated_frames_len: 0,
+                gop_len,
                 _marker: std::marker::PhantomData,
             }
         }
+
         pub fn with_values(values: ndarray::Array3<f32>) -> Self {
-            assert_eq!(values.dim().0, LENGTH);
+            let gop_len = values.dim().0;
 
             let once_cell = OnceCell::new();
             once_cell.set(values).expect("Failed to set once_cell");
 
-            TransformBlock3D {
+            Self {
                 values_cell: once_cell,
-                len: LENGTH,
+                populated_frames_len: gop_len,
+                gop_len,
                 _marker: std::marker::PhantomData,
             }
         }
@@ -936,15 +953,15 @@ pub mod transform_block_3d {
             &mut self,
             pixel_buffer: &PixelBuffer,
         ) -> Result<(), Box<dyn std::error::Error>> {
-            let frame_idx = self.len;
-            self.len += 1;
+            let frame_idx = self.populated_frames_len;
+            self.populated_frames_len += 1;
 
             let _ = self.values_cell.get_or_init(|| {
                 let block_width =
                     pixel_buffer.plane_row_len(PixelType::TYPE) / PixelType::TYPE.interleave_step();
                 let block_height = pixel_buffer.plane_height(PixelType::TYPE);
                 // length, height, width to match the memory layout of CVPixelBuffer
-                ndarray::Array3::zeros((LENGTH, block_height, block_width))
+                ndarray::Array3::zeros((self.gop_len, block_height, block_width))
             });
             let values = self.values_cell.get_mut().unwrap(); // get_mut_or_init is nightly-only.
 
@@ -993,40 +1010,47 @@ pub mod transform_block_3d {
 
     // 4:2:0
     #[derive(Clone, Debug)]
-    pub struct MacroBlock3D<const LENGTH: usize> {
-        pub y_components: TransformBlock3D<LENGTH, YPixelComponentType>,
-        pub cb_components: TransformBlock3D<LENGTH, CbPixelComponentType>,
-        pub cr_components: TransformBlock3D<LENGTH, CrPixelComponentType>,
+    pub struct MacroBlock3D {
+        pub y_components: TransformBlock3D<YPixelComponentType>,
+        pub cb_components: TransformBlock3D<CbPixelComponentType>,
+        pub cr_components: TransformBlock3D<CrPixelComponentType>,
+        pub gop_len: usize,
+    }
+    impl MacroBlock3D {
+        pub fn new(gop_len: usize) -> Self {
+            Self {
+                y_components: TransformBlock3D::new(gop_len),
+                cb_components: TransformBlock3D::new(gop_len),
+                cr_components: TransformBlock3D::new(gop_len),
+                gop_len,
+            }
+        }
+    }
+    impl GOPLen for MacroBlock3D {
+        fn gop_len(&self) -> usize {
+            self.gop_len
+        }
     }
 
-    pub struct PixelBufferIterator<const MACRO_BLOCK_LEN: usize, MacroBlock3DIterator>
-    where
-        MacroBlock3DIterator: Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>>,
-    {
-        macro_block_3d_iterator: MacroBlock3DIterator,
-        current_macro_block: Option<MacroBlock3D<MACRO_BLOCK_LEN>>,
+    pub struct PixelBufferIterator<I: Iterator<Item = MacroBlock3D>> {
+        macro_block_3d_iterator: I,
+        current_macro_block: Option<MacroBlock3D>,
         frame_index: usize,
+        gop_length: usize,
     }
 
-    impl<const MACRO_BLOCK_LEN: usize, MacroBlock3DIterator>
-        PixelBufferIterator<MACRO_BLOCK_LEN, MacroBlock3DIterator>
-    where
-        MacroBlock3DIterator: Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>>,
-    {
-        pub(super) fn new(macro_block_3d_iterator: MacroBlock3DIterator) -> Self {
-            PixelBufferIterator {
+    impl<I: Iterator<Item = MacroBlock3D>> PixelBufferIterator<I> {
+        pub fn new(macro_block_3d_iterator: I, gop_length: usize) -> Self {
+            Self {
                 macro_block_3d_iterator: macro_block_3d_iterator,
                 current_macro_block: None,
                 frame_index: 0,
+                gop_length,
             }
         }
     }
 
-    impl<const MACRO_BLOCK_LEN: usize, MacroBlock3DIterator> Iterator
-        for PixelBufferIterator<MACRO_BLOCK_LEN, MacroBlock3DIterator>
-    where
-        MacroBlock3DIterator: Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>>,
-    {
+    impl<I: Iterator<Item = MacroBlock3D>> Iterator for PixelBufferIterator<I> {
         type Item = PixelBuffer;
         fn next(&mut self) -> Option<Self::Item> {
             let macro_block_3d = match self.current_macro_block {
@@ -1035,8 +1059,8 @@ pub mod transform_block_3d {
                     .current_macro_block
                     .insert(self.macro_block_3d_iterator.next()?),
             };
-            // A MacroBlock3D can be shorter than it's LENGTH
-            if self.frame_index == macro_block_3d.y_components.len {
+            // A MacroBlock3D can be shorter than it's populated_frames_len
+            if self.frame_index == macro_block_3d.y_components.populated_frames_len {
                 self.frame_index = 0;
                 self.current_macro_block = None;
                 return self.next();
@@ -1060,7 +1084,7 @@ pub mod transform_block_3d {
                     .expect("Failed to create pixel buffer.");
 
             self.frame_index += 1;
-            if self.frame_index == MACRO_BLOCK_LEN {
+            if self.frame_index == self.gop_length {
                 self.frame_index = 0;
                 self.current_macro_block = None;
             }
@@ -1069,17 +1093,17 @@ pub mod transform_block_3d {
         }
     }
 
-    pub trait PixelBufferIterExt<const MACRO_BLOCK_LEN: usize>:
-        Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>> + Sized
-    {
-        fn pixel_buffer_iter(self) -> PixelBufferIterator<MACRO_BLOCK_LEN, Self>;
+    impl<I: Iterator<Item = MacroBlock3D> + GOPLen> From<I> for PixelBufferIterator<I> {
+        fn from(macro_block_iter: I) -> Self {
+            let gop_len = macro_block_iter.gop_len();
+            Self::new(macro_block_iter, gop_len)
+        }
     }
-    impl<const MACRO_BLOCK_LEN: usize, I> PixelBufferIterExt<MACRO_BLOCK_LEN> for I
-    where
-        I: Iterator<Item = MacroBlock3D<MACRO_BLOCK_LEN>>,
-    {
-        fn pixel_buffer_iter(self) -> PixelBufferIterator<MACRO_BLOCK_LEN, Self> {
-            PixelBufferIterator::new(self)
+    impl From<MacroBlock3D> for PixelBufferIterator<std::array::IntoIter<MacroBlock3D, 1>> {
+        fn from(macro_block_3d: MacroBlock3D) -> Self {
+            let gop_len = macro_block_3d.gop_len();
+            let macro_block_iter = [macro_block_3d].into_iter();
+            Self::new(macro_block_iter, gop_len)
         }
     }
 
@@ -1103,7 +1127,6 @@ pub mod transform_block_3d {
 mod tests {
     use super::asset_reader::*;
     use super::asset_writer::*;
-    use super::pixel_buffer::*;
     use super::transform_block_3d::*;
     use super::*;
     use std::fs;
@@ -1145,11 +1168,11 @@ mod tests {
 
         let num_frames_processed = reader
             .pixel_buffer_iter()
-            .macro_block_3d_iterator::<GOP_SIZE>()
+            .macro_block_3d_iterator(GOP_SIZE)
             .fold(0, |acc, macro_block| {
-                acc + macro_block.y_components.len
-                    + macro_block.cb_components.len
-                    + macro_block.cr_components.len
+                acc + macro_block.y_components.populated_frames_len
+                    + macro_block.cb_components.populated_frames_len
+                    + macro_block.cr_components.populated_frames_len
             });
         let num_frames_expected = 3 + (300 * 3);
         assert_eq!(num_frames_processed, num_frames_expected);
@@ -1162,9 +1185,9 @@ mod tests {
 
         const MACRO_BLOCK_LEN: usize = 60;
 
-        let macro_block_3d: MacroBlock3D<MACRO_BLOCK_LEN> = reader
+        let macro_block_3d = reader
             .pixel_buffer_iter()
-            .macro_block_3d_iterator()
+            .macro_block_3d_iterator(MACRO_BLOCK_LEN)
             .next()
             .expect("Failed to get a MacroBlock3D");
 
@@ -1172,6 +1195,7 @@ mod tests {
             y_components,
             cb_components,
             cr_components,
+            ..
         } = macro_block_3d; // demonstrating moving the components
 
         assert_ne!(y_components.values().len(), 0);
@@ -1188,7 +1212,7 @@ mod tests {
         // reader -> pixel buffer -> macro_block_3d (3x TransformBlock3D) -> PixelBuffer
         let pb1 = reader_1
             .pixel_buffer_iter()
-            .macro_block_3d_iterator::<20>()
+            .macro_block_3d_iterator(20)
             .pixel_buffer_iter()
             .next()
             .expect("Failed to get pb1");
@@ -1221,8 +1245,7 @@ mod tests {
         let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
         writer.start_writing().expect("Failed to start writing");
 
-        let macro_block_3d_iterator: MacroBlock3DIterator<90, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let macro_block_3d_iterator = reader.pixel_buffer_iter().macro_block_3d_iterator(90);
 
         let pixel_buffer_iterator = macro_block_3d_iterator.pixel_buffer_iter();
 

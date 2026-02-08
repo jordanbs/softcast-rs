@@ -29,8 +29,8 @@ pub struct MetadataBitmap {
 }
 
 impl MetadataBitmap {
-    pub fn new<'a, const GOP_LENGTH: usize, PixelType: HasPixelComponentType>(
-        chunks: &[Chunk<'a, GOP_LENGTH, PixelType>],
+    pub fn new<'a, PixelType: HasPixelComponentType>(
+        chunks: &[Chunk<'a, PixelType>],
         compression_ratio: f64,
     ) -> Self {
         assert!(compression_ratio > 0f64);
@@ -203,21 +203,16 @@ impl<I: Iterator<Item = bool>> Read for RunLengthBitmapEncoder<I> {
 
 pub struct Compressor<
     'a,
-    const GOP_LENGTH: usize,
     PixelType: HasPixelComponentType,
-    I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
+    I: Iterator<Item = Chunk<'a, PixelType>>,
 > {
     chunk_iter: I,
     metadata_bitmap: MetadataBitmap,
     chunk_idx: usize,
 }
 
-impl<
-    'a,
-    const GOP_LENGTH: usize,
-    PixelType: HasPixelComponentType,
-    I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
-> Compressor<'a, GOP_LENGTH, PixelType, I>
+impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
+    Compressor<'a, PixelType, I>
 {
     pub fn new(chunk_iter: I, metadata_bitmap: MetadataBitmap) -> Self {
         Self {
@@ -228,14 +223,10 @@ impl<
     }
 }
 
-impl<
-    'a,
-    const GOP_LENGTH: usize,
-    PixelType: HasPixelComponentType,
-    I: Iterator<Item = Chunk<'a, GOP_LENGTH, PixelType>>,
-> Iterator for Compressor<'a, GOP_LENGTH, PixelType, I>
+impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>> Iterator
+    for Compressor<'a, PixelType, I>
 {
-    type Item = Chunk<'a, GOP_LENGTH, PixelType>;
+    type Item = Chunk<'a, PixelType>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.chunk_idx >= self.metadata_bitmap.values.len() {
             return None; // terminates here if last chunk is 1
@@ -373,7 +364,6 @@ mod tests {
 
     #[test]
     fn test_metadata_bitmap_basic() {
-        use crate::asset_reader_writer::pixel_buffer::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
 
@@ -381,12 +371,12 @@ mod tests {
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
-        let mut y_dct: TransformBlock3DDCT<_, _> = macro_block.y_components.into();
+        let mut y_dct: TransformBlock3DDCT<_> = macro_block.y_components.into();
         let y_chunks: Box<_> = y_dct.chunks_iter().collect();
 
         let compression_ratio = 0.02;
@@ -406,7 +396,6 @@ mod tests {
     #[test]
     //     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_metadata_bitmap_zstd() {
-        use crate::asset_reader_writer::pixel_buffer::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
         use bitvec;
@@ -417,12 +406,12 @@ mod tests {
         let mut reader = AssetReader::new(path2);
 
         const LENGTH: usize = 9;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
-        let mut y_dct: TransformBlock3DDCT<_, _> = macro_block.y_components.into();
+        let mut y_dct: TransformBlock3DDCT<_> = macro_block.y_components.into();
         let y_chunks: Box<_> = y_dct.chunks_iter().collect();
 
         let compression_ratio = 0.25;
@@ -469,7 +458,6 @@ mod tests {
 
     #[test]
     fn test_compressor_basic() {
-        use crate::asset_reader_writer::pixel_buffer::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use asset_reader::*; // idk why this only works here..
 
@@ -477,12 +465,12 @@ mod tests {
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
-        let mut y_dct: TransformBlock3DDCT<_, _> = macro_block.y_components.into();
+        let mut y_dct: TransformBlock3DDCT<_> = macro_block.y_components.into();
         let y_chunks: Box<_> = y_dct.chunks_iter().collect();
 
         let compression_ratio = 0.02;

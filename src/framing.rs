@@ -362,7 +362,6 @@ mod tests {
     }
 
     use crate::asset_reader_writer::asset_reader::*;
-    use crate::asset_reader_writer::pixel_buffer::*;
     use crate::asset_reader_writer::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
     use crate::compressor::*;
@@ -373,13 +372,14 @@ mod tests {
     use crate::source_coding::chunk::*;
 
     #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_frame_inverse_to_packets_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
         let mut y_dct = macro_block.y_components.into_dct();
@@ -398,7 +398,7 @@ mod tests {
         let orig_packets: Vec<_> = packetizer.collect();
 
         let metadata_modulator: MetadataModulator<_> = orig_packets.clone().into_iter().into();
-        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -420,8 +420,8 @@ mod tests {
         let asset_height: usize = asset_height.try_into().unwrap();
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
         let mut y_dct = macro_block.y_components.into_dct();
@@ -442,7 +442,7 @@ mod tests {
         let y_slices_and_metadata: Box<_> =
             chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
-        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -470,7 +470,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
         };
-        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d_view);
 
         let slices: Vec<_> = slice_demodulator.collect();
@@ -493,8 +493,8 @@ mod tests {
         let asset_height: usize = asset_height.try_into().unwrap();
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -502,6 +502,7 @@ mod tests {
             y_components: original_y_components,
             cb_components: _,
             cr_components: _,
+            ..
         } = macro_block.clone();
 
         let mut y_dct = macro_block.y_components.into_dct();
@@ -525,7 +526,7 @@ mod tests {
         let y_slices_and_metadata: Box<_> = power_scaler.into_slice_iter(chunks_per_gop).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -562,7 +563,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
         };
-        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
         let mut slice_and_metadatas = vec![];
@@ -576,7 +577,7 @@ mod tests {
         }
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-        let chunks_iter: ChunkIter<_, _, _> =
+        let chunks_iter: ChunkIter<_, _> =
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
@@ -589,6 +590,7 @@ mod tests {
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
             &chunk_metadatas_new,
+            LENGTH,
             (asset_width, asset_height),
             chunk_dim,
         );
@@ -596,7 +598,7 @@ mod tests {
         //             TransformBlock3DDCT::from_chunks(&chunks, (asset_width, asset_height));
 
         //         assert_eq!(original_y_dct_components, y_dct_components.values);
-        let new_y_components: TransformBlock3D<_, _> = y_dct_components.into();
+        let new_y_components: TransformBlock3D<_> = y_dct_components.into();
 
         assert_eq!(original_y_components, new_y_components);
     }
@@ -642,7 +644,7 @@ mod tests {
         //         let output_path = "/tmp/bipbop-1920x1080-5s.mp4";
 
         let _ = std::fs::remove_file(output_path);
-        let mut reader = AssetReader::new(input_path);
+        let mut reader = AssetReader::new(input_path.into());
         let (asset_width, asset_height) = reader.resolution().expect("failed to get resolution");
         let asset_width: usize = asset_width.try_into().unwrap();
         let asset_height: usize = asset_height.try_into().unwrap();
@@ -658,23 +660,24 @@ mod tests {
         let mut writer = AssetWriter::load_new(writer_settings).expect("Failed to load writer");
         writer.start_writing().expect("Failed to start writing");
 
-        let macro_block_3d_iterator: MacroBlock3DIterator<GOP_LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let macro_block_3d_iterator: MacroBlock3DIterator<_> = reader
+            .pixel_buffer_iter()
+            .macro_block_3d_iterator(GOP_LENGTH);
 
         fn framer<PixelType: HasPixelComponentType>(
-            dct_components: &mut TransformBlock3DDCT<GOP_LENGTH, PixelType>,
+            dct_components: &mut TransformBlock3DDCT<PixelType>,
         ) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
             let chunks: Box<_> = dct_components.chunks_iter().collect();
             let first_chunk = chunks.first().expect("No chunks.");
             let chunk_dim = first_chunk.values.dim();
 
             let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
-            let mut compressor = Compressor::new(chunks.into_iter(), 0.0625);
-            let metadata_bitmap = compressor.take_metadata_bitmap();
-            let power_scaler = PowerScaler::new(compressor);
-            let num_included_chunks = metadata_bitmap.values.count_ones();
+            let metadata_bitmap = MetadataBitmap::new(&chunks, 0.0625);
             let compressed_metadata =
-                CompressedMetadata::new(metadata_bitmap, chunk_metadatas.iter());
+                CompressedMetadata::new(&metadata_bitmap, chunk_metadatas.iter());
+            let num_included_chunks = metadata_bitmap.values.count_ones();
+            let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
+            let power_scaler = PowerScaler::new(compressor);
 
             let packetizer: Packetizer = compressed_metadata.into();
             let metadata_modulator: MetadataModulator<_> = packetizer.into();
@@ -685,7 +688,7 @@ mod tests {
                 .collect();
             let slices_iter = slices_and_metadata.into_iter().map(|slice| slice.slice);
 
-            let slice_modulator: SliceModulator<'_, _, _, _> = slices_iter.into();
+            let slice_modulator: SliceModulator<'_, _, _> = slices_iter.into();
             let framer: OFDMFrameGenerator<_> =
                 metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -699,7 +702,7 @@ mod tests {
             ofdm_symbol_iter: &mut O,
             asset_resolution: (usize, usize),
             chunk_dim: (usize, usize, usize),
-        ) -> TransformBlock3DDCT<GOP_LENGTH, PixelType> {
+        ) -> TransformBlock3DDCT<PixelType> {
             let (frame_width, frame_height) = (
                 asset_resolution.0 / PixelType::TYPE.interleave_step(),
                 asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
@@ -740,13 +743,12 @@ mod tests {
                 chunk_dim,
                 num_included_slices - num_included_chunks,
             );
-            let slice_demodulator: SliceDemodulator<'_, GOP_LENGTH, PixelType, _> =
-                SliceDemodulator::new(
-                    chunk_dim,
-                    metadata_bitmap,
-                    synchronizer,
-                    &mut dct_allocation,
-                );
+            let slice_demodulator: SliceDemodulator<'_, PixelType, _> = SliceDemodulator::new(
+                chunk_dim,
+                metadata_bitmap,
+                synchronizer,
+                &mut dct_allocation,
+            );
 
             let mut slice_and_metadatas = vec![];
             let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
@@ -767,6 +769,7 @@ mod tests {
             TransformBlock3DDCT::from_chunks_owned(
                 dct_allocation,
                 &chunk_metadatas,
+                GOP_LENGTH,
                 asset_resolution,
                 chunk_dim,
             )
@@ -803,15 +806,16 @@ mod tests {
                 y_components,
                 cb_components,
                 cr_components,
+                ..
             } = macro_block;
 
-            let mut y_dct_in: TransformBlock3DDCT<_, _> = y_components.into();
+            let mut y_dct_in: TransformBlock3DDCT<_> = y_components.into();
             let (y_framer, y_chunk_dim) = framer(&mut y_dct_in);
 
-            let mut cb_dct_in: TransformBlock3DDCT<_, _> = cb_components.into();
+            let mut cb_dct_in: TransformBlock3DDCT<_> = cb_components.into();
             let (cb_framer, cb_chunk_dim) = framer(&mut cb_dct_in);
 
-            let mut cr_dct_in: TransformBlock3DDCT<_, _> = cr_components.into();
+            let mut cr_dct_in: TransformBlock3DDCT<_> = cr_components.into();
             let (cr_framer, cr_chunk_dim) = framer(&mut cr_dct_in);
 
             let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
@@ -843,9 +847,10 @@ mod tests {
                 y_components: y_dct_out.into(),
                 cb_components: cb_dct_out.into(),
                 cr_components: cr_dct_out.into(),
+                gop_len: GOP_LENGTH,
             };
 
-            let pixel_buffer_iterator = [new_macro_block_3d].into_iter().pixel_buffer_iter();
+            let pixel_buffer_iterator: PixelBufferIterator<_> = new_macro_block_3d.into();
 
             for pixel_buffer in pixel_buffer_iterator {
                 writer
@@ -862,6 +867,7 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_frame_inverse_mean_squared_error() {
+        use crate::asset_reader_writer::pixel_buffer::*;
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
         use crate::source_coding::power_scaling::*;
@@ -876,8 +882,8 @@ mod tests {
         let asset_height: usize = asset_height.try_into().unwrap();
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<_> =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -885,6 +891,7 @@ mod tests {
             y_components: original_y_components,
             cb_components: _,
             cr_components: _,
+            ..
         } = macro_block.clone();
 
         let mut y_dct = macro_block.y_components.into_dct();
@@ -909,7 +916,7 @@ mod tests {
         let y_slices_and_metadata: Box<_> = power_scaler.into_slice_iter(chunks_per_gop).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -945,7 +952,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
         };
-        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
         let mut slice_and_metadatas = vec![];
@@ -959,7 +966,7 @@ mod tests {
         }
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-        let chunks_iter: ChunkIter<_, _, _> =
+        let chunks_iter: ChunkIter<_, _> =
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
@@ -973,6 +980,7 @@ mod tests {
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
             &chunk_metadatas_new,
+            LENGTH,
             (asset_width, asset_height),
             chunk_dim,
         );
@@ -980,8 +988,7 @@ mod tests {
         //             TransformBlock3DDCT::from_chunks(&chunks, (asset_width, asset_height));
 
         //         assert_eq!(original_y_dct_components, y_dct_components.values);
-        let new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> =
-            y_dct_components.into();
+        let new_y_components: TransformBlock3D<YPixelComponentType> = y_dct_components.into();
 
         let mean_sq_error = original_y_components
             .values()
@@ -1008,8 +1015,8 @@ mod tests {
         let asset_height: usize = asset_height.try_into().unwrap();
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -1017,6 +1024,7 @@ mod tests {
             y_components: original_y_components,
             cb_components: _,
             cr_components: _,
+            ..
         } = macro_block.clone();
 
         let mut y_dct = macro_block.y_components.into_dct();
@@ -1044,7 +1052,7 @@ mod tests {
             power_scaler.into_slice_iter(num_included_chunks).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = y_slices_iter.into();
+        let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -1090,7 +1098,7 @@ mod tests {
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
-        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
         let all_slices: Box<_> = slice_demodulator.take(num_included_slices).collect();
@@ -1114,12 +1122,12 @@ mod tests {
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
             &chunk_metadatas,
+            LENGTH,
             (asset_width, asset_height),
             chunk_dim,
         );
 
-        let new_y_components: TransformBlock3D<LENGTH, YPixelComponentType> =
-            y_dct_components.into();
+        let new_y_components: TransformBlock3D<YPixelComponentType> = y_dct_components.into();
 
         let mean_sq_error = original_y_components
             .values()
@@ -1150,8 +1158,8 @@ mod tests {
         );
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -1159,6 +1167,7 @@ mod tests {
             y_components: _,
             cb_components: original_cb_components,
             cr_components: _,
+            ..
         } = macro_block.clone();
 
         let mut cb_dct = macro_block.cb_components.into_dct();
@@ -1197,7 +1206,7 @@ mod tests {
         );
         let cb_slices_iter = cb_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
-        let slice_modulator: SliceModulator<'_, _, _, _> = cb_slices_iter.into();
+        let slice_modulator: SliceModulator<'_, _, _> = cb_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
@@ -1244,7 +1253,7 @@ mod tests {
 
         let synchronizer: OFDMFrameSynchronizer<_> =
             metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
-        let slice_demodulator: SliceDemodulator<'_, LENGTH, YPixelComponentType, _> =
+        let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
         let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
@@ -1266,12 +1275,12 @@ mod tests {
         let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(
             array3d,
             &chunk_metadatas,
+            LENGTH,
             (asset_width, asset_height),
             chunk_dim,
         );
 
-        let new_cb_components: TransformBlock3D<LENGTH, CbPixelComponentType> =
-            cb_dct_components.into();
+        let new_cb_components: TransformBlock3D<CbPixelComponentType> = cb_dct_components.into();
         //         assert_eq!(original_cb_components, new_cb_components);
 
         let mean_sq_error = original_cb_components

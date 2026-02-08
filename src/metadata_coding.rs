@@ -613,7 +613,6 @@ pub mod packetizer {
 mod tests {
     use super::*;
     use crate::asset_reader_writer::asset_reader::*;
-    use crate::asset_reader_writer::pixel_buffer::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
     use packetizer::*;
 
@@ -623,8 +622,8 @@ mod tests {
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -786,8 +785,8 @@ mod tests {
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
@@ -822,8 +821,8 @@ mod tests {
         let mut reader = AssetReader::new(path);
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<LENGTH, _> =
-            reader.pixel_buffer_iter().macro_block_3d_iterator();
+        let mut macro_block_3d_iterator =
+            reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
