@@ -40,6 +40,9 @@ enum Commands {
 
         #[arg(short, default_value_t = 0.0)]
         noise_power: f32,
+
+        #[arg(short, default_value_t = 90)]
+        gop_len: usize,
     },
 }
 
@@ -65,11 +68,12 @@ fn validate_file_does_not_exist(path: &str) -> Result<std::path::PathBuf, String
 fn simulate(
     infile: std::path::PathBuf,
     outfile: std::path::PathBuf,
+    gop_len: usize,
     compression_ratio: f64,
     noise_power: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut simulator =
-        EncoderDecoderSimulator::try_new(infile, outfile, compression_ratio, noise_power)?;
+        EncoderDecoderSimulator::try_new(infile, outfile, gop_len, compression_ratio, noise_power)?;
     simulator.run()?;
 
     Ok(())
@@ -82,10 +86,12 @@ fn main() -> Result<(), String> {
         Commands::Simulate {
             infile,
             outfile,
+            gop_len,
             compression_ratio,
             noise_power,
         } => {
-            simulate(infile, outfile, compression_ratio, noise_power).map_err(|e| e.to_string())?;
+            simulate(infile, outfile, gop_len, compression_ratio, noise_power)
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())

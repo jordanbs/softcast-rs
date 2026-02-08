@@ -33,9 +33,9 @@ use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use rand::Rng;
 
-const GOP_LENGTH: usize = 90; // TODO: Remove this generic.
 pub struct EncoderDecoderSimulator {
     macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator>,
+    gop_len: usize,
     compression_ratio: f64,
     noise_power: f32,
     asset_resolution: (usize, usize),
@@ -46,6 +46,7 @@ impl EncoderDecoderSimulator {
     pub fn try_new(
         in_path: std::path::PathBuf,
         out_path: std::path::PathBuf,
+        gop_len: usize,
         compression_ratio: f64,
         noise_power: f32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -63,7 +64,8 @@ impl EncoderDecoderSimulator {
         let asset_resolution = (asset_resolution.0 as usize, asset_resolution.1 as usize);
         let writer = AssetWriter::load_new(writer_settings)?;
         Ok(Self {
-            macro_block_3d_iter: pb_iter.into_macro_block_3d_iter(GOP_LENGTH),
+            macro_block_3d_iter: pb_iter.into_macro_block_3d_iter(gop_len),
+            gop_len,
             compression_ratio,
             noise_power,
             asset_resolution,
@@ -143,16 +145,19 @@ impl EncoderDecoderSimulator {
             //decoder
             let y_dct_out = into_transform_block_3d_dct(
                 &mut encoder_plus_noise,
+                self.gop_len,
                 self.asset_resolution,
                 y_chunk_dim,
             );
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut encoder_plus_noise,
+                self.gop_len,
                 self.asset_resolution,
                 cb_chunk_dim,
             );
             let cr_dct_out = into_transform_block_3d_dct(
                 &mut encoder_plus_noise,
+                self.gop_len,
                 self.asset_resolution,
                 cr_chunk_dim,
             );
@@ -161,7 +166,7 @@ impl EncoderDecoderSimulator {
                 y_components: y_dct_out.into(),
                 cb_components: cb_dct_out.into(),
                 cr_components: cr_dct_out.into(),
-                gop_len: GOP_LENGTH,
+                gop_len: self.gop_len,
             };
             let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_> =
                 new_macro_block_3d.into();
@@ -177,6 +182,7 @@ impl EncoderDecoderSimulator {
 }
 
 fn slices_allocation<PixelType: HasPixelComponentType>(
+    gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
     num_padding_slices: usize,
@@ -186,7 +192,7 @@ fn slices_allocation<PixelType: HasPixelComponentType>(
         asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
     );
     let chunks_per_gop =
-        (GOP_LENGTH * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+        (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
     let allocation_gop_length_with_padding =
         (((chunks_per_gop + num_padding_slices) * chunk_dim.0 * chunk_dim.1 * chunk_dim.2) as f64
@@ -202,6 +208,7 @@ fn slices_allocation<PixelType: HasPixelComponentType>(
 
 fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Item = OFDMSymbol>>(
     ofdm_symbol_iter: &mut O,
+    gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
 ) -> TransformBlock3DDCT<PixelType> {
@@ -210,7 +217,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
         asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
     );
     let chunks_per_gop =
-        (GOP_LENGTH * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+        (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
     let synchonizer: OFDMFrameSynchronizer<_> = ofdm_symbol_iter.into();
     let metadata_demodulator: MetadataDemodulator<_> = synchonizer.into();
@@ -241,6 +248,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
         metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
     let mut dct_allocation = slices_allocation::<PixelType>(
+        gop_len,
         asset_resolution,
         chunk_dim,
         num_included_slices - num_included_chunks,
@@ -271,7 +279,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     TransformBlock3DDCT::from_chunks_owned(
         dct_allocation,
         &chunk_metadatas,
-        GOP_LENGTH,
+        gop_len,
         asset_resolution,
         chunk_dim,
     )
