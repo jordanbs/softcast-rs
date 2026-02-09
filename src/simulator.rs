@@ -333,9 +333,12 @@ fn chunk_dimensions_sizer(
     let chunk_height = max_factor_at_or_below(proposed_chunk_dimensions.1, asset_height);
     let chunk_len = 1; // only supports 1
 
-    eprintln!(
-        "Chunk dimensions for {:2}: ({}x{}x{})",
-        pixel_type, chunk_width, chunk_height, chunk_len
+    println!(
+        "Chunk dimensions for {:<2}: {}x{}x{}",
+        pixel_type.to_string(),
+        chunk_width,
+        chunk_height,
+        chunk_len
     );
 
     // rval is (len, height, width) in conformance with ndarray

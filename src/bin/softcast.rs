@@ -35,20 +35,20 @@ enum Commands {
         #[arg(value_parser = validate_file_does_not_exist)]
         outfile: std::path::PathBuf,
 
-        #[arg(short, default_value_t = 0.25)]
+        #[arg(short, default_value_t = 0.1875)]
         compression_ratio: f64,
 
         #[arg(short, default_value_t = 0.0)]
         noise_power: f32,
 
-        #[arg(short, default_value_t = 90)]
+        #[arg(short, default_value_t = 22)]
         gop_len: usize,
 
         // defaults set for 1080p
-        #[arg(short, value_parser = parse_dimensions, default_value = "48x40x1")]
+        #[arg(long="y", value_parser = parse_dimensions, default_value = "48x40x1")]
         y_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(short, value_parser = parse_dimensions, default_value = "40x30x1")]
+        #[arg(long="cbcr", value_parser = parse_dimensions, default_value = "40x30x1")]
         c_chunk_dimensions: (usize, usize, usize),
     },
 }
