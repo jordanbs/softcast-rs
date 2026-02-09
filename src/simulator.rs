@@ -38,6 +38,9 @@ pub struct EncoderDecoderSimulator {
     gop_len: usize,
     compression_ratio: f64,
     noise_power: f32,
+    y_chunk_dimensions: (usize, usize, usize),
+    cb_chunk_dimensions: (usize, usize, usize),
+    cr_chunk_dimensions: (usize, usize, usize),
     asset_resolution: (usize, usize),
     asset_writer: AssetWriter,
 }
@@ -49,6 +52,9 @@ impl EncoderDecoderSimulator {
         gop_len: usize,
         compression_ratio: f64,
         noise_power: f32,
+        y_chunk_dimensions: (usize, usize, usize),
+        cb_chunk_dimensions: (usize, usize, usize),
+        cr_chunk_dimensions: (usize, usize, usize),
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut reader = AssetReader::new(in_path);
         let frame_rate = reader.frame_rate()?;
@@ -62,6 +68,20 @@ impl EncoderDecoderSimulator {
             frame_rate: frame_rate,
         };
         let asset_resolution = (asset_resolution.0 as usize, asset_resolution.1 as usize);
+
+        let y_chunk_dimensions =
+            chunk_dimensions_sizer(y_chunk_dimensions, asset_resolution, PixelComponentType::Y);
+        let cb_chunk_dimensions = chunk_dimensions_sizer(
+            cb_chunk_dimensions,
+            asset_resolution,
+            PixelComponentType::Cb,
+        );
+        let cr_chunk_dimensions = chunk_dimensions_sizer(
+            cr_chunk_dimensions,
+            asset_resolution,
+            PixelComponentType::Cr,
+        );
+
         let writer = AssetWriter::load_new(writer_settings)?;
         Ok(Self {
             macro_block_3d_iter: pb_iter.into_macro_block_3d_iter(gop_len),
@@ -69,6 +89,9 @@ impl EncoderDecoderSimulator {
             compression_ratio,
             noise_power,
             asset_resolution,
+            y_chunk_dimensions,
+            cb_chunk_dimensions,
+            cr_chunk_dimensions,
             asset_writer: writer,
         })
     }
@@ -77,8 +100,9 @@ impl EncoderDecoderSimulator {
 fn ofdm_framer<PixelType: HasPixelComponentType>(
     dct_components: &mut TransformBlock3DDCT<PixelType>,
     compression_ratio: f64,
+    chunk_dimensions: (usize, usize, usize),
 ) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
-    let chunks: Box<_> = dct_components.chunks_iter().collect();
+    let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
     let first_chunk = chunks.first().expect("No chunks.");
     let chunk_dim = first_chunk.values.dim();
 
@@ -117,13 +141,22 @@ impl EncoderDecoderSimulator {
             } = macro_block;
 
             let mut y_dct = y_components.into();
-            let (y_framer, y_chunk_dim) = ofdm_framer(&mut y_dct, self.compression_ratio);
+            let (y_framer, y_chunk_dim) =
+                ofdm_framer(&mut y_dct, self.compression_ratio, self.y_chunk_dimensions);
 
             let mut cb_dct = cb_components.into();
-            let (cb_framer, cb_chunk_dim) = ofdm_framer(&mut cb_dct, self.compression_ratio);
+            let (cb_framer, cb_chunk_dim) = ofdm_framer(
+                &mut cb_dct,
+                self.compression_ratio,
+                self.cb_chunk_dimensions,
+            );
 
             let mut cr_dct = cr_components.into();
-            let (cr_framer, cr_chunk_dim) = ofdm_framer(&mut cr_dct, self.compression_ratio);
+            let (cr_framer, cr_chunk_dim) = ofdm_framer(
+                &mut cr_dct,
+                self.compression_ratio,
+                self.cr_chunk_dimensions,
+            );
 
             let encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
@@ -283,4 +316,28 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
         asset_resolution,
         chunk_dim,
     )
+}
+
+fn max_factor_at_or_below(limit: usize, value: usize) -> usize {
+    assert!(limit > 0);
+    (1..=limit).rev().find(|i| value % i == 0).unwrap()
+}
+
+fn chunk_dimensions_sizer(
+    proposed_chunk_dimensions: (usize, usize, usize), // (width, height, len)
+    asset_resolution: (usize, usize),
+    pixel_type: PixelComponentType,
+) -> (usize, usize, usize) {
+    let (asset_width, asset_height) = asset_resolution;
+    let chunk_width = max_factor_at_or_below(proposed_chunk_dimensions.0, asset_width);
+    let chunk_height = max_factor_at_or_below(proposed_chunk_dimensions.1, asset_height);
+    let chunk_len = 1; // only supports 1
+
+    eprintln!(
+        "Chunk dimensions for {:2}: ({}x{}x{})",
+        pixel_type, chunk_width, chunk_height, chunk_len
+    );
+
+    // rval is (len, height, width) in conformance with ndarray
+    (chunk_len, chunk_height, chunk_width)
 }

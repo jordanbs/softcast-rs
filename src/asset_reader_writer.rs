@@ -449,7 +449,19 @@ pub enum PixelComponentType {
     Cb,
     Cr,
 }
-
+impl std::fmt::Display for PixelComponentType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::Y => "Y",
+                Self::Cb => "Cb",
+                Self::Cr => "Cr",
+            }
+        )
+    }
+}
 impl PixelComponentType {
     fn plane_index(&self) -> usize {
         match self {

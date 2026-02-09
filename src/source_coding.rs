@@ -85,11 +85,6 @@ pub mod transform_block_3d_dct {
         }
     }
 
-    fn max_factor_at_or_below(limit: usize, value: usize) -> usize {
-        assert!(limit > 0);
-        (1..=limit).rev().find(|i| value % i == 0).unwrap()
-    }
-
     impl<PixelType: HasPixelComponentType> transform_block_3d::TransformBlock3D<PixelType> {
         pub fn into_dct(self) -> TransformBlock3DDCT<PixelType> {
             TransformBlock3DDCT::from(self)
@@ -139,21 +134,18 @@ pub mod transform_block_3d_dct {
             self.values
         }
 
-        pub fn chunks_iter(&mut self) -> impl Iterator<Item = Chunk<'_, PixelType>> {
-            const SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS: (usize, usize, usize) = (1, 30, 44);
+        pub fn chunks_iter(
+            &mut self,
+            chunk_dimensions: (usize, usize, usize),
+        ) -> impl Iterator<Item = Chunk<'_, PixelType>> {
             let (length, height, width) = self.values.dim();
-            let chunk_length =
-                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.0, length);
-            let chunk_width =
-                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.1, height);
-            let chunk_height =
-                max_factor_at_or_below(SOFTCAST_RECOMMENDED_CHUNK_DIMENSIONS.2, width);
-
+            let (chunk_length, chunk_height, chunk_width) = chunk_dimensions;
             let chunk_size = chunk_width * chunk_height * chunk_length;
             assert!(chunk_size > 0);
+            assert_eq!(length % chunk_length, 0);
+            assert_eq!(width % chunk_width, 0);
+            assert_eq!(height % chunk_height, 0);
             assert_eq!((length * width * height) % chunk_size, 0);
-
-            let chunk_dimensions = (chunk_length, chunk_width, chunk_height);
 
             // must preflight mutatation of the 3D DCT, because power scaling requires all energies.
             let means: Box<[f32]> = self
@@ -544,7 +536,7 @@ mod tests {
             values: _,
             metadata: ChunkMetadata { mean, .. },
             ..
-        } in transform_block_3d_dct.chunks_iter()
+        } in transform_block_3d_dct.chunks_iter((1, 30, 40))
         {
             eprintln!("mean:{}", mean);
         }
@@ -695,19 +687,19 @@ mod tests {
             let mut cr_dct = cr_components.into_dct();
 
             let mut y_dct_iter = y_dct
-                .chunks_iter()
+                .chunks_iter((1, 30, 40))
                 .into_transform_block_3d_dct_iter(frame_resolution, LENGTH);
             let y_dct = y_dct_iter.next().expect("Failed to recreate Y 3D DCT.");
             assert!(y_dct_iter.next().is_none());
 
             let mut cb_dct_iter = cb_dct
-                .chunks_iter()
+                .chunks_iter((1, 30, 40))
                 .into_transform_block_3d_dct_iter(frame_resolution, LENGTH);
             let cb_dct = cb_dct_iter.next().expect("Failed to recreate Cb 3D DCT.");
             assert!(cb_dct_iter.next().is_none());
 
             let mut cr_dct_iter = cr_dct
-                .chunks_iter()
+                .chunks_iter((1, 30, 40))
                 .into_transform_block_3d_dct_iter(frame_resolution, LENGTH);
             let cr_dct = cr_dct_iter.next().expect("Failed to recreate Cr 3D DCT.");
             assert!(cr_dct_iter.next().is_none());
@@ -768,7 +760,7 @@ mod tests {
         //         let original_y_dct = y_dct.clone();
 
         let new_y_dct = y_dct
-            .chunks_iter()
+            .chunks_iter((1, 30, 40))
             .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Y 3D DCT");
@@ -778,14 +770,14 @@ mod tests {
         let new_y_components = new_y_dct.into();
 
         let new_cb_components = cb_dct
-            .chunks_iter()
+            .chunks_iter((1, 30, 40))
             .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Cb 3D DCT")
             .into();
 
         let new_cr_components = cr_dct
-            .chunks_iter()
+            .chunks_iter((1, 30, 40))
             .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Cr 3D DCT")
@@ -824,7 +816,7 @@ mod tests {
             fn count_zero_values<PixelType: HasPixelComponentType>(
                 transform_block_3d_dct: &mut TransformBlock3DDCT<PixelType>,
             ) -> (usize, usize, f32, f32) {
-                transform_block_3d_dct.chunks_iter().fold(
+                transform_block_3d_dct.chunks_iter((1, 30, 40)).fold(
                     (0, 0, 0f32, 0f32),
                     |(zero_values, total_values, max_variance, max_value), chunk| {
                         let zero_values = zero_values

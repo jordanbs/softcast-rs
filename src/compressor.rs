@@ -377,7 +377,7 @@ mod tests {
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
         let mut y_dct: TransformBlock3DDCT<_> = macro_block.y_components.into();
-        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let compression_ratio = 0.02;
         let metadata_bitmap = MetadataBitmap::new(&y_chunks, compression_ratio);
@@ -412,7 +412,7 @@ mod tests {
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
         let mut y_dct: TransformBlock3DDCT<_> = macro_block.y_components.into();
-        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let compression_ratio = 0.25;
         let metadata_bitmap = MetadataBitmap::new(&y_chunks, compression_ratio);
@@ -471,7 +471,7 @@ mod tests {
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");
 
         let mut y_dct: TransformBlock3DDCT<_> = macro_block.y_components.into();
-        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let compression_ratio = 0.02;
         let expected_chunks = (compression_ratio * y_chunks.len() as f64).floor() as usize;

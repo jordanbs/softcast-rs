@@ -629,7 +629,7 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
         let num_chunks = y_chunks.len();
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH).collect();
         let y_compressed_metadata: CompressedMetadata =
@@ -792,7 +792,7 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
         let num_chunks = y_chunks.len();
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH).collect();
         let y_compressed_metadata: CompressedMetadata =
@@ -828,7 +828,7 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let y_chunks: Box<_> = y_dct.chunks_iter().collect();
+        let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
         let num_chunks = y_chunks.len();
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH).collect();
         let y_compressed_metadata: CompressedMetadata =

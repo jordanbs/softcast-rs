@@ -43,7 +43,27 @@ enum Commands {
 
         #[arg(short, default_value_t = 90)]
         gop_len: usize,
+
+        // defaults set for 1080p
+        #[arg(short, value_parser = parse_dimensions, default_value = "48x40x1")]
+        y_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(short, value_parser = parse_dimensions, default_value = "40x30x1")]
+        c_chunk_dimensions: (usize, usize, usize),
     },
+}
+
+fn parse_dimensions(s: &str) -> Result<(usize, usize, usize), String> {
+    let parts: Box<[&str]> = s.split('x').collect();
+    if parts.len() != 3 {
+        return Err(format!("Expected WxHxD format"));
+    }
+
+    let x = parts[0].parse().map_err(|_| "Invalid width")?;
+    let y = parts[1].parse().map_err(|_| "Invalid height")?;
+    let z = parts[2].parse().map_err(|_| "Invalid length")?;
+
+    Ok((x, y, z))
 }
 
 fn validate_file_exists(path: &str) -> Result<std::path::PathBuf, String> {
@@ -71,9 +91,19 @@ fn simulate(
     gop_len: usize,
     compression_ratio: f64,
     noise_power: f32,
+    y_chunk_dimensions: (usize, usize, usize),
+    c_chunk_dimensions: (usize, usize, usize),
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut simulator =
-        EncoderDecoderSimulator::try_new(infile, outfile, gop_len, compression_ratio, noise_power)?;
+    let mut simulator = EncoderDecoderSimulator::try_new(
+        infile,
+        outfile,
+        gop_len,
+        compression_ratio,
+        noise_power,
+        y_chunk_dimensions,
+        c_chunk_dimensions,
+        c_chunk_dimensions,
+    )?;
     simulator.run()?;
 
     Ok(())
@@ -89,9 +119,19 @@ fn main() -> Result<(), String> {
             gop_len,
             compression_ratio,
             noise_power,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
         } => {
-            simulate(infile, outfile, gop_len, compression_ratio, noise_power)
-                .map_err(|e| e.to_string())?;
+            simulate(
+                infile,
+                outfile,
+                gop_len,
+                compression_ratio,
+                noise_power,
+                y_chunk_dimensions,
+                c_chunk_dimensions,
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
     Ok(())

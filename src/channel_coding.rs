@@ -674,7 +674,10 @@ mod tests {
         let mut cr_dct = macro_block.cr_components.into_dct();
 
         //         let original_y_dct = y_dct.clone();
-        let y_slices: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_slices: Box<_> = y_dct
+            .chunks_iter((1, 30, 40))
+            .into_slice_iter(LENGTH)
+            .collect();
         let new_y_dct = y_slices
             .into_iter()
             .into_chunks_iter(LENGTH)
@@ -686,7 +689,10 @@ mod tests {
 
         let new_y_components = new_y_dct.into();
 
-        let cb_slices: Box<_> = cb_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let cb_slices: Box<_> = cb_dct
+            .chunks_iter((1, 30, 40))
+            .into_slice_iter(LENGTH)
+            .collect();
         let new_cb_components = cb_slices
             .into_iter()
             .into_chunks_iter(LENGTH)
@@ -695,7 +701,10 @@ mod tests {
             .expect("Failed to produce a Cb 3D DCT")
             .into();
 
-        let cr_slices: Box<_> = cr_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let cr_slices: Box<_> = cr_dct
+            .chunks_iter((1, 30, 40))
+            .into_slice_iter(LENGTH)
+            .collect();
         let new_cr_components = cr_slices
             .into_iter()
             .into_chunks_iter(LENGTH)

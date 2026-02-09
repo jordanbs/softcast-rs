@@ -385,7 +385,10 @@ mod tests {
         let mut y_dct = macro_block.y_components.into_dct();
 
         // Expensive.. can I defer?
-        let y_slices_and_metadata: Box<_> = y_dct.chunks_iter().into_slice_iter(LENGTH).collect();
+        let y_slices_and_metadata: Box<_> = y_dct
+            .chunks_iter((1, 30, 40))
+            .into_slice_iter(LENGTH)
+            .collect();
 
         let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
             .iter()
@@ -427,7 +430,7 @@ mod tests {
         let mut y_dct = macro_block.y_components.into_dct();
 
         // Expensive.. can I defer?
-        let chunks: Vec<_> = y_dct.chunks_iter().collect();
+        let chunks: Vec<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let first_chunk = chunks.first().expect("No chunks.");
         let chunk_dim = first_chunk.values.dim();
@@ -509,7 +512,7 @@ mod tests {
         //         let original_y_dct_components = y_dct.values.clone();
 
         // Expensive.. can I defer?
-        let chunks: Vec<_> = y_dct.chunks_iter().collect();
+        let chunks: Vec<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let first_chunk = chunks.first().expect("No chunks.");
         let chunk_dim = first_chunk.values.dim();
@@ -667,7 +670,7 @@ mod tests {
         fn framer<PixelType: HasPixelComponentType>(
             dct_components: &mut TransformBlock3DDCT<PixelType>,
         ) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
-            let chunks: Box<_> = dct_components.chunks_iter().collect();
+            let chunks: Box<_> = dct_components.chunks_iter((1, 30, 40)).collect();
             let first_chunk = chunks.first().expect("No chunks.");
             let chunk_dim = first_chunk.values.dim();
 
@@ -898,7 +901,7 @@ mod tests {
         //         let original_y_dct_components = y_dct.values.clone();
 
         // Expensive.. can I defer?
-        let chunks: Vec<_> = y_dct.chunks_iter().collect();
+        let chunks: Vec<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let first_chunk = chunks.first().expect("No chunks.");
         let chunk_dim = first_chunk.values.dim();
@@ -1029,7 +1032,7 @@ mod tests {
 
         let mut y_dct = macro_block.y_components.into_dct();
 
-        let chunks: Box<_> = y_dct.chunks_iter().collect();
+        let chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
 
         let first_chunk = chunks.first().expect("No chunks.");
         let chunk_dim = first_chunk.values.dim();
@@ -1172,7 +1175,7 @@ mod tests {
 
         let mut cb_dct = macro_block.cb_components.into_dct();
 
-        let chunks: Box<_> = cb_dct.chunks_iter().collect();
+        let chunks: Box<_> = cb_dct.chunks_iter((1, 30, 40)).collect();
 
         let first_chunk = chunks.first().expect("No chunks.");
         let chunk_dim = first_chunk.values.dim();
