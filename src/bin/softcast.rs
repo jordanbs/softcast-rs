@@ -94,9 +94,8 @@ fn simulate(
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut simulator = EncoderDecoderSimulator::try_new(
+    let encoder = FileReaderEncoder::try_new(
         infile,
-        outfile,
         gop_len,
         compression_ratio,
         noise_power,
@@ -104,7 +103,18 @@ fn simulate(
         c_chunk_dimensions,
         c_chunk_dimensions,
     )?;
-    simulator.run()?;
+    let asset_resolution = encoder.asset_resolution();
+    let frame_rate = encoder.frame_rate();
+    let decoder = FileWriterDecoder::try_new(
+        outfile,
+        asset_resolution,
+        frame_rate,
+        gop_len,
+        y_chunk_dimensions,
+        c_chunk_dimensions,
+        c_chunk_dimensions,
+    )?;
+    run_simulation(encoder, decoder)?;
 
     Ok(())
 }

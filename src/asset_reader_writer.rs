@@ -260,6 +260,8 @@ pub mod asset_writer {
         timescale: i32,
     }
 
+    unsafe impl Send for AssetWriter {}
+
     impl AssetWriter {
         fn new(
             settings: AssetWritterSettings,

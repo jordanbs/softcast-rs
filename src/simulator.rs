@@ -33,22 +33,28 @@ use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use rand::Rng;
 
-pub struct EncoderDecoderSimulator {
+pub trait OFDMSymbolWriter {
+    fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+pub trait OFDMSymbolReader {
+    fn into_iter(self) -> impl Iterator<Item = OFDMSymbol>;
+}
+
+pub struct FileReaderEncoder {
     macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator>,
-    gop_len: usize,
     compression_ratio: f64,
     noise_power: f32,
     y_chunk_dimensions: (usize, usize, usize),
     cb_chunk_dimensions: (usize, usize, usize),
     cr_chunk_dimensions: (usize, usize, usize),
     asset_resolution: (usize, usize),
-    asset_writer: AssetWriter,
+    frame_rate: f64,
 }
 
-impl EncoderDecoderSimulator {
+impl FileReaderEncoder {
     pub fn try_new(
         in_path: std::path::PathBuf,
-        out_path: std::path::PathBuf,
         gop_len: usize,
         compression_ratio: f64,
         noise_power: f32,
@@ -59,14 +65,15 @@ impl EncoderDecoderSimulator {
         let mut reader = AssetReader::new(in_path);
         let frame_rate = reader.frame_rate()?;
         let asset_resolution = reader.resolution()?;
+
+        println!(
+            "Asset resolution: {}x{}",
+            asset_resolution.0, asset_resolution.1
+        );
+        println!("Asset framerate: {}", frame_rate);
+
         let pb_iter: IntoPixelBufferIterator = reader.into();
 
-        let writer_settings = AssetWritterSettings {
-            path: std::path::PathBuf::from(out_path),
-            codec: Codec::H264,
-            resolution: asset_resolution,
-            frame_rate: frame_rate,
-        };
         let asset_resolution = (asset_resolution.0 as usize, asset_resolution.1 as usize);
 
         let y_chunk_dimensions =
@@ -82,18 +89,23 @@ impl EncoderDecoderSimulator {
             PixelComponentType::Cr,
         );
 
-        let writer = AssetWriter::load_new(writer_settings)?;
         Ok(Self {
             macro_block_3d_iter: pb_iter.into_macro_block_3d_iter(gop_len),
-            gop_len,
             compression_ratio,
             noise_power,
-            asset_resolution,
             y_chunk_dimensions,
             cb_chunk_dimensions,
             cr_chunk_dimensions,
-            asset_writer: writer,
+            asset_resolution,
+            frame_rate,
         })
+    }
+
+    pub fn asset_resolution(&self) -> (usize, usize) {
+        self.asset_resolution
+    }
+    pub fn frame_rate(&self) -> f64 {
+        self.frame_rate
     }
 }
 
@@ -101,10 +113,8 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     dct_components: &mut TransformBlock3DDCT<PixelType>,
     compression_ratio: f64,
     chunk_dimensions: (usize, usize, usize),
-) -> (impl Iterator<Item = OFDMSymbol>, (usize, usize, usize)) {
+) -> impl Iterator<Item = OFDMSymbol> {
     let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
-    let first_chunk = chunks.first().expect("No chunks.");
-    let chunk_dim = first_chunk.values.dim();
 
     // metadata
     let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
@@ -124,13 +134,14 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     // ofdm
     let ofdm_framer: OFDMFrameGenerator<_> =
         metadata_modulator.flatten().chain(slice_modulator).into(); // TODO: interleave
-    (ofdm_framer, chunk_dim)
+    ofdm_framer
 }
 
-impl EncoderDecoderSimulator {
-    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.asset_writer.start_writing()?;
-
+impl FileReaderEncoder {
+    pub fn run<W: OFDMSymbolWriter>(
+        &mut self,
+        mut ofdm_symbol_writer: W,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         while let Some(macro_block) = self.macro_block_3d_iter.next() {
             // encoder
             let MacroBlock3D {
@@ -141,18 +152,17 @@ impl EncoderDecoderSimulator {
             } = macro_block;
 
             let mut y_dct = y_components.into();
-            let (y_framer, y_chunk_dim) =
-                ofdm_framer(&mut y_dct, self.compression_ratio, self.y_chunk_dimensions);
+            let y_framer = ofdm_framer(&mut y_dct, self.compression_ratio, self.y_chunk_dimensions);
 
             let mut cb_dct = cb_components.into();
-            let (cb_framer, cb_chunk_dim) = ofdm_framer(
+            let cb_framer = ofdm_framer(
                 &mut cb_dct,
                 self.compression_ratio,
                 self.cb_chunk_dimensions,
             );
 
             let mut cr_dct = cr_components.into();
-            let (cr_framer, cr_chunk_dim) = ofdm_framer(
+            let cr_framer = ofdm_framer(
                 &mut cr_dct,
                 self.compression_ratio,
                 self.cr_chunk_dimensions,
@@ -161,7 +171,7 @@ impl EncoderDecoderSimulator {
             let encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
             let noise_power = self.noise_power; // should sqrt?
-            let mut encoder_plus_noise = encoder.map(|mut ofdmsymbol| {
+            let encoder_plus_noise = encoder.map(|mut ofdmsymbol| {
                 if 0.0 >= noise_power {
                     return ofdmsymbol;
                 }
@@ -175,25 +185,84 @@ impl EncoderDecoderSimulator {
                 ofdmsymbol
             });
 
-            //decoder
+            for symbol in encoder_plus_noise {
+                ofdm_symbol_writer.write(symbol)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct FileWriterDecoder {
+    asset_writer: AssetWriter,
+    asset_resolution: (usize, usize),
+    gop_len: usize,
+    y_chunk_dim: (usize, usize, usize),
+    cb_chunk_dim: (usize, usize, usize),
+    cr_chunk_dim: (usize, usize, usize),
+    started_writing: bool,
+}
+impl FileWriterDecoder {
+    pub fn try_new(
+        out_path: std::path::PathBuf,
+        asset_resolution: (usize, usize),
+        frame_rate: f64,
+        gop_len: usize,
+        y_chunk_dim: (usize, usize, usize),
+        cb_chunk_dim: (usize, usize, usize),
+        cr_chunk_dim: (usize, usize, usize),
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let writer_settings = AssetWritterSettings {
+            path: std::path::PathBuf::from(out_path),
+            codec: Codec::H264,
+            resolution: (asset_resolution.0 as i32, asset_resolution.1 as i32),
+            frame_rate: frame_rate,
+        };
+
+        let y_chunk_dim = chunk_dimensions_inverter(y_chunk_dim);
+        let cb_chunk_dim = chunk_dimensions_inverter(cb_chunk_dim);
+        let cr_chunk_dim = chunk_dimensions_inverter(cr_chunk_dim);
+
+        let writer = AssetWriter::load_new(writer_settings)?;
+        Ok(Self {
+            asset_resolution,
+            gop_len,
+            y_chunk_dim,
+            cb_chunk_dim,
+            cr_chunk_dim,
+            asset_writer: writer,
+            started_writing: false,
+        })
+    }
+
+    pub fn run<R: OFDMSymbolReader>(
+        &mut self,
+        ofdm_symbol_reader: R,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.asset_writer.start_writing()?;
+        self.started_writing = true;
+
+        let mut ofdm_symbol_iter = ofdm_symbol_reader.into_iter();
+
+        loop {
             let y_dct_out = into_transform_block_3d_dct(
-                &mut encoder_plus_noise,
+                &mut ofdm_symbol_iter,
                 self.gop_len,
                 self.asset_resolution,
-                y_chunk_dim,
-            );
+                self.y_chunk_dim,
+            )?;
             let cb_dct_out = into_transform_block_3d_dct(
-                &mut encoder_plus_noise,
+                &mut ofdm_symbol_iter,
                 self.gop_len,
                 self.asset_resolution,
-                cb_chunk_dim,
-            );
+                self.cb_chunk_dim,
+            )?;
             let cr_dct_out = into_transform_block_3d_dct(
-                &mut encoder_plus_noise,
+                &mut ofdm_symbol_iter,
                 self.gop_len,
                 self.asset_resolution,
-                cr_chunk_dim,
-            );
+                self.cr_chunk_dim,
+            )?;
 
             let new_macro_block_3d = MacroBlock3D {
                 y_components: y_dct_out.into(),
@@ -209,8 +278,60 @@ impl EncoderDecoderSimulator {
                 self.asset_writer.wait_for_writer_to_be_ready()?;
             }
         }
-        self.asset_writer.finish_writing()?;
-        Ok(())
+    }
+}
+
+impl Drop for FileWriterDecoder {
+    fn drop(&mut self) {
+        if self.started_writing {
+            self.asset_writer
+                .finish_writing()
+                .expect("Failed to finish writing.");
+        }
+    }
+}
+
+pub fn run_simulation(
+    mut encoder: FileReaderEncoder,
+    mut decoder: FileWriterDecoder,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (mpsc_writer, mpsc_reader) = MPSCWriter::new_channel();
+    let decoder_result = std::thread::spawn(move || {
+        let result = decoder.run(mpsc_reader).map_err(|e| e.to_string());
+        eprintln!("decoder result: {:?}", result);
+        result
+    });
+    encoder.run(mpsc_writer)?;
+
+    let _ = decoder_result.join().map_err(|_| "thread panic'd")?; // TODO: preserve inner error
+
+    Ok(())
+}
+
+struct MPSCWriter {
+    sender: std::sync::mpsc::SyncSender<OFDMSymbol>,
+}
+impl OFDMSymbolWriter for MPSCWriter {
+    fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>> {
+        self.sender.send(symbol).map_err(|e| e.into())
+    }
+}
+impl MPSCWriter {
+    pub fn new_channel() -> (Self, MPSCReader) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(0x80); // 64 KiB
+        let writer = Self { sender };
+        let reader = MPSCReader { receiver };
+        (writer, reader)
+    }
+}
+
+struct MPSCReader {
+    receiver: std::sync::mpsc::Receiver<OFDMSymbol>,
+}
+
+impl OFDMSymbolReader for MPSCReader {
+    fn into_iter(self) -> impl Iterator<Item = OFDMSymbol> {
+        self.receiver.into_iter()
     }
 }
 
@@ -244,7 +365,7 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
-) -> TransformBlock3DDCT<PixelType> {
+) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
     let (frame_width, frame_height) = (
         asset_resolution.0 / PixelType::TYPE.interleave_step(),
         asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
@@ -257,16 +378,18 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
     let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
-    let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
-        .by_ref()
-        .take(chunks_per_gop)
-        .map(|r| r.unwrap())
-        .collect();
-    assert!(!chunk_metadatas.is_empty());
+    let mut chunk_metadatas: Vec<ChunkMetadata> = Vec::with_capacity(chunks_per_gop);
+    for metadata_result in metadata_decompressor.by_ref().take(chunks_per_gop) {
+        chunk_metadatas.push(metadata_result.map_err(|e| e.to_string())?);
+    }
+    if chunks_per_gop != chunk_metadatas.len() {
+        // EOF
+        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+    }
 
     let metadata_bitmap = metadata_decompressor
         .take_metadata_bitmap()
-        .expect("Failed to decode metadata_bitmap");
+        .map_err(|_| "Failed to decode metadata_bitmap")?; // TODO: don't discard error
 
     let included_chunk_metadatas: Box<_> = metadata_bitmap
         .values
@@ -309,13 +432,14 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     let power_descaler = PowerScaler::inverse(chunks_iter);
     let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
-    TransformBlock3DDCT::from_chunks_owned(
+    let dct = TransformBlock3DDCT::from_chunks_owned(
         dct_allocation,
         &chunk_metadatas,
         gop_len,
         asset_resolution,
         chunk_dim,
-    )
+    );
+    Ok(dct)
 }
 
 fn max_factor_at_or_below(limit: usize, value: usize) -> usize {
@@ -343,4 +467,8 @@ fn chunk_dimensions_sizer(
 
     // rval is (len, height, width) in conformance with ndarray
     (chunk_len, chunk_height, chunk_width)
+}
+
+fn chunk_dimensions_inverter(chunk_dimensions: (usize, usize, usize)) -> (usize, usize, usize) {
+    (chunk_dimensions.2, chunk_dimensions.1, chunk_dimensions.0)
 }
