@@ -705,10 +705,20 @@ pub mod pixel_buffer {
         // The following functions are safe to call without locking the base address of CVPixelBuffer.
 
         pub fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize {
-            CVPixelBufferGetBytesPerRowOfPlane(
+            let bytes_per_row = CVPixelBufferGetBytesPerRowOfPlane(
                 &self.cv_image_buffer,
                 pixel_component_type.plane_index(),
-            ) as usize
+            ) as usize;
+
+            let (asset_width, _) = self.resolution();
+            let expected_bytes_per_row = asset_width;
+            assert_eq!(
+                expected_bytes_per_row, bytes_per_row,
+                "This asset has extra bytes per row of each plane \
+                         (expected: {} vs actual: {}); currently not supported.",
+                expected_bytes_per_row, bytes_per_row
+            );
+            bytes_per_row
         }
         pub fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize {
             CVPixelBufferGetHeightOfPlane(&self.cv_image_buffer, pixel_component_type.plane_index())
