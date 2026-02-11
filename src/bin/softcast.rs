@@ -16,6 +16,8 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::{Parser, Subcommand};
+use softcast_rs::decoder::*;
+use softcast_rs::encoder::*;
 use softcast_rs::simulator::*;
 
 #[derive(Parser)]
