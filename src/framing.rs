@@ -206,6 +206,8 @@ impl CallbackContext {
         subcarrier_samples: &[Complex32],
         subcarrier_allocation: &[u8],
     ) {
+        eprintln!("Calling ofdm_framesync_callback.");
+
         let mut new_samples: std::collections::VecDeque<_> =
             std::collections::VecDeque::with_capacity(NUM_SUBCARRIERS);
         new_samples.extend(

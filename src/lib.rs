@@ -23,5 +23,7 @@ pub mod encoder;
 pub mod framing;
 pub mod metadata_coding;
 pub mod modulation;
+pub mod radio;
 pub mod simulator;
 pub mod source_coding;
+pub mod sync;

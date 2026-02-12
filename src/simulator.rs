@@ -17,7 +17,7 @@
 
 use crate::decoder::*;
 use crate::encoder::*;
-use crate::framing::*;
+use crate::sync::*;
 
 pub fn run_simulation(
     mut encoder: FileReaderEncoder,
@@ -34,31 +34,4 @@ pub fn run_simulation(
     let _ = decoder_result.join().map_err(|_| "thread panic'd")?; // TODO: preserve inner error
 
     Ok(())
-}
-
-struct MPSCWriter {
-    sender: std::sync::mpsc::SyncSender<OFDMSymbol>,
-}
-impl OFDMSymbolWriter for MPSCWriter {
-    fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>> {
-        self.sender.send(symbol).map_err(|e| e.into())
-    }
-}
-impl MPSCWriter {
-    pub fn new_channel() -> (Self, MPSCReader) {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(0x80); // 64 KiB
-        let writer = Self { sender };
-        let reader = MPSCReader { receiver };
-        (writer, reader)
-    }
-}
-
-struct MPSCReader {
-    receiver: std::sync::mpsc::Receiver<OFDMSymbol>,
-}
-
-impl OFDMSymbolReader for MPSCReader {
-    fn into_iter(self) -> impl Iterator<Item = OFDMSymbol> {
-        self.receiver.into_iter()
-    }
 }

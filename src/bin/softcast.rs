@@ -18,7 +18,14 @@
 use clap::{Parser, Subcommand};
 use softcast_rs::decoder::*;
 use softcast_rs::encoder::*;
+use softcast_rs::radio::*;
 use softcast_rs::simulator::*;
+
+const DEFAULT_COMPRESSION_RATIO: f64 = 0.1875;
+const DEFAULT_GOP_LEN: usize = 22;
+const DEFAULT_Y_CHUNK_DIMENSIONS: &str = "48x40x1";
+const DEFAULT_C_CHUNK_DIMENSIONS: &str = "40x30x1";
+const DEFAULT_NOISE_POWER: f32 = 0.0;
 
 #[derive(Parser)]
 struct Args {
@@ -28,6 +35,28 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
+    Loopback {
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        #[arg(value_parser = validate_file_exists)]
+        infile: std::path::PathBuf,
+
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        #[arg(value_parser = validate_file_does_not_exist)]
+        outfile: std::path::PathBuf,
+
+        #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
+        compression_ratio: f64,
+
+        #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
+        gop_len: usize,
+
+        // defaults set for 1080p
+        #[arg(long="y", value_parser = parse_dimensions, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
+        y_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(long="cbcr", value_parser = parse_dimensions, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
+        c_chunk_dimensions: (usize, usize, usize),
+    },
     Simulate {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         #[arg(value_parser = validate_file_exists)]
@@ -37,20 +66,20 @@ enum Commands {
         #[arg(value_parser = validate_file_does_not_exist)]
         outfile: std::path::PathBuf,
 
-        #[arg(short, default_value_t = 0.1875)]
+        #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
         compression_ratio: f64,
 
-        #[arg(short, default_value_t = 0.0)]
+        #[arg(short, default_value_t = DEFAULT_NOISE_POWER)]
         noise_power: f32,
 
-        #[arg(short, default_value_t = 22)]
+        #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
         gop_len: usize,
 
         // defaults set for 1080p
-        #[arg(long="y", value_parser = parse_dimensions, default_value = "48x40x1")]
+        #[arg(long="y", value_parser = parse_dimensions, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
         y_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long="cbcr", value_parser = parse_dimensions, default_value = "40x30x1")]
+        #[arg(long="cbcr", value_parser = parse_dimensions, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
     },
 }
@@ -85,6 +114,73 @@ fn validate_file_does_not_exist(path: &str) -> Result<std::path::PathBuf, String
         return Err(format!("File already exists: {}", path.display()));
     }
     Ok(path)
+}
+
+fn loopback(
+    infile: std::path::PathBuf,
+    outfile: std::path::PathBuf,
+    gop_len: usize,
+    compression_ratio: f64,
+    y_chunk_dimensions: (usize, usize, usize),
+    c_chunk_dimensions: (usize, usize, usize),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tx_params = RadioParams {
+        device_idx: 0,
+        channel: 0,
+        antenna: "BAND1".to_string(),
+        gain: 30.0,
+        frequency: 1_536_000_000.0,
+        sample_rate: 384_000.0,
+        bandwidth: 6_000_000.0,
+    };
+    let rx_params = RadioParams {
+        device_idx: tx_params.device_idx,
+        channel: 1,
+        antenna: "LNAH".to_string(),
+        gain: 50.0,
+        frequency: tx_params.frequency,
+        sample_rate: tx_params.sample_rate,
+        bandwidth: tx_params.bandwidth,
+    };
+    let tx_radio = TransmitDevice::try_new(tx_params, false)?;
+    let mut rx_radio = ReceiveDevice::try_new(rx_params, &tx_radio.sdr, true)?;
+    let mut encoder = FileReaderEncoder::try_new(
+        infile,
+        gop_len,
+        compression_ratio,
+        0.0,
+        y_chunk_dimensions,
+        c_chunk_dimensions,
+        c_chunk_dimensions,
+    )?;
+    let asset_resolution = encoder.asset_resolution();
+    let frame_rate = encoder.frame_rate();
+    let mut decoder = FileWriterDecoder::try_new(
+        outfile,
+        asset_resolution,
+        frame_rate,
+        gop_len,
+        y_chunk_dimensions,
+        c_chunk_dimensions,
+        c_chunk_dimensions,
+    )?;
+
+    let ofdm_symbol_reader = rx_radio.take_mpsc_reader();
+    let rx_radio_join = rx_radio.run_async();
+    let decoder_join = std::thread::spawn(move || {
+        let result = decoder.run(ofdm_symbol_reader).map_err(|e| e.to_string());
+        eprintln!("decoder result: {:?}", result);
+        result
+    });
+
+    encoder.run(tx_radio)?;
+
+    //     play_dump_file(tx_radio.stream, &std::path::PathBuf::from("/tmp/dumpw_063"));
+
+    let _ = rx_radio_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
+    let _ = decoder_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
+
+    Ok(())
 }
 
 fn simulate(
@@ -125,6 +221,21 @@ fn main() -> Result<(), String> {
     let args = Args::parse();
 
     match args.command {
+        Commands::Loopback {
+            infile,
+            outfile,
+            compression_ratio,
+            gop_len,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+        } => loopback(
+            infile,
+            outfile,
+            gop_len,
+            compression_ratio,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+        ),
         Commands::Simulate {
             infile,
             outfile,
@@ -133,18 +244,16 @@ fn main() -> Result<(), String> {
             noise_power,
             y_chunk_dimensions,
             c_chunk_dimensions,
-        } => {
-            simulate(
-                infile,
-                outfile,
-                gop_len,
-                compression_ratio,
-                noise_power,
-                y_chunk_dimensions,
-                c_chunk_dimensions,
-            )
-            .map_err(|e| e.to_string())?;
-        }
+        } => simulate(
+            infile,
+            outfile,
+            gop_len,
+            compression_ratio,
+            noise_power,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+        ),
     }
+    .map_err(|e| e.to_string())?;
     Ok(())
 }

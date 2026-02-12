@@ -84,6 +84,9 @@ impl FileWriterDecoder {
 
         let mut ofdm_symbol_iter = ofdm_symbol_reader.into_iter();
 
+        let mut gops_received = 0;
+        eprintln!("GOPS Received: {}", gops_received);
+
         loop {
             let y_dct_out = into_transform_block_3d_dct(
                 &mut ofdm_symbol_iter,
@@ -91,6 +94,10 @@ impl FileWriterDecoder {
                 self.asset_resolution,
                 self.y_chunk_dim,
             )?;
+
+            gops_received += 1;
+            eprintln!("GOPS Received: {}", gops_received);
+
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut ofdm_symbol_iter,
                 self.gop_len,
