@@ -203,3 +203,311 @@ pub fn play_dump_file(mut stream: soapysdr::TxStream<Complex32>, path: &std::pat
             .expect("Failed to write");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decoder::OFDMSymbolReader;
+    use liquid_sys::*;
+    use rand::Rng;
+    use std::f32::consts::PI;
+
+    #[test]
+    fn test_flexframegen() {
+        unsafe {
+            let mut props = flexframegenprops_s {
+                check: 0,
+                fec0: 0,
+                fec1: 0,
+                mod_scheme: 0,
+            };
+            let status = flexframegenprops_init_default(&mut props) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let flexframegen = flexframegen_create(&mut props);
+            assert_ne!(flexframegen, std::ptr::null_mut());
+
+            let payload = [0x9bu8; 60];
+            let status = flexframegen_assemble(
+                flexframegen,
+                std::ptr::null(),
+                &payload as *const u8,
+                payload.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let frame_len = flexframegen_getframelen(flexframegen) as usize;
+            let mut iq_symbols = vec![Complex32::ZERO; frame_len]; // 60 * 8 = 480, bpsk
+            while 0
+                == flexframegen_write_samples(
+                    flexframegen,
+                    iq_symbols.as_mut_ptr() as *mut Complex32,
+                    iq_symbols.len() as u32,
+                )
+            {}
+
+            extern "C" fn callback(
+                _header: *mut u8,
+                _header_valid: i32,
+                payload: *mut u8,
+                payload_len: u32,
+                payload_valid: i32,
+                _stats: framesyncstats_s,
+                user_data: *mut core::ffi::c_void,
+            ) -> i32 {
+                unsafe {
+                    assert!(payload_valid != 0);
+
+                    let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
+                    let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
+                    decoded_payload.extend_from_slice(new_payload);
+
+                    0
+                }
+            }
+
+            let mut decoded_payload: Vec<u8> = vec![];
+            let decoded_payload_ptr: *mut Vec<u8> = &mut decoded_payload;
+
+            let flexframesync = flexframesync_create(
+                Some(callback),
+                decoded_payload_ptr as *mut core::ffi::c_void,
+            );
+            assert_ne!(flexframesync, std::ptr::null_mut());
+
+            let status = flexframesync_execute(
+                flexframesync,
+                iq_symbols.as_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            assert_eq!(payload.to_vec(), decoded_payload);
+        }
+    }
+
+    #[test]
+    fn test_cfo_flexframegen() {
+        unsafe {
+            let mut props = flexframegenprops_s {
+                check: 0,
+                fec0: 0,
+                fec1: 0,
+                mod_scheme: 0,
+            };
+            let status = flexframegenprops_init_default(&mut props) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let flexframegen = flexframegen_create(&mut props);
+            assert_ne!(flexframegen, std::ptr::null_mut());
+
+            let payload = [0x9bu8; 60];
+            let status = flexframegen_assemble(
+                flexframegen,
+                std::ptr::null(),
+                &payload as *const u8,
+                payload.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let frame_len = flexframegen_getframelen(flexframegen) as usize;
+            let mut iq_symbols = vec![Complex32::ZERO; frame_len]; // 60 * 8 = 480, bpsk
+            while 0
+                == flexframegen_write_samples(
+                    flexframegen,
+                    iq_symbols.as_mut_ptr() as *mut Complex32,
+                    iq_symbols.len() as u32,
+                )
+            {}
+
+            // cfo
+            let dphi: f32 = 0.3; // cfo in radians/sample
+            let mut phi: f32 = 0.0;
+            for iq in iq_symbols.iter_mut() {
+                *iq *= (Complex32::i() * phi).exp();
+                phi += dphi;
+            }
+
+            // phase offset, shift by 2pi/3 radians  / sample
+            let mut phi = 2.0 * PI / 3.0;
+            let dphi: f32 = 0.02;
+            for iq in iq_symbols.iter_mut() {
+                let (r, theta) = iq.to_polar();
+                *iq = Complex32::from_polar(r, theta + phi);
+                phi += dphi;
+            }
+
+            // prefix with random samples
+            let mut rng = rand::rng();
+            let mut prefix = vec![];
+            for _ in 0..40 {
+                let i = rng.random_range(-1.0..1.0);
+                let q = rng.random_range(-1.0..1.0);
+                prefix.push(Complex32::new(i, q));
+            }
+            prefix.append(&mut iq_symbols);
+            let iq_symbols = prefix;
+
+            extern "C" fn callback(
+                _header: *mut u8,
+                _header_valid: i32,
+                payload: *mut u8,
+                payload_len: u32,
+                payload_valid: i32,
+                _stats: framesyncstats_s,
+                user_data: *mut core::ffi::c_void,
+            ) -> i32 {
+                unsafe {
+                    assert!(payload_valid != 0);
+
+                    let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
+                    let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
+                    decoded_payload.extend_from_slice(new_payload);
+
+                    0
+                }
+            }
+
+            let mut decoded_payload: Vec<u8> = vec![];
+            let decoded_payload_ptr: *mut Vec<u8> = &mut decoded_payload;
+
+            let flexframesync = flexframesync_create(
+                Some(callback),
+                decoded_payload_ptr as *mut core::ffi::c_void,
+            );
+            assert_ne!(flexframesync, std::ptr::null_mut());
+
+            let status = flexframesync_execute(
+                flexframesync,
+                iq_symbols.as_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            assert_eq!(payload.to_vec(), decoded_payload);
+        }
+    }
+
+    #[test]
+    fn test_sdr_loopback_flexframegen() {
+        let original_payload = [0x9bu8; 60];
+        let iq_symbols = unsafe {
+            let mut props = flexframegenprops_s {
+                check: 0,
+                fec0: 0,
+                fec1: 0,
+                mod_scheme: 0,
+            };
+            let status = flexframegenprops_init_default(&mut props) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let flexframegen = flexframegen_create(&mut props);
+            assert_ne!(flexframegen, std::ptr::null_mut());
+
+            let status = flexframegen_assemble(
+                flexframegen,
+                std::ptr::null(),
+                &original_payload as *const u8,
+                original_payload.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let frame_len = flexframegen_getframelen(flexframegen) as usize;
+            let mut iq_symbols = vec![Complex32::ZERO; frame_len]; // 60 * 8 = 480, bpsk
+            while 0
+                == flexframegen_write_samples(
+                    flexframegen,
+                    iq_symbols.as_mut_ptr() as *mut Complex32,
+                    iq_symbols.len() as u32,
+                )
+            {}
+            iq_symbols
+        };
+
+        let tx_params = RadioParams {
+            device_idx: 0,
+            antenna: "BAND1".to_string(),
+            frequency: 900_000_000.0,
+            bandwidth: 6_000_000.0,
+            channel: 0,
+            gain: 30.0,
+            sample_rate: 384_000.0,
+        };
+        let rx_params = RadioParams {
+            device_idx: 0,
+            antenna: "LB1".to_string(),
+            frequency: 900_000_000.0,
+            bandwidth: 6_000_000.0,
+            channel: 0,
+            gain: 30.0,
+            sample_rate: 384_000.0,
+        };
+        let mut tx_device = TransmitDevice::try_new(tx_params, false).unwrap();
+        let mut rx_device = ReceiveDevice::try_new(rx_params, &tx_device.sdr, false).unwrap();
+
+        let iq_iter = rx_device
+            .take_mpsc_reader()
+            .into_iter()
+            .map(|ofdmsymbol| ofdmsymbol.time_domain_symbols)
+            .flatten();
+
+        rx_device.run_async();
+
+        let ofdm_symbols: Vec<OFDMSymbol> = iq_symbols
+            .chunks(OFDM_SYMBOL_LEN)
+            .map(|iq_symbols| {
+                let mut ofdm_symbol = OFDMSymbol {
+                    time_domain_symbols: [Complex32::ZERO; OFDM_SYMBOL_LEN],
+                };
+                ofdm_symbol.time_domain_symbols[..iq_symbols.len()].copy_from_slice(iq_symbols);
+                ofdm_symbol
+            })
+            .collect();
+        for ofdm_symbol in ofdm_symbols {
+            tx_device.write(ofdm_symbol).unwrap();
+        }
+        drop(tx_device); // for rx_device iter to complete
+
+        unsafe {
+            let iq_symbols: Vec<Complex32> = iq_iter.collect();
+
+            extern "C" fn callback(
+                _header: *mut u8,
+                _header_valid: i32,
+                payload: *mut u8,
+                payload_len: u32,
+                payload_valid: i32,
+                _stats: framesyncstats_s,
+                user_data: *mut core::ffi::c_void,
+            ) -> i32 {
+                unsafe {
+                    assert!(payload_valid != 0);
+
+                    let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
+                    let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
+                    decoded_payload.extend_from_slice(new_payload);
+
+                    0
+                }
+            }
+
+            let mut decoded_payload: Vec<u8> = vec![];
+            let decoded_payload_ptr: *mut Vec<u8> = &mut decoded_payload;
+
+            let flexframesync = flexframesync_create(
+                Some(callback),
+                decoded_payload_ptr as *mut core::ffi::c_void,
+            );
+            assert_ne!(flexframesync, std::ptr::null_mut());
+
+            let status = flexframesync_execute(
+                flexframesync,
+                iq_symbols.as_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            assert_eq!(original_payload.to_vec(), decoded_payload);
+        }
+    }
+}
