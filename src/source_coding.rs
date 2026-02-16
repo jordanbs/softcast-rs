@@ -184,15 +184,12 @@ pub mod transform_block_3d_dct {
             //             }
 
             // two passes necessary due to the impossibility to coerce 'chunks' in the previous loop to an immutable borrow
-            let chunked_transform_blocks = self
-                .values
+            self.values
                 .exact_chunks_mut(chunk_dimensions)
                 .into_iter()
-                .zip(means.into_iter())
-                .zip(energies.into_iter())
-                .map(|((chunk, mean), energy)| Chunk::new(chunk, ChunkMetadata { mean, energy }));
-
-            chunked_transform_blocks
+                .zip(means)
+                .zip(energies)
+                .map(|((chunk, mean), energy)| Chunk::new(chunk, ChunkMetadata { mean, energy }))
         }
 
         pub(super) fn from_chunks(
@@ -222,7 +219,7 @@ pub mod transform_block_3d_dct {
                 });
 
             Self {
-                values: values,
+                values,
                 _marker: std::marker::PhantomData,
                 gop_len,
             }
@@ -350,7 +347,7 @@ pub mod power_scaling {
             let mut chunk = self.inner2.get_mut().unwrap().next()?;
 
             let power_scale =
-                power_scale(chunk.metadata.energy, &chunk_energies, &self.compute_cache);
+                power_scale(chunk.metadata.energy, chunk_energies, &self.compute_cache);
             if power_scale.is_normal() {
                 if self.inverse {
                     chunk.values.mapv_inplace(|elm| elm / power_scale);
@@ -410,7 +407,7 @@ pub mod chunk {
                 frame_height / pixel_type.vertical_subsampling(),
             );
             TransformBlock3DDCTIter {
-                chunk_iter: chunk_iter,
+                chunk_iter,
                 component_frame_resolution,
                 gop_len,
             }
@@ -423,14 +420,12 @@ pub mod chunk {
         type Item = TransformBlock3DDCT<PixelType>;
 
         fn next(&mut self) -> Option<Self::Item> {
-            use std::cell::OnceCell;
-
             let num_transform_block_3d_dct_values = self.gop_len
                 * self.component_frame_resolution.0
                 * self.component_frame_resolution.1;
-            let chunks_needed = OnceCell::new();
-            let chunk_dim = OnceCell::new();
-            let mut chunks_to_consume = OnceCell::new();
+            let chunks_needed = std::cell::OnceCell::new();
+            let chunk_dim = std::cell::OnceCell::new();
+            let mut chunks_to_consume = std::cell::OnceCell::new();
             let mut chunk_iter_is_empty = true;
             loop {
                 let chunk = self.chunk_iter.next();

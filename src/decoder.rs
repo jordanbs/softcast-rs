@@ -53,10 +53,10 @@ impl FileWriterDecoder {
         cr_chunk_dim: (usize, usize, usize),
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let writer_settings = AssetWritterSettings {
-            path: std::path::PathBuf::from(out_path),
+            path: out_path,
             codec: Codec::H264,
             resolution: (asset_resolution.0 as i32, asset_resolution.1 as i32),
-            frame_rate: frame_rate,
+            frame_rate,
         };
 
         let y_chunk_dim = chunk_dimensions_inverter(y_chunk_dim);

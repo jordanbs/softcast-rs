@@ -287,11 +287,7 @@ pub mod slices {
                 .count(); // returns 0 when metadata_bitmap_iter is exhausted
 
             // there will be padding slices beyond metadata_bitmap that are always included
-            let slice_values = self
-                .exact_array3_chunks_iter
-                .by_ref()
-                .skip(slices_to_skip)
-                .next()?;
+            let slice_values = self.exact_array3_chunks_iter.by_ref().nth(slices_to_skip)?;
 
             let mut slice: Slice<'a, PixelType> = Slice::from_view(slice_values);
 

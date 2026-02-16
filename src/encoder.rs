@@ -135,7 +135,7 @@ impl FileReaderEncoder {
         &mut self,
         mut ofdm_symbol_writer: W,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        while let Some(macro_block) = self.macro_block_3d_iter.next() {
+        for macro_block in self.macro_block_3d_iter.by_ref() {
             // encoder
             let MacroBlock3D {
                 y_components,
@@ -188,7 +188,10 @@ impl FileReaderEncoder {
 
 fn max_factor_at_or_below(limit: usize, value: usize) -> usize {
     assert!(limit > 0);
-    (1..=limit).rev().find(|i| value % i == 0).unwrap()
+    (1..=limit)
+        .rev()
+        .find(|i| value.is_multiple_of(*i))
+        .unwrap()
 }
 
 fn chunk_dimensions_sizer(

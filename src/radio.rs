@@ -47,8 +47,7 @@ impl TransmitDevice {
         let devices = soapysdr::enumerate("")?;
         let device_args = devices
             .into_iter()
-            .skip(params.device_idx)
-            .next()
+            .nth(params.device_idx)
             .ok_or("No device at index.")?;
         let device = soapysdr::Device::new(device_args)?;
 
@@ -207,7 +206,6 @@ pub fn play_dump_file(mut stream: soapysdr::TxStream<Complex32>, path: &std::pat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decoder::OFDMSymbolReader;
     use liquid_sys::*;
     use rand::Rng;
     use std::f32::consts::PI;
@@ -389,7 +387,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(false)] // needs hardware to run
     fn test_sdr_loopback_flexframegen() {
+        use crate::decoder::OFDMSymbolReader;
         let original_payload = [0x9bu8; 60];
         let iq_symbols = unsafe {
             let mut props = flexframegenprops_s {

@@ -94,7 +94,7 @@ pub mod slice {
             SliceIter {
                 chunk_iter: chunk_iter.peekable(),
                 inner_slice_iter: vec![].into_iter(),
-                chunks_per_gop: chunks_per_gop,
+                chunks_per_gop,
             }
         }
     }
@@ -141,7 +141,7 @@ pub mod slice {
             ChunkIter {
                 slice_iter: slice_iter.peekable(),
                 inner_chunk_iter: vec![].into_iter(),
-                chunks_per_gop: chunks_per_gop,
+                chunks_per_gop,
             }
         }
     }
@@ -278,7 +278,7 @@ pub mod fwht {
         }
         fn ptr_at(&self, idx: usize) -> *mut f32 {
             let idx = idx.to_3dim_index(self.dim());
-            let ptr: *const f32 = &self[idx];
+            let ptr = &raw const self[idx];
             ptr as *mut f32
         }
         fn values_len(&self) -> usize {
@@ -290,7 +290,7 @@ pub mod fwht {
             self[idx]
         }
         fn ptr_at(&self, idx: usize) -> *mut f32 {
-            let ptr: *const f32 = &self[idx];
+            let ptr = &raw const self[idx];
             ptr as *mut f32
         }
         fn values_len(&self) -> usize {
@@ -378,9 +378,9 @@ pub mod fwht {
             .for_each(|padding_row| *padding_row *= orthonormalization_factor);
     }
 
-    pub fn fwht_chunks<'a, PixelType: HasPixelComponentType>(
-        chunks: Box<[Chunk<'a, PixelType>]>,
-    ) -> Result<Box<[SliceAndChunkMetadata<'a, PixelType>]>, &'static str> {
+    pub fn fwht_chunks<PixelType: HasPixelComponentType>(
+        chunks: Box<[Chunk<'_, PixelType>]>,
+    ) -> Result<Box<[SliceAndChunkMetadata<'_, PixelType>]>, &'static str> {
         // adapted from fwht crate, with the intention of avoiding copies
         let mut chunks = chunks;
 

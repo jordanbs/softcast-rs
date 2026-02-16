@@ -103,7 +103,7 @@ fn main() {
     // Help CMake compile liquid (header search + library search)
     let fftw_inc = fftw
         .include_paths
-        .get(0)
+        .first()
         .expect("pkg-config fftw3f returned no include_paths");
 
     // 3) Build + install liquid-dsp

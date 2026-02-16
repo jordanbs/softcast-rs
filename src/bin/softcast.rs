@@ -87,7 +87,7 @@ enum Commands {
 fn parse_dimensions(s: &str) -> Result<(usize, usize, usize), String> {
     let parts: Box<[&str]> = s.split('x').collect();
     if parts.len() != 3 {
-        return Err(format!("Expected WxHxD format"));
+        return Err("Expected WxHxD format".into());
     }
 
     let x = parts[0].parse().map_err(|_| "Invalid width")?;

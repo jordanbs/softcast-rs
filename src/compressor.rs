@@ -29,8 +29,8 @@ pub struct MetadataBitmap {
 }
 
 impl MetadataBitmap {
-    pub fn new<'a, PixelType: HasPixelComponentType>(
-        chunks: &[Chunk<'a, PixelType>],
+    pub fn new<PixelType: HasPixelComponentType>(
+        chunks: &[Chunk<'_, PixelType>],
         compression_ratio: f64,
     ) -> Self {
         assert!(compression_ratio > 0f64);
@@ -42,7 +42,7 @@ impl MetadataBitmap {
 
             let cutoff_idx = ((1f64 - compression_ratio) * chunks.len() as f64).ceil() as usize; // conservative
             let (_, cutoff, _) = energies.select_nth_unstable_by(cutoff_idx, |e1, e2| {
-                e1.partial_cmp(&e2).expect("Unexpected NaN")
+                e1.partial_cmp(e2).expect("Unexpected NaN")
             });
             *cutoff
         };
@@ -107,19 +107,17 @@ impl<R: Read> Iterator for RunLengthBitmapDecoder<R> {
         }
 
         // get the next value to vend
-        let current_value = match self.last_value {
-            Some(last_value) => !last_value, // new value, flip
-            None => {
-                // first val, read it from buffer
-                let mut byte_buf = [0u8; size_of::<u8>()];
-                if let Some(err) = self.buf_reader.read_exact(&mut byte_buf).err() {
-                    self.had_error = true;
-                    return Some(Err(err));
-                }
-                let first_byte = u8::from_be_bytes(byte_buf);
-                let new_value = 0 != first_byte;
-                new_value
+        let current_value = if let Some(last_value) = self.last_value {
+            !last_value // new value, flip
+        } else {
+            // first val, read it from buffer
+            let mut byte_buf = [0u8; size_of::<u8>()];
+            if let Some(err) = self.buf_reader.read_exact(&mut byte_buf).err() {
+                self.had_error = true;
+                return Some(Err(err));
             }
+            let first_byte = u8::from_be_bytes(byte_buf);
+            0 != first_byte
         };
         self.last_value = Some(current_value);
 
@@ -237,17 +235,13 @@ impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelTyp
         } else {
             // gives the next idx of a one, (incl. offset by chunk_idx)
             // iter_ones is fast
-            match self.metadata_bitmap.values[self.chunk_idx..]
+            self.metadata_bitmap.values[self.chunk_idx..]
                 .iter_ones()
-                .next()
-            {
-                Some(next_one_idx) => next_one_idx,
-                None => return None, // out of ones
-            }
+                .next()? // out of ones, ends iteration
         };
         self.chunk_idx += 1 + skip_count;
 
-        self.chunk_iter.by_ref().skip(skip_count).next()
+        self.chunk_iter.by_ref().nth(skip_count)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         let count = self.metadata_bitmap.values.count_ones();

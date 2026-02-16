@@ -159,7 +159,7 @@ impl<QI, R: Read> MetadataDecompressor<QI, R> {
                 Err(err) => return Err(self.set_err(err)),
             };
             let _ = self.decoder.set(decoder);
-        };
+        }
         Ok(())
     }
 
@@ -286,7 +286,7 @@ pub mod packetizer {
     use super::*;
 
     pub struct DecodedPacket {
-        pub decoded_data: Vec<u8>,
+        pub decoded_data: Box<[u8]>,
         pub compressed_metadata_len: Option<usize>, // only present in the first packet of a compressed metadata
     }
 
@@ -434,7 +434,7 @@ pub mod packetizer {
     pub struct Depacketizer<I: Iterator<Item = EncodedPacket>, QI> {
         packetizer: *mut liquid_sys::packetizer_s,
         packet_iter: I,
-        working_cursor: std::io::Cursor<Vec<u8>>,
+        working_cursor: std::io::Cursor<Box<[u8]>>,
         has_read_first_packet: bool,
         payload_len: std::cell::OnceCell<usize>,
         bytes_read: usize,
@@ -448,7 +448,7 @@ pub mod packetizer {
             Self {
                 packetizer,
                 packet_iter,
-                working_cursor: std::io::Cursor::new(vec![]),
+                working_cursor: std::io::Cursor::new(vec![].into()),
                 has_read_first_packet: false,
                 payload_len: std::cell::OnceCell::new(),
                 bytes_read: 0,
@@ -474,7 +474,7 @@ pub mod packetizer {
 
         fn decode_packet(
             &self,
-            packet: EncodedPacket,
+            packet: &EncodedPacket,
             is_first: bool,
         ) -> Result<DecodedPacket, Box<dyn std::error::Error>> {
             let encoded_data = packet.encoded_data;
@@ -563,7 +563,7 @@ pub mod packetizer {
                     }
                     let encoded_packet = encoded_packet.unwrap();
                     let decoded_packet =
-                        self.decode_packet(encoded_packet, !self.has_read_first_packet);
+                        self.decode_packet(&encoded_packet, !self.has_read_first_packet);
                     if decoded_packet.is_err() {
                         let decode_err = decoded_packet.err().unwrap();
                         return Err(std::io::Error::new(

@@ -139,7 +139,7 @@ pub mod asset_reader {
 
                 let video_settings: Retained<NSDictionary<NSString, AnyObject>> =
                     NSDictionary::from_slices::<NSString>(
-                        &[pixel_format_key.as_ref()],
+                        &[pixel_format_key],
                         &[pixel_format_value.as_ref()],
                     );
 
@@ -148,7 +148,7 @@ pub mod asset_reader {
 
                 // Get all video tracks.
                 let tracks: Retained<NSArray<AVAssetTrack>> =
-                    asset.tracksWithMediaType(&AVMediaTypeVideo.unwrap());
+                    asset.tracksWithMediaType(AVMediaTypeVideo.unwrap());
 
                 let track: Retained<AVAssetTrack> =
                     tracks.firstObject().ok_or("File has no video tracks.")?;
@@ -196,16 +196,14 @@ pub mod asset_reader {
 
     impl<'a> PixelBufferIterator<'a> {
         fn new(asset_reader: &'a mut AssetReader) -> Self {
-            PixelBufferIterator {
-                asset_reader: asset_reader,
-            }
+            PixelBufferIterator { asset_reader }
         }
         pub fn macro_block_3d_iterator(self, gop_len: usize) -> MacroBlock3DIterator<Self> {
             pixel_buffer::MacroBlock3DIterator::new(self, gop_len)
         }
     }
 
-    impl<'a> Iterator for PixelBufferIterator<'a> {
+    impl Iterator for PixelBufferIterator<'_> {
         type Item = PixelBuffer;
         fn next(&mut self) -> Option<Self::Item> {
             self.asset_reader
@@ -274,13 +272,12 @@ pub mod asset_writer {
             let timescale = settings.frame_rate as i32;
             AssetWriter {
                 //                 settings: settings,
-                av_asset_writer: av_asset_writer,
-                av_asset_writer_input: av_asset_writer_input,
-                av_asset_writer_input_pixel_buffer_adaptor:
-                    av_asset_writer_input_pixel_buffer_adaptor,
+                av_asset_writer,
+                av_asset_writer_input,
+                av_asset_writer_input_pixel_buffer_adaptor,
                 frame_index: 0,
                 started_writing: false,
-                timescale: timescale as i32,
+                timescale,
             }
         }
 
@@ -292,7 +289,7 @@ pub mod asset_writer {
             unsafe {
                 let writer = AVAssetWriter::assetWriterWithURL_fileType_error(
                     &url,
-                    &AVFileTypeMPEG4.unwrap(),
+                    AVFileTypeMPEG4.unwrap(),
                 )?;
 
                 let codec_value = NSString::from_str(&settings.codec.as_string());
@@ -306,7 +303,7 @@ pub mod asset_writer {
                 input_settings_dict.insert(AVVideoHeightKey.unwrap(), &height_value);
 
                 let input = AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(
-                    &AVMediaTypeVideo.unwrap(),
+                    AVMediaTypeVideo.unwrap(),
                     Some(&input_settings_dict),
                 );
 
@@ -412,9 +409,10 @@ pub mod asset_writer {
         pub fn finish_writing(&self) -> Result<(), Box<dyn error::Error>> {
             unsafe {
                 self.av_asset_writer_input.markAsFinished();
-                match self.av_asset_writer.finishWriting() {
-                    true => Ok(()),
-                    false => Err("Failed to finish writing.".into()),
+                if self.av_asset_writer.finishWriting() {
+                    Ok(())
+                } else {
+                    Err("Failed to finish writing.".into())
                 }
             }
         }
@@ -468,23 +466,22 @@ impl PixelComponentType {
     fn plane_index(&self) -> usize {
         match self {
             Self::Y => 0,
-            Self::Cb => 1,
-            Self::Cr => 1,
+            Self::Cb | Self::Cr => 1,
         }
     }
-    fn interleave_offset(&self) -> usize {
+    fn interleave_offset(self) -> usize {
         match self {
             PixelComponentType::Y | PixelComponentType::Cb => 0,
             PixelComponentType::Cr => 1,
         }
     }
-    pub(super) fn interleave_step(&self) -> usize {
+    pub(super) fn interleave_step(self) -> usize {
         match self {
             PixelComponentType::Y => 1,
             PixelComponentType::Cb | PixelComponentType::Cr => 2,
         }
     }
-    pub(super) fn vertical_subsampling(&self) -> usize {
+    pub(super) fn vertical_subsampling(self) -> usize {
         match self {
             PixelComponentType::Y => 1,
             PixelComponentType::Cb | PixelComponentType::Cr => 2,
@@ -551,9 +548,7 @@ pub mod pixel_buffer {
         pub fn new(cv_image_buffer: CFRetained<CVImageBuffer>) -> Self {
             assert!(CVPixelBufferIsPlanar(&cv_image_buffer));
 
-            PixelBuffer {
-                cv_image_buffer: cv_image_buffer,
-            }
+            PixelBuffer { cv_image_buffer }
         }
 
         fn new_cv_pixel_buffer(
@@ -590,9 +585,9 @@ pub mod pixel_buffer {
         }
 
         pub(super) fn from_frame_view(
-            y_components: FrameComponentView<YPixelComponentType>,
-            cb_components: FrameComponentView<CbPixelComponentType>,
-            cr_components: FrameComponentView<CrPixelComponentType>,
+            y_components: &FrameComponentView<YPixelComponentType>,
+            cb_components: &FrameComponentView<CbPixelComponentType>,
+            cr_components: &FrameComponentView<CrPixelComponentType>,
         ) -> Result<Self, Box<dyn std::error::Error>> {
             fn assign_values<PixelType: HasPixelComponentType>(
                 src: &FrameComponentView<PixelType>,
@@ -708,7 +703,7 @@ pub mod pixel_buffer {
             let bytes_per_row = CVPixelBufferGetBytesPerRowOfPlane(
                 &self.cv_image_buffer,
                 pixel_component_type.plane_index(),
-            ) as usize;
+            );
 
             let (asset_width, _) = self.resolution();
             let expected_bytes_per_row = asset_width;
@@ -1066,7 +1061,7 @@ pub mod transform_block_3d {
     impl<I: Iterator<Item = MacroBlock3D>> PixelBufferIterator<I> {
         pub fn new(macro_block_3d_iterator: I, gop_length: usize) -> Self {
             Self {
-                macro_block_3d_iterator: macro_block_3d_iterator,
+                macro_block_3d_iterator,
                 current_macro_block: None,
                 frame_index: 0,
                 gop_length,
@@ -1104,7 +1099,7 @@ pub mod transform_block_3d {
                 .expect("Failed to get Cr components.");
 
             let pixel_buffer =
-                PixelBuffer::from_frame_view(y_components, cb_components, cr_components)
+                PixelBuffer::from_frame_view(&y_components, &cb_components, &cr_components)
                     .expect("Failed to create pixel buffer.");
 
             self.frame_index += 1;
@@ -1140,7 +1135,7 @@ pub mod transform_block_3d {
             assert!(values.is_standard_layout());
 
             FrameComponentView {
-                values: values,
+                values,
                 _marker: std::marker::PhantomData,
             }
         }
