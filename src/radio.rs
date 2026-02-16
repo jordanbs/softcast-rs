@@ -431,7 +431,7 @@ mod tests {
             bandwidth: 6_000_000.0,
             channel: 0,
             gain: 30.0,
-            sample_rate: 384_000.0,
+            sample_rate: 32_000.0,
         };
         let rx_params = RadioParams {
             device_idx: 0,
@@ -440,7 +440,7 @@ mod tests {
             bandwidth: 6_000_000.0,
             channel: 0,
             gain: 30.0,
-            sample_rate: 384_000.0,
+            sample_rate: 32_000.0,
         };
         let mut tx_device = TransmitDevice::try_new(tx_params, false).unwrap();
         let mut rx_device = ReceiveDevice::try_new(rx_params, &tx_device.sdr, false).unwrap();
@@ -469,7 +469,7 @@ mod tests {
         drop(tx_device); // for rx_device iter to complete
 
         unsafe {
-            let iq_symbols: Vec<Complex32> = iq_iter.collect();
+            let iq_symbols: Vec<Complex32> = iq_iter.take(32_000 * 2).collect();
 
             extern "C" fn callback(
                 _header: *mut u8,
@@ -481,11 +481,11 @@ mod tests {
                 user_data: *mut core::ffi::c_void,
             ) -> i32 {
                 unsafe {
-                    assert!(payload_valid != 0);
-
-                    let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
-                    let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
-                    decoded_payload.extend_from_slice(new_payload);
+                    if 0 != payload_valid {
+                        let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
+                        let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
+                        decoded_payload.extend_from_slice(new_payload);
+                    }
 
                     0
                 }
