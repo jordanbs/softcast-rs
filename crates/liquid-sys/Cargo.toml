@@ -8,7 +8,7 @@ build = "build.rs"
 [build-dependencies]
 cmake = "0.1"
 pkg-config = "0.3"
-bindgen = "0.69"
+bindgen = "0.72"
 
 [dependencies]
 libc = "0.2"
