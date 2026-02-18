@@ -8,6 +8,7 @@ bitvec = "1.0.1"
 clap = { version = "4.5.57", features = ["derive"] }
 cmake = "0.1.57"
 liquid-sys = { path = "crates/liquid-sys" }
+limesuite-sys = { path = "crates/limesuite-sys" }
 ndarray = "0.17.1"
 ndarray-stats = "0.7.0"
 ndrustfft = "0.6.2"
@@ -33,5 +34,6 @@ debug = 1
 [workspace]
 members = [
   "crates/liquid-sys",
+  "crates/limesuite-sys",
 ]
 resolver = "2"

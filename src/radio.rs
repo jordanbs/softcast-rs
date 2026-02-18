@@ -18,6 +18,7 @@
 use crate::encoder::OFDMSymbolWriter;
 use crate::framing::{OFDM_SYMBOL_LEN, OFDMSymbol};
 use crate::sync::*;
+use limesuite_sys;
 use num_complex::Complex32;
 use soapysdr;
 use std::io::{Read, Write};
@@ -508,6 +509,14 @@ mod tests {
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
             assert_eq!(original_payload.to_vec(), decoded_payload);
+        }
+    }
+
+    #[test]
+    fn test_link_limesuite() {
+        unsafe {
+            let list = limesuite_sys::LMS_GetDeviceList(std::ptr::null_mut());
+            eprintln!("Devices found: {list}");
         }
     }
 }

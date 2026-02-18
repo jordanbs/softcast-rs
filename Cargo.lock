@@ -423,6 +423,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "limesuite-sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen 0.69.5",
+ "pkg-config",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1060,6 +1068,7 @@ dependencies = [
  "bitvec",
  "clap",
  "cmake",
+ "limesuite-sys",
  "liquid-sys",
  "ndarray",
  "ndarray-stats",
