@@ -23,6 +23,7 @@ use num_complex::Complex32;
 use soapysdr;
 use std::io::{Read, Write};
 
+#[derive(Default)]
 pub struct RadioParams {
     pub device_idx: usize,
     pub antenna: String,
@@ -73,6 +74,12 @@ impl TransmitDevice {
             activated: false,
         })
     }
+
+    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.stream.activate(None)?;
+        self.activated = true;
+        Ok(())
+    }
 }
 impl OFDMSymbolWriter for TransmitDevice {
     fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>> {
@@ -98,6 +105,7 @@ pub struct ReceiveDevice {
     mpsc_writer: MPSCWriter,
     mpsc_reader: Option<MPSCReader>,
     dump_file: Option<std::fs::File>,
+    activated: bool,
 }
 impl ReceiveDevice {
     pub fn try_new(
@@ -128,11 +136,19 @@ impl ReceiveDevice {
             mpsc_writer,
             mpsc_reader: Some(mpsc_reader),
             dump_file: dump_file.then(|| create_dump_file(false)),
+            activated: false,
         })
     }
-    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.stream.activate(None)?;
-
+        self.activated = true;
+        Ok(())
+    }
+    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.activated {
+            self.stream.activate(None)?;
+            self.activated = true;
+        }
         loop {
             let mut ofdm_symbol_buf = [Complex32::default(); OFDM_SYMBOL_LEN];
             let mut samples_read = 0;
@@ -157,6 +173,304 @@ impl ReceiveDevice {
     }
 }
 
+pub struct LimeTransmitDevice {
+    pub device: *mut limesuite_sys::lms_device_t,
+    stream: Box<limesuite_sys::lms_stream_t>,
+    dump_file: Option<std::fs::File>,
+}
+
+impl LimeTransmitDevice {
+    const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8Kib of Complex32 samples
+
+    pub fn try_new(
+        params: RadioParams,
+        dump_file: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        unsafe {
+            let num_devices = limesuite_sys::LMS_GetDeviceList(std::ptr::null_mut());
+            if 0 == num_devices {
+                return Err("No LimeSDR devices found.".into());
+            }
+            let mut device: *mut limesuite_sys::lms_device_t = std::ptr::null_mut();
+            if 0 != limesuite_sys::LMS_Open(&mut device, std::ptr::null_mut(), std::ptr::null_mut())
+            {
+                return Err("Failed to open LimeSDR device.".into());
+            }
+            if 0 != limesuite_sys::LMS_Init(device) {
+                return Err("Failed to init LimeSDR device.".into());
+            }
+            if 0 != limesuite_sys::LMS_EnableChannel(
+                device,
+                limesuite_sys::LMS_CH_TX,
+                params.channel,
+                true,
+            ) {
+                return Err("Failed to enable LimeSDR channel.".into());
+            }
+            if 0 != limesuite_sys::LMS_SetSampleRate(device, params.sample_rate, 0) {
+                return Err("Failed to set LimeSDR sample rate.".into());
+            }
+            if 0 != limesuite_sys::LMS_SetLOFrequency(
+                device,
+                limesuite_sys::LMS_CH_TX,
+                params.channel,
+                params.frequency,
+            ) {
+                return Err("Failed to set LimeSDR sample rate.".into());
+            }
+
+            let antenna_idx = match params.antenna.as_str() {
+                "BAND1" => 1,
+                "BAND2" => 2,
+                _ => return Err("No antenna matching {params.antenna}".into()),
+            };
+            if 0 != limesuite_sys::LMS_SetAntenna(
+                device,
+                limesuite_sys::LMS_CH_TX,
+                params.channel,
+                antenna_idx,
+            ) {
+                return Err("Failed to set LimeSDR antenna.".into());
+            }
+            if 0 != limesuite_sys::LMS_SetNormalizedGain(
+                device,
+                limesuite_sys::LMS_CH_TX,
+                params.channel,
+                1.0, // calibrate at full gain
+            ) {
+                return Err("Failed to set LimeSDR gain.".into());
+            }
+            if 0 != limesuite_sys::LMS_Calibrate(
+                device,
+                limesuite_sys::LMS_CH_TX,
+                params.channel,
+                params.bandwidth,
+                0,
+            ) {
+                return Err("Failed to calibrate LimeSDR.".into());
+            }
+            // lower gain
+            if 0 != limesuite_sys::LMS_SetNormalizedGain(
+                device,
+                limesuite_sys::LMS_CH_TX,
+                params.channel,
+                params.gain,
+            ) {
+                return Err("Failed to set LimeSDR gain.".into());
+            }
+            let mut stream = Box::new(limesuite_sys::lms_stream_t {
+                channel: params.channel as u32,
+                dataFmt: limesuite_sys::lms_stream_t_LMS_FMT_F32,
+                linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_DEFAULT,
+                isTx: true,
+                handle: 0,
+                fifoSize: Self::SEND_BUF_SIZE_IN_SAMPLES as u32,
+                throughputVsLatency: 1.0, // maximize throughput
+            });
+            if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
+                return Err("Failed to set up LimeSDR tx stream.".into());
+            }
+
+            Ok(Self {
+                device,
+                stream,
+                dump_file: dump_file.then(|| create_dump_file(true)),
+            })
+        }
+    }
+
+    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        unsafe {
+            if 0 != limesuite_sys::LMS_StartStream(self.stream.as_mut()) {
+                return Err("Failed to start LimeSDR tx stream.".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn write(&mut self, symbols: &[Complex32]) -> Result<usize, Box<dyn std::error::Error>> {
+        let num_symbols_written = unsafe {
+            let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();
+            metadata.flushPartialPacket = true;
+            let num_symbols_sent_or_failure = limesuite_sys::LMS_SendStream(
+                self.stream.as_mut(),
+                symbols.as_ptr() as *const std::ffi::c_void,
+                symbols.len(),
+                &metadata,
+                u32::MAX, // don't timeout
+            );
+            if 0 > num_symbols_sent_or_failure {
+                return Err("Failed to send symbols".into());
+            }
+            let num_symbols_sent = num_symbols_sent_or_failure as usize;
+
+            if let Some(dump_file) = self.dump_file.as_mut() {
+                write_symbols(dump_file, &symbols)?;
+            }
+            num_symbols_sent
+        };
+
+        Ok(num_symbols_written)
+    }
+}
+
+impl Drop for LimeTransmitDevice {
+    fn drop(&mut self) {
+        // unsafe {
+        // There are some races I need to figure out how to guard in order to safely close streams
+        // let _success = limesuite_sys::LMS_DestroyStream(self.device, self.stream.as_mut());
+        // closing the device requires arc and a mutex to perform safely
+        // let _success = limesuite_sys::LMS_Close(self.device);
+        // }
+    }
+}
+
+pub struct LimeReceiveDevice {
+    //     device: *mut limesuite_sys::lms_device_t,
+    stream: Box<limesuite_sys::lms_stream_t>,
+    mpsc_sender: std::sync::mpsc::SyncSender<Vec<Complex32>>,
+    mpsc_receiver: Option<std::sync::mpsc::Receiver<Vec<Complex32>>>,
+    dump_file: Option<std::fs::File>,
+}
+
+unsafe impl Send for LimeReceiveDevice {}
+
+impl LimeReceiveDevice {
+    const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8KiB of Complex32 samples
+    const MAX_NUM_READ_BUFS: usize = 0x8000; // 2GiB maximum memory usage
+
+    pub fn try_new(
+        params: RadioParams,
+        device: *mut limesuite_sys::lms_device_t,
+        dump_file: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        unsafe {
+            if 0 != limesuite_sys::LMS_EnableChannel(
+                device,
+                limesuite_sys::LMS_CH_RX,
+                params.channel,
+                true,
+            ) {
+                return Err("Failed to enable LimeSDR channel.".into());
+            }
+            if 0 != limesuite_sys::LMS_SetLOFrequency(
+                device,
+                limesuite_sys::LMS_CH_RX,
+                params.channel,
+                params.frequency,
+            ) {
+                return Err("Failed to set LimeSDR sample rate.".into());
+            }
+            let antenna_idx = match params.antenna.as_str() {
+                "LNAH" => 1,
+                "LNAL" => 2,
+                "LNAW" => 3,
+                "LB1" => 4, // not verified
+                "LB2" => 5, // not verified
+                _ => return Err("No antenna matching {params.antenna}".into()),
+            };
+            if 0 != limesuite_sys::LMS_SetAntenna(
+                device,
+                limesuite_sys::LMS_CH_RX,
+                params.channel,
+                antenna_idx,
+            ) {
+                return Err("Failed to set LimeSDR antenna.".into());
+            }
+            if 0 != limesuite_sys::LMS_SetNormalizedGain(
+                device,
+                limesuite_sys::LMS_CH_RX,
+                params.channel,
+                params.gain,
+            ) {
+                return Err("Failed to set LimeSDR gain.".into());
+            }
+            if 0 != limesuite_sys::LMS_Calibrate(
+                device,
+                limesuite_sys::LMS_CH_RX,
+                params.channel,
+                params.bandwidth,
+                0, // flags
+            ) {
+                return Err("Failed to calibrate LimeSDR.".into());
+            }
+
+            let mut stream = Box::new(limesuite_sys::lms_stream_t {
+                channel: params.channel as u32,
+                dataFmt: limesuite_sys::lms_stream_t_LMS_FMT_F32,
+                linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_DEFAULT,
+                isTx: false,
+                handle: 0, // not to be modified manually
+                fifoSize: Self::READ_BUF_SIZE_IN_SAMPLES as u32,
+                throughputVsLatency: 1.0, // maximize throughput
+            });
+            if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
+                return Err("Failed to set up LimeSDR tx stream.".into());
+            }
+
+            let (mpsc_sender, mpsc_receiver) =
+                std::sync::mpsc::sync_channel(Self::MAX_NUM_READ_BUFS);
+
+            Ok(Self {
+                stream,
+                mpsc_sender,
+                mpsc_receiver: Some(mpsc_receiver),
+                dump_file: dump_file.then(|| create_dump_file(false)),
+            })
+        }
+    }
+
+    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        unsafe {
+            if 0 != limesuite_sys::LMS_StartStream(self.stream.as_mut()) {
+                return Err("Failed to start LimeSDR tx stream.".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            let mut read_buf = vec![Complex32::default(); Self::READ_BUF_SIZE_IN_SAMPLES];
+            let samples_read = unsafe {
+                let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();
+                limesuite_sys::LMS_RecvStream(
+                    self.stream.as_mut(),
+                    read_buf.as_mut_ptr() as *mut std::ffi::c_void,
+                    read_buf.len(),
+                    &mut metadata,
+                    u32::MAX, // no timeout
+                ) as usize
+            };
+            read_buf.truncate(samples_read);
+
+            if let Some(dump_file) = self.dump_file.as_mut() {
+                write_symbols(dump_file, &read_buf)?;
+            }
+            self.mpsc_sender.send(read_buf)?;
+        }
+    }
+    pub fn take_mpsc_receiver(&mut self) -> std::sync::mpsc::Receiver<Vec<Complex32>> {
+        self.mpsc_receiver
+            .take()
+            .expect("MPSCReader already taken.")
+    }
+    pub fn run_async(mut self) -> std::thread::JoinHandle<Result<(), std::string::String>> {
+        std::thread::spawn(move || self.run().map_err(|e| e.to_string()))
+    }
+}
+
+impl Drop for LimeReceiveDevice {
+    fn drop(&mut self) {
+        // unsafe {
+        // There are some races I need to figure out how to guard in order to safely close streams
+        // let _success = limesuite_sys::LMS_DestroyStream(self.device, self.stream.as_mut());
+        // closing the device requires arc and a mutex to perform safely
+        // let _success = limesuite_sys::LMS_Close(self.device);
+        // }
+    }
+}
+
 fn create_dump_file(is_write: bool) -> std::fs::File {
     let mut idx = 0;
     loop {
@@ -174,6 +488,17 @@ fn write_ofdm_symbol(
     symbol: &OFDMSymbol,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for iq in symbol.time_domain_symbols {
+        file.write_all(&iq.re.to_be_bytes())?;
+        file.write_all(&iq.im.to_be_bytes())?;
+    }
+    Ok(())
+}
+
+fn write_symbols(
+    file: &mut std::fs::File,
+    symbols: &[Complex32],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for iq in symbols {
         file.write_all(&iq.re.to_be_bytes())?;
         file.write_all(&iq.im.to_be_bytes())?;
     }
@@ -452,6 +777,9 @@ mod tests {
             .map(|ofdmsymbol| ofdmsymbol.time_domain_symbols)
             .flatten();
 
+        tx_device.activate().expect("Failed to activate tx");
+        rx_device.activate().expect("Failed to activate rx");
+
         rx_device.run_async();
 
         let ofdm_symbols: Vec<OFDMSymbol> = iq_symbols
@@ -464,6 +792,9 @@ mod tests {
                 ofdm_symbol
             })
             .collect();
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
         for ofdm_symbol in ofdm_symbols {
             tx_device.write(ofdm_symbol).unwrap();
         }
@@ -517,6 +848,136 @@ mod tests {
         unsafe {
             let list = limesuite_sys::LMS_GetDeviceList(std::ptr::null_mut());
             eprintln!("Devices found: {list}");
+        }
+    }
+
+    #[test]
+    fn test_limesuite_device() {
+        let radio_params = RadioParams {
+            device_idx: 0,
+            channel: 0,
+            gain: 1.0,
+            antenna: "LNAH".to_string(),
+            frequency: 2_400_000_000.0,
+            sample_rate: 32_000.0,
+            bandwidth: 6_000_000.0,
+        };
+        let _lime_tx_device = LimeTransmitDevice::try_new(radio_params, false)
+            .expect("Failed to create lime tx device.");
+    }
+
+    #[test]
+    #[cfg(false)] // needs hardware to run
+    fn test_limesuite_sdr_loopback_flexframegen() {
+        let original_payload = [0xbau8; 0x80];
+        let iq_symbols = unsafe {
+            let mut props: flexframegenprops_s = std::mem::zeroed();
+            let status = flexframegenprops_init_default(&mut props) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let flexframegen = flexframegen_create(&mut props);
+            assert_ne!(flexframegen, std::ptr::null_mut());
+
+            let status = flexframegen_assemble(
+                flexframegen,
+                std::ptr::null(),
+                &original_payload as *const u8,
+                original_payload.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let frame_len = flexframegen_getframelen(flexframegen) as usize;
+            let mut iq_symbols = vec![Complex32::default(); frame_len];
+            let frame_complete = flexframegen_write_samples(
+                flexframegen,
+                iq_symbols.as_mut_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            );
+            assert!(0 != frame_complete);
+
+            // LimeSuite doesn't deal well with values > 1.0
+            // flexframegen pushes samples to right about 1.0, sometimes over.
+            for iq in iq_symbols.iter_mut() {
+                *iq *= 0.1;
+            }
+            iq_symbols
+        };
+
+        let tx_params = RadioParams {
+            device_idx: 0,
+            antenna: "BAND1".to_string(),
+            frequency: 800_000_000.0,
+            bandwidth: 6_000_000.0,
+            channel: 0,
+            gain: 0.7,
+            sample_rate: 192_000.0,
+        };
+        let rx_params = RadioParams {
+            device_idx: 0,
+            antenna: "LNAL".to_string(),
+            frequency: 800_000_000.0,
+            bandwidth: 6_000_000.0,
+            channel: 1,
+            gain: 0.8,
+            sample_rate: 192_000.0,
+        };
+        let mut tx_device = LimeTransmitDevice::try_new(tx_params, false).unwrap();
+        let mut rx_device = LimeReceiveDevice::try_new(rx_params, tx_device.device, false).unwrap();
+
+        let iq_iter = rx_device.take_mpsc_receiver().into_iter().flatten();
+
+        // rx should be activated before tx
+        rx_device.activate().expect("Failed to activate rx");
+        tx_device.activate().expect("Failed to activate tx");
+
+        rx_device.run_async();
+
+        let mut send_buf = &iq_symbols[..];
+        while !send_buf.is_empty() {
+            let symbols_sent = tx_device.write(&send_buf).unwrap();
+            send_buf = &send_buf[symbols_sent..];
+        }
+
+        unsafe {
+            let iq_symbols: Vec<Complex32> = iq_iter.take(0x8000).collect();
+
+            extern "C" fn callback(
+                _header: *mut u8,
+                _header_valid: i32,
+                payload: *mut u8,
+                payload_len: u32,
+                payload_valid: i32,
+                _stats: framesyncstats_s,
+                user_data: *mut core::ffi::c_void,
+            ) -> i32 {
+                unsafe {
+                    if 0 != payload_valid {
+                        let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
+                        let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
+                        decoded_payload.extend_from_slice(new_payload);
+                    }
+
+                    0
+                }
+            }
+
+            let mut decoded_payload: Vec<u8> = vec![];
+            let decoded_payload_ptr: *mut Vec<u8> = &mut decoded_payload;
+
+            let flexframesync = flexframesync_create(
+                Some(callback),
+                decoded_payload_ptr as *mut core::ffi::c_void,
+            );
+            assert_ne!(flexframesync, std::ptr::null_mut());
+
+            let status = flexframesync_execute(
+                flexframesync,
+                iq_symbols.as_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            assert_eq!(original_payload.to_vec(), decoded_payload);
         }
     }
 }
