@@ -28,9 +28,10 @@ use crate::modulation::*;
 use crate::source_coding::chunk::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
+use num_complex::Complex32;
 
-pub trait OFDMSymbolReader {
-    fn into_iter(self) -> impl Iterator<Item = OFDMSymbol>;
+pub trait Complex32Reader {
+    fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>>;
 }
 
 pub struct FileWriterDecoder {
@@ -75,21 +76,21 @@ impl FileWriterDecoder {
         })
     }
 
-    pub fn run<R: OFDMSymbolReader>(
+    pub fn run<R: Complex32Reader>(
         &mut self,
-        ofdm_symbol_reader: R,
+        complex32_reader: R,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.asset_writer.start_writing()?;
         self.started_writing = true;
 
-        let mut ofdm_symbol_iter = ofdm_symbol_reader.into_iter();
+        let mut complex32_buf_iter = complex32_reader.into_iter();
 
         let mut gops_received = 0;
         eprintln!("GOPS Received: {}", gops_received);
 
         loop {
             let y_dct_out = into_transform_block_3d_dct(
-                &mut ofdm_symbol_iter,
+                &mut complex32_buf_iter,
                 self.gop_len,
                 self.asset_resolution,
                 self.y_chunk_dim,
@@ -99,13 +100,13 @@ impl FileWriterDecoder {
             eprintln!("GOPS Received: {}", gops_received);
 
             let cb_dct_out = into_transform_block_3d_dct(
-                &mut ofdm_symbol_iter,
+                &mut complex32_buf_iter,
                 self.gop_len,
                 self.asset_resolution,
                 self.cb_chunk_dim,
             )?;
             let cr_dct_out = into_transform_block_3d_dct(
-                &mut ofdm_symbol_iter,
+                &mut complex32_buf_iter,
                 self.gop_len,
                 self.asset_resolution,
                 self.cr_chunk_dim,
@@ -153,8 +154,11 @@ fn slices_allocation<PixelType: HasPixelComponentType>(
     ))
 }
 
-fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Item = OFDMSymbol>>(
-    ofdm_symbol_iter: &mut O,
+fn into_transform_block_3d_dct<
+    PixelType: HasPixelComponentType,
+    O: Iterator<Item = Box<[Complex32]>>,
+>(
+    complex32_buf_iter: &mut O,
     gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
@@ -166,6 +170,19 @@ fn into_transform_block_3d_dct<PixelType: HasPixelComponentType, O: Iterator<Ite
     let chunks_per_gop =
         (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
+    // TODO: Factor OFDMFrameSynchronizer to take [Complex32] instead of fixed length OFDMSymbols
+    let mut complex32_iter = complex32_buf_iter.flatten();
+    let ofdm_symbol_iter = std::iter::from_fn(move || {
+        // TODO: can get rid of this copy
+        let time_domain_symbols: Box<_> = complex32_iter.by_ref().take(OFDM_SYMBOL_LEN).collect();
+        if time_domain_symbols.is_empty() {
+            return None;
+        }
+        assert_eq!(OFDM_SYMBOL_LEN, time_domain_symbols.len());
+        Some(OFDMSymbol {
+            time_domain_symbols,
+        })
+    });
     let synchonizer: OFDMFrameSynchronizer<_> = ofdm_symbol_iter.into();
     let metadata_demodulator: MetadataDemodulator<_> = synchonizer.into();
     let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();

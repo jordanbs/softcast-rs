@@ -15,21 +15,21 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::decoder::OFDMSymbolReader;
-use crate::encoder::OFDMSymbolWriter;
-use crate::framing::OFDMSymbol;
+use crate::decoder::Complex32Reader;
+use crate::encoder::Complex32Consumer;
+use num_complex::Complex32;
 
 pub struct MPSCWriter {
-    pub sender: std::sync::mpsc::SyncSender<OFDMSymbol>,
+    pub sender: std::sync::mpsc::SyncSender<Box<[Complex32]>>,
 }
-impl OFDMSymbolWriter for MPSCWriter {
-    fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>> {
-        self.sender.send(symbol).map_err(|e| e.into())
+impl Complex32Consumer for MPSCWriter {
+    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>> {
+        self.sender.send(buf).map_err(|e| e.into())
     }
 }
 impl MPSCWriter {
     pub fn new_channel() -> (Self, MPSCReader) {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(0x80); // 64 KiB
+        let (sender, receiver) = std::sync::mpsc::sync_channel(0x400); // 8MiB
         let writer = Self { sender };
         let reader = MPSCReader { receiver };
         (writer, reader)
@@ -37,11 +37,11 @@ impl MPSCWriter {
 }
 
 pub struct MPSCReader {
-    pub receiver: std::sync::mpsc::Receiver<OFDMSymbol>,
+    pub receiver: std::sync::mpsc::Receiver<Box<[Complex32]>>,
 }
 
-impl OFDMSymbolReader for MPSCReader {
-    fn into_iter(self) -> impl Iterator<Item = OFDMSymbol> {
+impl Complex32Reader for MPSCReader {
+    fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>> {
         self.receiver.into_iter()
     }
 }

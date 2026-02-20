@@ -15,8 +15,8 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::encoder::OFDMSymbolWriter;
-use crate::framing::{OFDM_SYMBOL_LEN, OFDMSymbol};
+use crate::encoder::Complex32Consumer;
+use crate::framing::OFDM_SYMBOL_LEN;
 use crate::sync::*;
 use limesuite_sys;
 use num_complex::Complex32;
@@ -81,20 +81,19 @@ impl TransmitDevice {
         Ok(())
     }
 }
-impl OFDMSymbolWriter for TransmitDevice {
-    fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>> {
+impl Complex32Consumer for TransmitDevice {
+    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>> {
         if !self.activated {
             self.activated = true;
             self.stream.activate(None)?;
         }
 
         if let Some(dump_file) = self.dump_file.as_mut() {
-            write_ofdm_symbol(dump_file, &symbol)?;
+            write_complex32_symbols(dump_file, &buf)?;
         }
 
-        let buffers = [symbol.time_domain_symbols.as_slice()];
         self.stream
-            .write_all(&buffers, None, false, i32::MAX as i64)?; // TODO: consider using burst
+            .write_all(&[&buf], None, false, i32::MAX as i64)?; // TODO: consider using burst
 
         Ok(())
     }
@@ -150,19 +149,16 @@ impl ReceiveDevice {
             self.activated = true;
         }
         loop {
-            let mut ofdm_symbol_buf = [Complex32::default(); OFDM_SYMBOL_LEN];
+            let mut ofdm_symbol_buf = vec![Complex32::default(); OFDM_SYMBOL_LEN];
             let mut samples_read = 0;
             while OFDM_SYMBOL_LEN != samples_read {
                 let read_buf = &mut ofdm_symbol_buf[samples_read..];
                 samples_read += self.stream.read(&mut [read_buf], i32::MAX as i64)?;
             }
-            let ofdm_symbol = OFDMSymbol {
-                time_domain_symbols: ofdm_symbol_buf,
-            };
             if let Some(dump_file) = self.dump_file.as_mut() {
-                write_ofdm_symbol(dump_file, &ofdm_symbol)?;
+                write_complex32_symbols(dump_file, &ofdm_symbol_buf)?;
             }
-            self.mpsc_writer.write(ofdm_symbol)?;
+            self.mpsc_writer.consume(ofdm_symbol_buf.into())?;
         }
     }
     pub fn take_mpsc_reader(&mut self) -> MPSCReader {
@@ -488,11 +484,11 @@ fn create_dump_file(is_write: bool) -> std::fs::File {
     }
 }
 
-fn write_ofdm_symbol(
+fn write_complex32_symbols(
     file: &mut std::fs::File,
-    symbol: &OFDMSymbol,
+    buf: &[Complex32],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for iq in symbol.time_domain_symbols {
+    for iq in buf {
         file.write_all(&iq.re.to_be_bytes())?;
         file.write_all(&iq.im.to_be_bytes())?;
     }
@@ -857,6 +853,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(false)] // needs hardware to run
     fn test_limesuite_device() {
         let radio_params = RadioParams {
             device_idx: 0,
@@ -872,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    //     #[cfg(false)] // needs hardware to run
+    #[cfg(false)] // needs hardware to run
     fn test_limesuite_sdr_loopback_flexframegen_lo() {
         let original_payload = [0xbau8; 0x80];
         let iq_symbols = unsafe {
@@ -990,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    //     #[cfg(false)] // needs hardware to run
+    #[cfg(false)] // needs hardware to run
     fn test_limesuite_sdr_loopback_flexframegen_hi() {
         let original_payload = [0xbau8; 0x80];
         let iq_symbols = unsafe {

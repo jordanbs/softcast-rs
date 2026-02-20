@@ -28,10 +28,12 @@ use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
+use num_complex::Complex32;
 use rand::Rng;
 
-pub trait OFDMSymbolWriter {
-    fn write(&mut self, symbol: OFDMSymbol) -> Result<(), Box<dyn std::error::Error>>;
+pub trait Complex32Consumer {
+    // consumes buf, so it can be sent without copies
+    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub struct FileReaderEncoder {
@@ -131,7 +133,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
 }
 
 impl FileReaderEncoder {
-    pub fn run<W: OFDMSymbolWriter>(
+    pub fn run<W: Complex32Consumer>(
         &mut self,
         mut ofdm_symbol_writer: W,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -179,7 +181,7 @@ impl FileReaderEncoder {
             });
 
             for symbol in encoder_plus_noise {
-                ofdm_symbol_writer.write(symbol)?;
+                ofdm_symbol_writer.consume(symbol.time_domain_symbols)?;
             }
         }
         Ok(())

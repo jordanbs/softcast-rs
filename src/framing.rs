@@ -29,13 +29,13 @@ static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug)]
 pub struct OFDMSymbol {
-    pub time_domain_symbols: [Complex32; FRAME_LEN],
+    pub time_domain_symbols: Box<[Complex32]>,
 }
 
 impl Default for OFDMSymbol {
     fn default() -> Self {
         Self {
-            time_domain_symbols: [Complex32::default(); FRAME_LEN],
+            time_domain_symbols: vec![Complex32::default(); FRAME_LEN].into(),
         }
     }
 }
