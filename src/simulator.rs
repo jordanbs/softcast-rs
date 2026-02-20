@@ -23,7 +23,7 @@ pub fn run_simulation(
     mut encoder: FileReaderEncoder,
     mut decoder: FileWriterDecoder,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (mpsc_writer, mpsc_reader) = MPSCWriter::new_channel();
+    let (mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
     let decoder_result = std::thread::spawn(move || {
         let result = decoder.run(mpsc_reader).map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);

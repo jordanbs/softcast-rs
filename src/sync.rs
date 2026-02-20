@@ -28,8 +28,8 @@ impl Complex32Consumer for MPSCWriter {
     }
 }
 impl MPSCWriter {
-    pub fn new_channel() -> (Self, MPSCReader) {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(0x400); // 8MiB
+    pub fn new_channel(max_queue_size: usize) -> (Self, MPSCReader) {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(max_queue_size);
         let writer = Self { sender };
         let reader = MPSCReader { receiver };
         (writer, reader)

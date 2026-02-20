@@ -128,22 +128,22 @@ fn loopback(
         device_idx: 0,
         channel: 0,
         antenna: "BAND1".to_string(),
-        gain: 30.0,
-        frequency: 1_536_000_000.0,
-        sample_rate: 384_000.0,
-        bandwidth: 6_000_000.0,
+        gain: 0.6,
+        frequency: 800_000_000.0,
+        sample_rate: 192_000.0,
+        bandwidth: 2_500_000.0,
     };
     let rx_params = RadioParams {
         device_idx: tx_params.device_idx,
         channel: 1,
-        antenna: "LNAH".to_string(),
-        gain: 50.0,
+        antenna: "LNAL".to_string(),
+        gain: 0.7,
         frequency: tx_params.frequency,
         sample_rate: tx_params.sample_rate,
         bandwidth: tx_params.bandwidth,
     };
-    let tx_radio = TransmitDevice::try_new(tx_params, false)?;
-    let mut rx_radio = ReceiveDevice::try_new(rx_params, &tx_radio.sdr, true)?;
+    let mut tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
+    let mut rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
     let mut encoder = FileReaderEncoder::try_new(
         infile,
         gop_len,
@@ -164,6 +164,9 @@ fn loopback(
         c_chunk_dimensions,
         c_chunk_dimensions,
     )?;
+
+    rx_radio.activate()?;
+    tx_radio.activate()?;
 
     let ofdm_symbol_reader = rx_radio.take_mpsc_reader();
     let rx_radio_join = rx_radio.run_async();

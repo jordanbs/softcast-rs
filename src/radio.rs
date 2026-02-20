@@ -310,6 +310,17 @@ impl LimeTransmitDevice {
     }
 }
 
+impl Complex32Consumer for LimeTransmitDevice {
+    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut write_buf = &buf[..];
+        while !write_buf.is_empty() {
+            let symbols_sent = self.write(&write_buf)?;
+            write_buf = &write_buf[symbols_sent..];
+        }
+        Ok(())
+    }
+}
+
 impl Drop for LimeTransmitDevice {
     fn drop(&mut self) {
         // unsafe {
@@ -324,8 +335,8 @@ impl Drop for LimeTransmitDevice {
 pub struct LimeReceiveDevice {
     //     device: *mut limesuite_sys::lms_device_t,
     stream: Box<limesuite_sys::lms_stream_t>,
-    mpsc_sender: std::sync::mpsc::SyncSender<Vec<Complex32>>,
-    mpsc_receiver: Option<std::sync::mpsc::Receiver<Vec<Complex32>>>,
+    mpsc_writer: MPSCWriter,
+    mpsc_reader: Option<MPSCReader>,
     dump_file: Option<std::fs::File>,
 }
 
@@ -404,14 +415,14 @@ impl LimeReceiveDevice {
                 return Err("Failed to set up LimeSDR tx stream.".into());
             }
 
-            let (mpsc_sender, mpsc_receiver) = std::sync::mpsc::sync_channel(
+            let (mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(
                 Self::RECEIVE_BUF_SIZE_IN_SAMPLES / Self::READ_BUF_SIZE_IN_SAMPLES,
             );
 
             Ok(Self {
                 stream,
-                mpsc_sender,
-                mpsc_receiver: Some(mpsc_receiver),
+                mpsc_writer,
+                mpsc_reader: Some(mpsc_reader),
                 dump_file: dump_file.then(|| create_dump_file(false)),
             })
         }
@@ -448,13 +459,11 @@ impl LimeReceiveDevice {
             if let Some(dump_file) = self.dump_file.as_mut() {
                 write_symbols(dump_file, &read_buf)?;
             }
-            self.mpsc_sender.send(read_buf)?;
+            self.mpsc_writer.sender.send(read_buf.into())?;
         }
     }
-    pub fn take_mpsc_receiver(&mut self) -> std::sync::mpsc::Receiver<Vec<Complex32>> {
-        self.mpsc_receiver
-            .take()
-            .expect("MPSCReader already taken.")
+    pub fn take_mpsc_reader(&mut self) -> MPSCReader {
+        self.mpsc_reader.take().expect("MPSCReader already taken.")
     }
     pub fn run_async(mut self) -> std::thread::JoinHandle<Result<(), std::string::String>> {
         std::thread::spawn(move || self.run().map_err(|e| e.to_string()))
@@ -871,6 +880,8 @@ mod tests {
     #[test]
     #[cfg(false)] // needs hardware to run
     fn test_limesuite_sdr_loopback_flexframegen_lo() {
+        use crate::decoder::Complex32Reader;
+
         let original_payload = [0xbau8; 0x80];
         let iq_symbols = unsafe {
             let mut props: flexframegenprops_s = std::mem::zeroed();
@@ -928,7 +939,7 @@ mod tests {
         let mut tx_device = LimeTransmitDevice::try_new(tx_params, false).unwrap();
         let mut rx_device = LimeReceiveDevice::try_new(rx_params, tx_device.device, false).unwrap();
 
-        let iq_iter = rx_device.take_mpsc_receiver().into_iter().flatten();
+        let iq_iter = rx_device.take_mpsc_reader().into_iter().flatten();
 
         // rx should be activated before tx
         rx_device.activate().expect("Failed to activate rx");
@@ -989,6 +1000,8 @@ mod tests {
     #[test]
     #[cfg(false)] // needs hardware to run
     fn test_limesuite_sdr_loopback_flexframegen_hi() {
+        use crate::decoder::Complex32Reader;
+
         let original_payload = [0xbau8; 0x80];
         let iq_symbols = unsafe {
             let mut props: flexframegenprops_s = std::mem::zeroed();
@@ -1046,7 +1059,7 @@ mod tests {
         let mut tx_device = LimeTransmitDevice::try_new(tx_params, false).unwrap();
         let mut rx_device = LimeReceiveDevice::try_new(rx_params, tx_device.device, false).unwrap();
 
-        let iq_iter = rx_device.take_mpsc_receiver().into_iter().flatten();
+        let iq_iter = rx_device.take_mpsc_reader().into_iter().flatten();
 
         // rx should be activated before tx
         rx_device.activate().expect("Failed to activate rx");
