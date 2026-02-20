@@ -180,7 +180,7 @@ pub struct LimeTransmitDevice {
 }
 
 impl LimeTransmitDevice {
-    const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8Kib of Complex32 samples
+    const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000; // 8MiB of Complex32 samples
 
     pub fn try_new(
         params: RadioParams,
@@ -265,7 +265,7 @@ impl LimeTransmitDevice {
                 isTx: true,
                 handle: 0,
                 fifoSize: Self::SEND_BUF_SIZE_IN_SAMPLES as u32,
-                throughputVsLatency: 1.0, // maximize throughput
+                throughputVsLatency: 0.5, // balance latency and throughput to prevent underruns
             });
             if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
                 return Err("Failed to set up LimeSDR tx stream.".into());
@@ -336,8 +336,8 @@ pub struct LimeReceiveDevice {
 unsafe impl Send for LimeReceiveDevice {}
 
 impl LimeReceiveDevice {
+    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x100_000; // 8MiB of Complex32 samples
     const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8KiB of Complex32 samples
-    const MAX_NUM_READ_BUFS: usize = 0x8000; // 2GiB maximum memory usage
 
     pub fn try_new(
         params: RadioParams,
@@ -401,15 +401,16 @@ impl LimeReceiveDevice {
                 linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_DEFAULT,
                 isTx: false,
                 handle: 0, // not to be modified manually
-                fifoSize: Self::READ_BUF_SIZE_IN_SAMPLES as u32,
+                fifoSize: Self::RECEIVE_BUF_SIZE_IN_SAMPLES as u32,
                 throughputVsLatency: 1.0, // maximize throughput
             });
             if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
                 return Err("Failed to set up LimeSDR tx stream.".into());
             }
 
-            let (mpsc_sender, mpsc_receiver) =
-                std::sync::mpsc::sync_channel(Self::MAX_NUM_READ_BUFS);
+            let (mpsc_sender, mpsc_receiver) = std::sync::mpsc::sync_channel(
+                Self::RECEIVE_BUF_SIZE_IN_SAMPLES / Self::READ_BUF_SIZE_IN_SAMPLES,
+            );
 
             Ok(Self {
                 stream,
@@ -434,13 +435,17 @@ impl LimeReceiveDevice {
             let mut read_buf = vec![Complex32::default(); Self::READ_BUF_SIZE_IN_SAMPLES];
             let samples_read = unsafe {
                 let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();
-                limesuite_sys::LMS_RecvStream(
+                let num_symbols_read_or_failure = limesuite_sys::LMS_RecvStream(
                     self.stream.as_mut(),
                     read_buf.as_mut_ptr() as *mut std::ffi::c_void,
                     read_buf.len(),
                     &mut metadata,
                     u32::MAX, // no timeout
-                ) as usize
+                );
+                if 0 > num_symbols_read_or_failure {
+                    return Err("LMS_RecvStream failed.".into());
+                }
+                num_symbols_read_or_failure as usize
             };
             read_buf.truncate(samples_read);
 
@@ -867,13 +872,15 @@ mod tests {
     }
 
     #[test]
-    #[cfg(false)] // needs hardware to run
-    fn test_limesuite_sdr_loopback_flexframegen() {
+    //     #[cfg(false)] // needs hardware to run
+    fn test_limesuite_sdr_loopback_flexframegen_lo() {
         let original_payload = [0xbau8; 0x80];
         let iq_symbols = unsafe {
             let mut props: flexframegenprops_s = std::mem::zeroed();
             let status = flexframegenprops_init_default(&mut props) as u32;
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            props.check = liquid_sys::crc_scheme_LIQUID_CRC_NONE;
 
             let flexframegen = flexframegen_create(&mut props);
             assert_ne!(flexframegen, std::ptr::null_mut());
@@ -898,7 +905,7 @@ mod tests {
             // LimeSuite doesn't deal well with values > 1.0
             // flexframegen pushes samples to right about 1.0, sometimes over.
             for iq in iq_symbols.iter_mut() {
-                *iq *= 0.1;
+                *iq *= 0.5;
             }
             iq_symbols
         };
@@ -907,7 +914,7 @@ mod tests {
             device_idx: 0,
             antenna: "BAND1".to_string(),
             frequency: 800_000_000.0,
-            bandwidth: 6_000_000.0,
+            bandwidth: 2_500_000.0,
             channel: 0,
             gain: 0.7,
             sample_rate: 192_000.0,
@@ -916,7 +923,7 @@ mod tests {
             device_idx: 0,
             antenna: "LNAL".to_string(),
             frequency: 800_000_000.0,
-            bandwidth: 6_000_000.0,
+            bandwidth: 2_500_000.0,
             channel: 1,
             gain: 0.8,
             sample_rate: 192_000.0,
@@ -935,6 +942,125 @@ mod tests {
         let mut send_buf = &iq_symbols[..];
         while !send_buf.is_empty() {
             let symbols_sent = tx_device.write(&send_buf).unwrap();
+            eprintln!("Wrote {symbols_sent} symbols.");
+            send_buf = &send_buf[symbols_sent..];
+        }
+
+        unsafe {
+            let iq_symbols: Vec<Complex32> = iq_iter.take(0x8000).collect();
+
+            extern "C" fn callback(
+                _header: *mut u8,
+                _header_valid: i32,
+                payload: *mut u8,
+                payload_len: u32,
+                payload_valid: i32,
+                _stats: framesyncstats_s,
+                user_data: *mut core::ffi::c_void,
+            ) -> i32 {
+                unsafe {
+                    if 0 != payload_valid {
+                        let new_payload = std::slice::from_raw_parts(payload, payload_len as usize);
+                        let decoded_payload = (user_data as *mut Vec<u8>).as_mut().unwrap();
+                        decoded_payload.extend_from_slice(new_payload);
+                    }
+
+                    0
+                }
+            }
+
+            let mut decoded_payload: Vec<u8> = vec![];
+            let decoded_payload_ptr: *mut Vec<u8> = &mut decoded_payload;
+
+            let flexframesync = flexframesync_create(
+                Some(callback),
+                decoded_payload_ptr as *mut core::ffi::c_void,
+            );
+            assert_ne!(flexframesync, std::ptr::null_mut());
+
+            let status = flexframesync_execute(
+                flexframesync,
+                iq_symbols.as_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            assert_eq!(original_payload.to_vec(), decoded_payload);
+        }
+    }
+
+    #[test]
+    //     #[cfg(false)] // needs hardware to run
+    fn test_limesuite_sdr_loopback_flexframegen_hi() {
+        let original_payload = [0xbau8; 0x80];
+        let iq_symbols = unsafe {
+            let mut props: flexframegenprops_s = std::mem::zeroed();
+            let status = flexframegenprops_init_default(&mut props) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            props.check = liquid_sys::crc_scheme_LIQUID_CRC_NONE;
+
+            let flexframegen = flexframegen_create(&mut props);
+            assert_ne!(flexframegen, std::ptr::null_mut());
+
+            let status = flexframegen_assemble(
+                flexframegen,
+                std::ptr::null(),
+                &original_payload as *const u8,
+                original_payload.len() as u32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let frame_len = flexframegen_getframelen(flexframegen) as usize;
+            let mut iq_symbols = vec![Complex32::default(); frame_len];
+            let frame_complete = flexframegen_write_samples(
+                flexframegen,
+                iq_symbols.as_mut_ptr() as *mut Complex32,
+                iq_symbols.len() as u32,
+            );
+            assert!(0 != frame_complete);
+
+            // LimeSuite doesn't deal well with values > 1.0
+            // flexframegen pushes samples to right about 1.0, sometimes over.
+            for iq in iq_symbols.iter_mut() {
+                *iq *= 0.5;
+            }
+            iq_symbols
+        };
+
+        let tx_params = RadioParams {
+            device_idx: 0,
+            antenna: "BAND2".to_string(),
+            frequency: 2_200_000_000.0,
+            bandwidth: 2_500_000.0,
+            channel: 1,
+            gain: 0.7,
+            sample_rate: 192_000.0,
+        };
+        let rx_params = RadioParams {
+            device_idx: 0,
+            antenna: "LNAH".to_string(),
+            frequency: 2_200_000_000.0,
+            bandwidth: 2_500_000.0,
+            channel: 0,
+            gain: 0.8,
+            sample_rate: 192_000.0,
+        };
+        let mut tx_device = LimeTransmitDevice::try_new(tx_params, false).unwrap();
+        let mut rx_device = LimeReceiveDevice::try_new(rx_params, tx_device.device, false).unwrap();
+
+        let iq_iter = rx_device.take_mpsc_receiver().into_iter().flatten();
+
+        // rx should be activated before tx
+        rx_device.activate().expect("Failed to activate rx");
+        tx_device.activate().expect("Failed to activate tx");
+
+        rx_device.run_async();
+
+        let mut send_buf = &iq_symbols[..];
+        while !send_buf.is_empty() {
+            let symbols_sent = tx_device.write(&send_buf).unwrap();
+            eprintln!("Wrote {symbols_sent} symbols.");
             send_buf = &send_buf[symbols_sent..];
         }
 
