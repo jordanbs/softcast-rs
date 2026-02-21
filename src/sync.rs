@@ -23,7 +23,11 @@ pub struct MPSCWriter {
     pub sender: std::sync::mpsc::SyncSender<Box<[Complex32]>>,
 }
 impl Complex32Consumer for MPSCWriter {
-    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>> {
+    fn consume(
+        &mut self,
+        buf: Box<[Complex32]>,
+        _flush: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         self.sender.send(buf).map_err(|e| e.into())
     }
 }

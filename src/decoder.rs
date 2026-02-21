@@ -174,13 +174,22 @@ fn into_transform_block_3d_dct<
     let mut complex32_iter = complex32_buf_iter.flatten();
     let ofdm_symbol_iter = std::iter::from_fn(move || {
         // TODO: can get rid of this copy
-        let time_domain_symbols: Box<_> = complex32_iter.by_ref().take(OFDM_SYMBOL_LEN).collect();
+        let mut time_domain_symbols: Vec<_> =
+            complex32_iter.by_ref().take(OFDM_SYMBOL_LEN).collect();
         if time_domain_symbols.is_empty() {
             return None;
         }
+        if OFDM_SYMBOL_LEN > time_domain_symbols.len() {
+            time_domain_symbols.extend(
+                [Complex32::default()]
+                    .iter()
+                    .cycle()
+                    .take(OFDM_SYMBOL_LEN - time_domain_symbols.len()),
+            );
+        }
         assert_eq!(OFDM_SYMBOL_LEN, time_domain_symbols.len());
         Some(OFDMSymbol {
-            time_domain_symbols,
+            time_domain_symbols: time_domain_symbols.into(),
         })
     });
     let synchonizer: OFDMFrameSynchronizer<_> = ofdm_symbol_iter.into();

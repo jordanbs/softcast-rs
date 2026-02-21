@@ -33,7 +33,11 @@ use rand::Rng;
 
 pub trait Complex32Consumer {
     // consumes buf, so it can be sent without copies
-    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>>;
+    fn consume(
+        &mut self,
+        buf: Box<[Complex32]>,
+        flush: bool,
+    ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub struct FileReaderEncoder {
@@ -180,8 +184,18 @@ impl FileReaderEncoder {
                 ofdmsymbol
             });
 
-            for symbol in encoder_plus_noise {
-                ofdm_symbol_writer.consume(symbol.time_domain_symbols)?;
+            // TODO: Factor this out
+            let encoder_attenuated = encoder_plus_noise.map(|mut ofdmsymbol| {
+                for iq in ofdmsymbol.time_domain_symbols.iter_mut() {
+                    *iq *= 0.1;
+                }
+                ofdmsymbol
+            });
+
+            let mut encoder = encoder_attenuated.peekable();
+            while let Some(symbol) = encoder.next() {
+                let flush = encoder.peek().is_none();
+                ofdm_symbol_writer.consume(symbol.time_domain_symbols, flush)?; // TODO: consume/write should accept a slice
             }
         }
         Ok(())

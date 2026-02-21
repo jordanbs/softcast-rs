@@ -82,7 +82,11 @@ impl TransmitDevice {
     }
 }
 impl Complex32Consumer for TransmitDevice {
-    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>> {
+    fn consume(
+        &mut self,
+        buf: Box<[Complex32]>,
+        _flush: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if !self.activated {
             self.activated = true;
             self.stream.activate(None)?;
@@ -158,7 +162,7 @@ impl ReceiveDevice {
             if let Some(dump_file) = self.dump_file.as_mut() {
                 write_complex32_symbols(dump_file, &ofdm_symbol_buf)?;
             }
-            self.mpsc_writer.consume(ofdm_symbol_buf.into())?;
+            self.mpsc_writer.consume(ofdm_symbol_buf.into(), false)?;
         }
     }
     pub fn take_mpsc_reader(&mut self) -> MPSCReader {
@@ -284,10 +288,14 @@ impl LimeTransmitDevice {
         Ok(())
     }
 
-    pub fn write(&mut self, symbols: &[Complex32]) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn write(
+        &mut self,
+        symbols: &[Complex32],
+        flush: bool,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
         let num_symbols_written = unsafe {
             let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();
-            metadata.flushPartialPacket = true;
+            metadata.flushPartialPacket = flush;
             let num_symbols_sent_or_failure = limesuite_sys::LMS_SendStream(
                 self.stream.as_mut(),
                 symbols.as_ptr() as *const std::ffi::c_void,
@@ -311,10 +319,14 @@ impl LimeTransmitDevice {
 }
 
 impl Complex32Consumer for LimeTransmitDevice {
-    fn consume(&mut self, buf: Box<[Complex32]>) -> Result<(), Box<dyn std::error::Error>> {
+    fn consume(
+        &mut self,
+        buf: Box<[Complex32]>,
+        flush: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut write_buf = &buf[..];
         while !write_buf.is_empty() {
-            let symbols_sent = self.write(&write_buf)?;
+            let symbols_sent = self.write(&write_buf, flush)?;
             write_buf = &write_buf[symbols_sent..];
         }
         Ok(())
@@ -343,7 +355,7 @@ pub struct LimeReceiveDevice {
 unsafe impl Send for LimeReceiveDevice {}
 
 impl LimeReceiveDevice {
-    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x100_000; // 8MiB of Complex32 samples
+    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x8_000_000; // 1GiB of Complex32 samples
     const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8KiB of Complex32 samples
 
     pub fn try_new(
