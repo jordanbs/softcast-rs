@@ -171,10 +171,12 @@ impl<I: Iterator<Item = QuadratureSymbol>> Drop for OFDMFrameGenerator<I> {
     }
 }
 
-pub struct OFDMFrameSynchronizer<I: Iterator<Item = OFDMSymbol>> {
-    ofdm_symbol_iter: I,
+pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
+    iq_buf_iter: I,
     ofdm_framesync: liquid_sys::ofdmframesync,
     callback_context: Box<CallbackContext>,
+    working_iq_buf: Option<Box<[Complex32]>>,
+    working_iq_symbols_consumed: usize,
 }
 
 #[allow(non_snake_case)]
@@ -197,7 +199,7 @@ extern "C" fn ofdm_framesync_callback(
 
 #[derive(Default)]
 struct CallbackContext {
-    time_domain_symbols: std::collections::VecDeque<QuadratureSymbol>,
+    freq_domain_symbols: std::collections::VecDeque<QuadratureSymbol>,
 }
 
 impl CallbackContext {
@@ -218,12 +220,19 @@ impl CallbackContext {
                 })
                 .map(|(_, sample)| QuadratureSymbol { value: *sample }),
         );
-        self.time_domain_symbols.append(&mut new_samples);
+        self.freq_domain_symbols.append(&mut new_samples);
     }
 }
 
-impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
-    fn from(ofdm_symbol_iter: I) -> Self {
+impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
+    pub fn reset(&mut self) {
+        let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
+        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+    }
+}
+
+impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> {
+    fn from(iq_buf_iter: I) -> Self {
         let mut callback_context_box = Box::new(CallbackContext::default());
         let callback_context_ptr: *mut CallbackContext = callback_context_box.as_mut();
         let callback_context_ptr = callback_context_ptr as *mut core::ffi::c_void;
@@ -245,40 +254,63 @@ impl<I: Iterator<Item = OFDMSymbol>> From<I> for OFDMFrameSynchronizer<I> {
         assert_ne!(std::ptr::null_mut(), ofdm_framesync);
 
         Self {
-            ofdm_symbol_iter,
+            iq_buf_iter,
             ofdm_framesync,
             callback_context: callback_context_box,
+            working_iq_buf: None,
+            working_iq_symbols_consumed: 0,
         }
     }
 }
 
-impl<I: Iterator<Item = OFDMSymbol>> Iterator for OFDMFrameSynchronizer<I> {
+impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I> {
     type Item = QuadratureSymbol;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.callback_context.time_domain_symbols.is_empty() {
-            let ofdm_symbol = self.ofdm_symbol_iter.next()?; // breaks iteration
+        while self.callback_context.freq_domain_symbols.is_empty() {
+            if self.working_iq_buf.is_none() {
+                let new_buf = self.iq_buf_iter.next()?; // breaks iteration
+                if new_buf.is_empty() {
+                    continue;
+                }
+                self.working_iq_buf = Some(new_buf);
+            }
+            let iq_buf = self.working_iq_buf.as_ref().unwrap();
+
+            // TODO: reduce calls to ofdmframesync_execute by plumbing frame_length once discovered
+            let symbols_to_consume = 1;
+            let start_pos = self.working_iq_symbols_consumed;
+            let end_pos = self.working_iq_symbols_consumed + symbols_to_consume;
+
+            let iq_buf_to_consume = &iq_buf[start_pos..end_pos];
+            self.working_iq_symbols_consumed += symbols_to_consume;
+
             let status = unsafe {
-                // Pushes samples to self.time_domain_symbols via ofdm_framesync_callback.
+                // Pushes samples to self.freq_domain_symbols via ofdm_framesync_callback.
                 liquid_sys::ofdmframesync_execute(
                     self.ofdm_framesync,
-                    ofdm_symbol.time_domain_symbols.as_ptr() as *mut Complex32,
-                    FRAME_LEN as u32,
+                    iq_buf_to_consume.as_ptr() as *mut Complex32,
+                    iq_buf_to_consume.len() as u32,
                 )
             } as u32;
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            if self.working_iq_symbols_consumed == iq_buf.len() {
+                self.working_iq_buf = None;
+                self.working_iq_symbols_consumed = 0;
+            }
         }
 
         let q_symbol = self
             .callback_context
-            .time_domain_symbols
+            .freq_domain_symbols
             .pop_front()
             .expect("time_domain_symbols unexepectly empty.");
         Some(q_symbol)
     }
 }
 
-impl<I: Iterator<Item = OFDMSymbol>> Drop for OFDMFrameSynchronizer<I> {
+impl<I: Iterator<Item = Box<[Complex32]>>> Drop for OFDMFrameSynchronizer<I> {
     fn drop(&mut self) {
         let status = unsafe { liquid_sys::ofdmframesync_destroy(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
@@ -308,7 +340,10 @@ mod tests {
         let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator.collect();
         eprintln!("{:?}", ofdm_symbols);
 
-        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols.into_iter().into();
+        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols
+            .into_iter()
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.collect();
 
@@ -344,7 +379,10 @@ mod tests {
         let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator.collect();
         eprintln!("{:?}", ofdm_symbols);
 
-        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols.into_iter().into();
+        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols
+            .into_iter()
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.collect();
 
@@ -405,7 +443,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+        let synchronizer: OFDMFrameSynchronizer<_> = framer
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
 
@@ -449,7 +489,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+        let synchronizer: OFDMFrameSynchronizer<_> = framer
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -533,7 +575,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+        let synchronizer: OFDMFrameSynchronizer<_> = framer
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -618,7 +662,9 @@ mod tests {
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
         let ofdm_generator: OFDMFrameGenerator<_> = metadata_modulator.flatten().into();
 
-        let ofdm_synchronizer: OFDMFrameSynchronizer<_> = ofdm_generator.into();
+        let ofdm_synchronizer: OFDMFrameSynchronizer<_> = ofdm_generator
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
         let metadata_demodulator: MetadataDemodulator<_> = ofdm_synchronizer.into();
         let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
         let decompressor: MetadataDecompressor<(), _> =
@@ -923,7 +969,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+        let synchronizer: OFDMFrameSynchronizer<_> = framer
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -1059,7 +1107,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+        let synchronizer: OFDMFrameSynchronizer<_> = framer
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -1213,7 +1263,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer.into();
+        let synchronizer: OFDMFrameSynchronizer<_> = framer
+            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();

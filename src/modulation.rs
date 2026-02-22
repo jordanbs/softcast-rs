@@ -57,6 +57,7 @@ pub mod metadata {
 
     const MODULATION_SCHEME: u32 = liquid_sys::modulation_scheme_LIQUID_MODEM_BPSK;
 
+    // TODO: consider replacing with qpacketmodem
     pub struct MetadataModulator<I: Iterator<Item = EncodedPacket>> {
         modemcf_wrapper: ModemCFWrapper,
         inner: I,

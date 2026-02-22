@@ -83,14 +83,14 @@ impl FileWriterDecoder {
         self.asset_writer.start_writing()?;
         self.started_writing = true;
 
-        let mut complex32_buf_iter = complex32_reader.into_iter();
+        let mut frame_synchronizer: OFDMFrameSynchronizer<_> = complex32_reader.into_iter().into();
 
         let mut gops_received = 0;
         eprintln!("GOPS Received: {}", gops_received);
 
         loop {
             let y_dct_out = into_transform_block_3d_dct(
-                &mut complex32_buf_iter,
+                &mut frame_synchronizer,
                 self.gop_len,
                 self.asset_resolution,
                 self.y_chunk_dim,
@@ -100,17 +100,20 @@ impl FileWriterDecoder {
             eprintln!("GOPS Received: {}", gops_received);
 
             let cb_dct_out = into_transform_block_3d_dct(
-                &mut complex32_buf_iter,
+                &mut frame_synchronizer,
                 self.gop_len,
                 self.asset_resolution,
                 self.cb_chunk_dim,
             )?;
+            frame_synchronizer.reset();
+
             let cr_dct_out = into_transform_block_3d_dct(
-                &mut complex32_buf_iter,
+                &mut frame_synchronizer,
                 self.gop_len,
                 self.asset_resolution,
                 self.cr_chunk_dim,
             )?;
+            frame_synchronizer.reset();
 
             let new_macro_block_3d = MacroBlock3D {
                 y_components: y_dct_out.into(),
@@ -118,6 +121,8 @@ impl FileWriterDecoder {
                 cr_components: cr_dct_out.into(),
                 gop_len: self.gop_len,
             };
+            frame_synchronizer.reset();
+
             let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_> =
                 new_macro_block_3d.into();
 
@@ -156,9 +161,9 @@ fn slices_allocation<PixelType: HasPixelComponentType>(
 
 fn into_transform_block_3d_dct<
     PixelType: HasPixelComponentType,
-    O: Iterator<Item = Box<[Complex32]>>,
+    O: Iterator<Item = QuadratureSymbol>,
 >(
-    complex32_buf_iter: &mut O,
+    synchronizer: &mut O,
     gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
@@ -170,30 +175,7 @@ fn into_transform_block_3d_dct<
     let chunks_per_gop =
         (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-    // TODO: Factor OFDMFrameSynchronizer to take [Complex32] instead of fixed length OFDMSymbols
-    let mut complex32_iter = complex32_buf_iter.flatten();
-    let ofdm_symbol_iter = std::iter::from_fn(move || {
-        // TODO: can get rid of this copy
-        let mut time_domain_symbols: Vec<_> =
-            complex32_iter.by_ref().take(OFDM_SYMBOL_LEN).collect();
-        if time_domain_symbols.is_empty() {
-            return None;
-        }
-        if OFDM_SYMBOL_LEN > time_domain_symbols.len() {
-            time_domain_symbols.extend(
-                [Complex32::default()]
-                    .iter()
-                    .cycle()
-                    .take(OFDM_SYMBOL_LEN - time_domain_symbols.len()),
-            );
-        }
-        assert_eq!(OFDM_SYMBOL_LEN, time_domain_symbols.len());
-        Some(OFDMSymbol {
-            time_domain_symbols: time_domain_symbols.into(),
-        })
-    });
-    let synchonizer: OFDMFrameSynchronizer<_> = ofdm_symbol_iter.into();
-    let metadata_demodulator: MetadataDemodulator<_> = synchonizer.into();
+    let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
     let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
     let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
@@ -219,8 +201,7 @@ fn into_transform_block_3d_dct<
     let num_included_chunks = metadata_bitmap.values.count_ones();
     let num_included_slices = num_included_chunks.next_power_of_two();
 
-    let synchronizer: OFDMFrameSynchronizer<_> =
-        metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+    let synchronizer = metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
     let mut dct_allocation = slices_allocation::<PixelType>(
         gop_len,
