@@ -35,3 +35,44 @@ pub fn run_simulation(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_simulate() {
+        let infile = "sample-media/bipbop-1920x1080-5s.mp4";
+        let outfile = "/tmp/bipbop-1920x1080-5s.mp4";
+        let _ = std::fs::remove_file(outfile);
+        let gop_len = 2;
+        let compression_ratio = 0.01;
+        let noise_power = 0.0;
+        let y_chunk_dimensions = (48, 30, 1);
+        let c_chunk_dimensions = (40, 30, 1);
+        let encoder = FileReaderEncoder::try_new(
+            infile.into(),
+            gop_len,
+            compression_ratio,
+            noise_power,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            c_chunk_dimensions,
+        )
+        .expect("Failed to create encoder.");
+        let asset_resolution = encoder.asset_resolution();
+        let frame_rate = encoder.frame_rate();
+        let decoder = FileWriterDecoder::try_new(
+            outfile.into(),
+            asset_resolution,
+            frame_rate,
+            gop_len,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            c_chunk_dimensions,
+        )
+        .expect("Failed to create decoder.");
+        run_simulation(encoder, decoder).expect("run_simulation failed.");
+    }
+}

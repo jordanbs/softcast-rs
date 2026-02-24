@@ -95,6 +95,7 @@ impl FileWriterDecoder {
                 self.asset_resolution,
                 self.y_chunk_dim,
             )?;
+            frame_synchronizer.reset();
 
             gops_received += 1;
             eprintln!("GOPS Received: {}", gops_received);
@@ -121,8 +122,6 @@ impl FileWriterDecoder {
                 cr_components: cr_dct_out.into(),
                 gop_len: self.gop_len,
             };
-            frame_synchronizer.reset();
-
             let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_> =
                 new_macro_block_3d.into();
 

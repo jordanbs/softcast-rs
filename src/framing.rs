@@ -228,6 +228,8 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     pub fn reset(&mut self) {
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+        self.callback_context.freq_domain_symbols.clear();
     }
 }
 
@@ -278,12 +280,10 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
             let iq_buf = self.working_iq_buf.as_ref().unwrap();
 
             // TODO: reduce calls to ofdmframesync_execute by plumbing frame_length once discovered
-            let symbols_to_consume = 1;
+            let symbols_to_consume = 1.min(iq_buf.len() - self.working_iq_symbols_consumed);
             let start_pos = self.working_iq_symbols_consumed;
             let end_pos = self.working_iq_symbols_consumed + symbols_to_consume;
-
             let iq_buf_to_consume = &iq_buf[start_pos..end_pos];
-            self.working_iq_symbols_consumed += symbols_to_consume;
 
             let status = unsafe {
                 // Pushes samples to self.freq_domain_symbols via ofdm_framesync_callback.
@@ -295,6 +295,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
             } as u32;
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
+            self.working_iq_symbols_consumed += iq_buf_to_consume.len();
             if self.working_iq_symbols_consumed == iq_buf.len() {
                 self.working_iq_buf = None;
                 self.working_iq_symbols_consumed = 0;
@@ -362,11 +363,13 @@ mod tests {
 
     #[test]
     fn test_ofdm_multiple_frames() {
+        const FRAME_LEN: usize = 8;
+        let mut ofdm_symbols = vec![];
         let mut quadrature_symbols = vec![
             QuadratureSymbol {
                 value: Complex32::default()
             };
-            1037
+            FRAME_LEN
         ];
         for (idx, symbol) in quadrature_symbols.iter_mut().enumerate() {
             symbol.value.re = 0.01 * idx as f32;
@@ -375,26 +378,42 @@ mod tests {
         let quadrature_symbols_clone: std::collections::VecDeque<_> =
             quadrature_symbols.clone().into();
 
-        let ofdm_frame_generator: OFDMFrameGenerator<_> = quadrature_symbols.into_iter().into();
-        let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator.collect();
-        eprintln!("{:?}", ofdm_symbols);
-
-        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols
+        for _frame_idx in 0..2 {
+            let ofdm_frame_generator: OFDMFrameGenerator<_> =
+                quadrature_symbols.clone().into_iter().into();
+            ofdm_symbols.extend(ofdm_frame_generator);
+        }
+        let mut ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols
             .into_iter()
             .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
             .into();
 
-        let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.collect();
+        let new_quadrature_symbols_0: Vec<_> =
+            ofdm_frame_synchronizer.by_ref().take(FRAME_LEN).collect();
+        ofdm_frame_synchronizer.reset();
+        let new_quadrature_symbols_1: Vec<_> = ofdm_frame_synchronizer.take(FRAME_LEN).collect();
 
         // orig may be shorter than new, because of frame padding.
-        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols.len());
+        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols_0.len());
+        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols_1.len());
 
         for (orig, new) in quadrature_symbols_clone
             .iter()
-            .zip(new_quadrature_symbols.iter())
+            .zip(new_quadrature_symbols_0.iter())
         {
-            eprintln!("orig:{:?} new:{:?}", orig, new);
             assert!((orig.value.re - new.value.re).abs() < 0.0001);
+            assert!((orig.value.im - new.value.im).abs() < 0.0001);
+        }
+        for (orig, new) in quadrature_symbols_clone
+            .iter()
+            .zip(new_quadrature_symbols_1.iter())
+        {
+            assert!(
+                (orig.value.re - new.value.re).abs() < 0.0001,
+                "orig:{}, new:{}",
+                orig.value,
+                new.value
+            );
             assert!((orig.value.im - new.value.im).abs() < 0.0001);
         }
     }
