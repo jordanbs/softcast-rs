@@ -23,6 +23,7 @@ use num_complex::Complex32;
 // TODO: Interleave metadata and slice symbols.
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[repr(transparent)]
 pub struct QuadratureSymbol {
     pub value: Complex32,
 }

@@ -177,6 +177,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     callback_context: Box<CallbackContext>,
     working_iq_buf: Option<Box<[Complex32]>>,
     working_iq_symbols_consumed: usize,
+    freq_domain_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
 }
 
 #[allow(non_snake_case)]
@@ -199,7 +200,7 @@ extern "C" fn ofdm_framesync_callback(
 
 #[derive(Default)]
 struct CallbackContext {
-    freq_domain_symbols: std::collections::VecDeque<QuadratureSymbol>,
+    freq_domain_symbols: Option<Vec<QuadratureSymbol>>,
 }
 
 impl CallbackContext {
@@ -208,9 +209,12 @@ impl CallbackContext {
         subcarrier_samples: &[Complex32],
         subcarrier_allocation: &[u8],
     ) {
-        let mut new_samples: std::collections::VecDeque<_> =
-            std::collections::VecDeque::with_capacity(NUM_SUBCARRIERS);
-        new_samples.extend(
+        // TODO: When ofdmframesync accepts more samples at once, increase the capacity here to match
+        let freq_domain_symbols = self
+            .freq_domain_symbols
+            .get_or_insert_with(|| Vec::with_capacity(subcarrier_samples.len()));
+
+        freq_domain_symbols.extend(
             subcarrier_samples
                 .iter()
                 .enumerate()
@@ -220,7 +224,6 @@ impl CallbackContext {
                 })
                 .map(|(_, sample)| QuadratureSymbol { value: *sample }),
         );
-        self.freq_domain_symbols.append(&mut new_samples);
     }
 }
 
@@ -229,7 +232,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
-        self.callback_context.freq_domain_symbols.clear();
+        self.freq_domain_symbols_iter = vec![].into_iter().peekable();
     }
 }
 
@@ -261,6 +264,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             callback_context: callback_context_box,
             working_iq_buf: None,
             working_iq_symbols_consumed: 0,
+            freq_domain_symbols_iter: vec![].into_iter().peekable(),
         }
     }
 }
@@ -269,7 +273,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
     type Item = QuadratureSymbol;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.callback_context.freq_domain_symbols.is_empty() {
+        while self.freq_domain_symbols_iter.peek().is_none() {
             if self.working_iq_buf.is_none() {
                 let new_buf = self.iq_buf_iter.next()?; // breaks iteration
                 if new_buf.is_empty() {
@@ -300,13 +304,16 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
                 self.working_iq_buf = None;
                 self.working_iq_symbols_consumed = 0;
             }
+
+            if let Some(freq_domain_symbols) = self.callback_context.freq_domain_symbols.take() {
+                self.freq_domain_symbols_iter = freq_domain_symbols.into_iter().peekable();
+            }
         }
 
         let q_symbol = self
-            .callback_context
-            .freq_domain_symbols
-            .pop_front()
-            .expect("time_domain_symbols unexepectly empty.");
+            .freq_domain_symbols_iter
+            .next()
+            .expect("freq_domain_symbols_iter unexepectly empty.");
         Some(q_symbol)
     }
 }

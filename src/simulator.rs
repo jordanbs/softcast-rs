@@ -38,11 +38,11 @@ pub fn run_simulation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_simulate() {
+        use super::*;
+
         let infile = "sample-media/bipbop-1920x1080-5s.mp4";
         let outfile = "/tmp/bipbop-1920x1080-5s.mp4";
         let _ = std::fs::remove_file(outfile);
