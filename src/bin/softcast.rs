@@ -26,6 +26,14 @@ const DEFAULT_GOP_LEN: usize = 22;
 const DEFAULT_Y_CHUNK_DIMENSIONS: &str = "48x40x1";
 const DEFAULT_C_CHUNK_DIMENSIONS: &str = "40x30x1";
 const DEFAULT_NOISE_POWER: f32 = 0.0;
+const DEFAULT_GAIN: f64 = 0.7;
+const DEFAULT_FREQ: f64 = 800_000_000.0;
+const DEFAULT_SAMPLE_RATE: f64 = 384_000.0;
+const DEAFULT_BANDWIDTH: f64 = 2_500_000.0;
+const DEFAULT_TX_ANTENNA: &str = "BAND1";
+const DEFAULT_RX_ANTENNA: &str = "LNAL";
+const DEFAULT_TX_CHANNEL: usize = 0;
+const DEFAULT_RX_CHANNEL: usize = 1;
 
 #[derive(Parser)]
 struct Args {
@@ -56,6 +64,33 @@ enum Commands {
 
         #[arg(long="cbcr", value_parser = parse_dimensions, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(short, default_value_t = DEFAULT_FREQ)]
+        frequency: f64,
+
+        #[arg(short = 'n', default_value_t = DEFAULT_SAMPLE_RATE)]
+        sample_rate: f64,
+
+        #[arg(short, default_value_t = DEAFULT_BANDWIDTH)]
+        bandwidth: f64,
+
+        #[arg(long, default_value = DEFAULT_TX_ANTENNA)]
+        tx_antenna: String,
+
+        #[arg(long, default_value = DEFAULT_RX_ANTENNA)]
+        rx_antenna: String,
+
+        #[arg(long, default_value_t = DEFAULT_TX_CHANNEL)]
+        tx_channel: usize,
+
+        #[arg(long, default_value_t = DEFAULT_RX_CHANNEL)]
+        rx_channel: usize,
+
+        #[arg(long, default_value_t = DEFAULT_GAIN)]
+        tx_gain: f64,
+
+        #[arg(long, default_value_t = DEFAULT_GAIN)]
+        rx_gain: f64,
     },
     Simulate {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -123,25 +158,29 @@ fn loopback(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
+    frequency: f64,
+    sample_rate: f64,
+    bandwidth: f64,
+    tx_antenna: &str,
+    rx_antenna: &str,
+    tx_channel: usize,
+    rx_channel: usize,
+    tx_gain: f64,
+    rx_gain: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let tx_params = RadioParams {
-        device_idx: 0,
-        channel: 0,
-        antenna: "BAND1".to_string(),
-        gain: 0.6,
-        frequency: 800_000_000.0,
-        sample_rate: 192_000.0,
-        bandwidth: 2_500_000.0,
-    };
-    let rx_params = RadioParams {
-        device_idx: tx_params.device_idx,
-        channel: 1,
-        antenna: "LNAL".to_string(),
-        gain: 0.7,
-        frequency: tx_params.frequency,
-        sample_rate: tx_params.sample_rate,
-        bandwidth: tx_params.bandwidth,
-    };
+    let mut tx_params = RadioParams::default();
+    tx_params.frequency = frequency;
+    tx_params.sample_rate = sample_rate;
+    tx_params.bandwidth = bandwidth;
+    tx_params.channel = tx_channel;
+    tx_params.antenna = tx_antenna.to_string();
+    tx_params.gain = tx_gain;
+
+    let mut rx_params = tx_params.clone();
+    rx_params.antenna = rx_antenna.to_string();
+    rx_params.channel = rx_channel;
+    rx_params.gain = rx_gain;
+
     let mut tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
     let mut rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
     let mut encoder = FileReaderEncoder::try_new(
@@ -231,6 +270,15 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            frequency,
+            sample_rate,
+            bandwidth,
+            tx_antenna,
+            rx_antenna,
+            tx_channel,
+            rx_channel,
+            tx_gain,
+            rx_gain,
         } => loopback(
             infile,
             outfile,
@@ -238,6 +286,15 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            frequency,
+            sample_rate,
+            bandwidth,
+            &tx_antenna,
+            &rx_antenna,
+            tx_channel,
+            rx_channel,
+            tx_gain,
+            rx_gain,
         ),
         Commands::Simulate {
             infile,

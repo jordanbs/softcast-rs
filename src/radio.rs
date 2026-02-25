@@ -23,7 +23,7 @@ use num_complex::Complex32;
 use soapysdr;
 use std::io::{Read, Write};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RadioParams {
     pub device_idx: usize,
     pub antenna: String,
@@ -961,7 +961,7 @@ mod tests {
 
         let mut send_buf = &iq_symbols[..];
         while !send_buf.is_empty() {
-            let symbols_sent = tx_device.write(&send_buf).unwrap();
+            let symbols_sent = tx_device.write(&send_buf, true).unwrap();
             eprintln!("Wrote {symbols_sent} symbols.");
             send_buf = &send_buf[symbols_sent..];
         }
@@ -1081,7 +1081,7 @@ mod tests {
 
         let mut send_buf = &iq_symbols[..];
         while !send_buf.is_empty() {
-            let symbols_sent = tx_device.write(&send_buf).unwrap();
+            let symbols_sent = tx_device.write(&send_buf, true).unwrap();
             eprintln!("Wrote {symbols_sent} symbols.");
             send_buf = &send_buf[symbols_sent..];
         }
