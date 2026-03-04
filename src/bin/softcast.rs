@@ -26,10 +26,11 @@ const DEFAULT_GOP_LEN: usize = 22;
 const DEFAULT_Y_CHUNK_DIMENSIONS: &str = "48x40x1";
 const DEFAULT_C_CHUNK_DIMENSIONS: &str = "40x30x1";
 const DEFAULT_NOISE_POWER: f32 = 0.0;
-const DEFAULT_GAIN: f64 = 0.7;
+const DEFAULT_TX_GAIN: f64 = 0.08;
+const DEFAULT_RX_GAIN: f64 = 0.7;
 const DEFAULT_FREQ: f64 = 800_000_000.0;
-const DEFAULT_SAMPLE_RATE: f64 = 384_000.0;
-const DEAFULT_BANDWIDTH: f64 = 2_500_000.0;
+const DEFAULT_SAMPLE_RATE: f64 = 0x300_000 as f64;
+const DEAFULT_BANDWIDTH: f64 = 1.6 * DEFAULT_SAMPLE_RATE;
 const DEFAULT_TX_ANTENNA: &str = "BAND1";
 const DEFAULT_RX_ANTENNA: &str = "LNAL";
 const DEFAULT_TX_CHANNEL: usize = 0;
@@ -86,10 +87,10 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_RX_CHANNEL)]
         rx_channel: usize,
 
-        #[arg(long, default_value_t = DEFAULT_GAIN)]
+        #[arg(long, default_value_t = DEFAULT_TX_GAIN)]
         tx_gain: f64,
 
-        #[arg(long, default_value_t = DEFAULT_GAIN)]
+        #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         rx_gain: f64,
     },
     Simulate {

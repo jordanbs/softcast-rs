@@ -25,6 +25,8 @@ const TAPER_LEN: usize = 4;
 const FRAME_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 pub const OFDM_SYMBOL_LEN: usize = FRAME_LEN;
 
+const RESET_LEN: usize = usize::MAX;
+
 static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug)]
@@ -45,6 +47,8 @@ pub struct OFDMFrameGenerator<I: Iterator<Item = QuadratureSymbol>> {
     ofdm_framegen: liquid_sys::ofdmframegen,
     state: OFDMFrameGeneratorState,
     subcarrier_allocation: Box<[u8]>,
+    data_symbols_sent_since_reset: usize,
+    is_resetting: bool,
 }
 
 enum OFDMFrameGeneratorState {
@@ -84,6 +88,8 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
             ofdm_framegen,
             state: OFDMFrameGeneratorState::S0a,
             subcarrier_allocation,
+            data_symbols_sent_since_reset: 0,
+            is_resetting: false,
         }
     }
 }
@@ -102,7 +108,6 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                     symbol.time_domain_symbols.as_mut_ptr(),
                 ) as u32;
                 assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-                Some(symbol)
             },
             OFDMFrameGeneratorState::S0b => unsafe {
                 self.state = OFDMFrameGeneratorState::S1;
@@ -111,7 +116,6 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                     symbol.time_domain_symbols.as_mut_ptr(),
                 ) as u32;
                 assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-                Some(symbol)
             },
             OFDMFrameGeneratorState::S1 => unsafe {
                 self.state = OFDMFrameGeneratorState::Data;
@@ -120,11 +124,14 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                     symbol.time_domain_symbols.as_mut_ptr(),
                 ) as u32;
                 assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-                Some(symbol)
             },
             OFDMFrameGeneratorState::Data => {
-                if self.quadrature_symbol_iter.peek().is_none() {
-                    self.state = OFDMFrameGeneratorState::Complete;
+                if self.quadrature_symbol_iter.peek().is_none() || self.is_resetting {
+                    self.state = if self.is_resetting {
+                        OFDMFrameGeneratorState::S0a
+                    } else {
+                        OFDMFrameGeneratorState::Complete
+                    };
                     // write tail
                     let status = unsafe {
                         liquid_sys::ofdmframegen_writetail(
@@ -133,34 +140,45 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                         )
                     } as u32;
                     assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-                    return Some(symbol);
-                }
 
-                let freq_domain: Box<_> = self
-                    .subcarrier_allocation
-                    .iter()
-                    // Insert placeholders for null and pilot subcarriers.
-                    .map(|subcarrier_type| match *subcarrier_type as u32 {
-                        // Pad frame with zero values; don't drop data.
-                        liquid_sys::OFDMFRAME_SCTYPE_DATA => {
-                            self.quadrature_symbol_iter.next().unwrap_or_default()
-                        }
-                        _ => QuadratureSymbol::default(),
-                    })
-                    .collect();
-                let time_domain = &mut symbol.time_domain_symbols;
-                let status = unsafe {
-                    liquid_sys::ofdmframegen_writesymbol(
-                        self.ofdm_framegen,
-                        freq_domain.as_ptr() as *mut Complex32,
-                        time_domain.as_mut_ptr(),
-                    )
-                } as u32;
-                assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-                Some(symbol)
+                    if self.is_resetting {
+                        let status =
+                            unsafe { liquid_sys::ofdmframegen_reset(self.ofdm_framegen) } as u32;
+                        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+                    }
+                    self.is_resetting = false;
+                    self.data_symbols_sent_since_reset = 0;
+                } else {
+                    let freq_domain: Box<_> = self
+                        .subcarrier_allocation
+                        .iter()
+                        // Insert placeholders for null and pilot subcarriers.
+                        .map(|subcarrier_type| match *subcarrier_type as u32 {
+                            // Pad frame with zero values; don't drop data.
+                            liquid_sys::OFDMFRAME_SCTYPE_DATA => {
+                                self.quadrature_symbol_iter.next().unwrap_or_default()
+                            }
+                            _ => QuadratureSymbol::default(),
+                        })
+                        .collect();
+                    let time_domain = &mut symbol.time_domain_symbols;
+                    let status = unsafe {
+                        liquid_sys::ofdmframegen_writesymbol(
+                            self.ofdm_framegen,
+                            freq_domain.as_ptr() as *mut Complex32,
+                            time_domain.as_mut_ptr(),
+                        )
+                    } as u32;
+                    assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+                    self.data_symbols_sent_since_reset += 1;
+                    self.is_resetting = RESET_LEN == self.data_symbols_sent_since_reset;
+                }
             }
-            OFDMFrameGeneratorState::Complete => None,
+            OFDMFrameGeneratorState::Complete => return None,
         }
+
+        Some(symbol)
     }
 }
 
@@ -178,6 +196,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     working_iq_buf: Option<Box<[Complex32]>>,
     working_iq_symbols_consumed: usize,
     freq_domain_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
+    symbols_received_since_reset: usize,
 }
 
 #[allow(non_snake_case)]
@@ -233,6 +252,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
         self.freq_domain_symbols_iter = vec![].into_iter().peekable();
+        self.symbols_received_since_reset = 0;
     }
 }
 
@@ -265,6 +285,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             working_iq_buf: None,
             working_iq_symbols_consumed: 0,
             freq_domain_symbols_iter: vec![].into_iter().peekable(),
+            symbols_received_since_reset: 0,
         }
     }
 }
@@ -274,6 +295,10 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.freq_domain_symbols_iter.peek().is_none() {
+            if self.symbols_received_since_reset == RESET_LEN {
+                self.reset();
+            }
+
             if self.working_iq_buf.is_none() {
                 let new_buf = self.iq_buf_iter.next()?; // breaks iteration
                 if new_buf.is_empty() {
@@ -284,22 +309,19 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
             let iq_buf = self.working_iq_buf.as_ref().unwrap();
 
             // TODO: reduce calls to ofdmframesync_execute by plumbing frame_length once discovered
-            let symbols_to_consume = 1.min(iq_buf.len() - self.working_iq_symbols_consumed);
-            let start_pos = self.working_iq_symbols_consumed;
-            let end_pos = self.working_iq_symbols_consumed + symbols_to_consume;
-            let iq_buf_to_consume = &iq_buf[start_pos..end_pos];
+            let mut time_domain_iq = iq_buf[self.working_iq_symbols_consumed];
+            self.working_iq_symbols_consumed += 1;
 
             let status = unsafe {
                 // Pushes samples to self.freq_domain_symbols via ofdm_framesync_callback.
                 liquid_sys::ofdmframesync_execute(
                     self.ofdm_framesync,
-                    iq_buf_to_consume.as_ptr() as *mut Complex32,
-                    iq_buf_to_consume.len() as u32,
+                    &mut time_domain_iq as *mut Complex32,
+                    1,
                 )
             } as u32;
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
-            self.working_iq_symbols_consumed += iq_buf_to_consume.len();
             if self.working_iq_symbols_consumed == iq_buf.len() {
                 self.working_iq_buf = None;
                 self.working_iq_symbols_consumed = 0;
@@ -307,6 +329,10 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
 
             if let Some(freq_domain_symbols) = self.callback_context.freq_domain_symbols.take() {
                 self.freq_domain_symbols_iter = freq_domain_symbols.into_iter().peekable();
+                if self.freq_domain_symbols_iter.peek().is_some() {
+                    self.symbols_received_since_reset += 1;
+                    break;
+                }
             }
         }
 
@@ -370,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_ofdm_multiple_frames() {
-        const FRAME_LEN: usize = 8;
+        const FRAME_LEN: usize = 600;
         let mut ofdm_symbols = vec![];
         let mut quadrature_symbols = vec![
             QuadratureSymbol {
@@ -379,8 +405,8 @@ mod tests {
             FRAME_LEN
         ];
         for (idx, symbol) in quadrature_symbols.iter_mut().enumerate() {
-            symbol.value.re = 0.01 * idx as f32;
-            symbol.value.im = 0.01 * -(idx as f32);
+            symbol.value.re = 0.01 * idx as f32 / FRAME_LEN as f32;
+            symbol.value.im = 0.01 * -(idx as f32 / FRAME_LEN as f32);
         }
         let quadrature_symbols_clone: std::collections::VecDeque<_> =
             quadrature_symbols.clone().into();
@@ -408,7 +434,12 @@ mod tests {
             .iter()
             .zip(new_quadrature_symbols_0.iter())
         {
-            assert!((orig.value.re - new.value.re).abs() < 0.0001);
+            assert!(
+                (orig.value.re - new.value.re).abs() < 0.0001,
+                "{} -> {}",
+                orig.value,
+                new.value
+            );
             assert!((orig.value.im - new.value.im).abs() < 0.0001);
         }
         for (orig, new) in quadrature_symbols_clone

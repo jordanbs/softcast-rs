@@ -98,7 +98,7 @@ impl FileWriterDecoder {
             frame_synchronizer.reset();
 
             gops_received += 1;
-            eprintln!("GOPS Received: {}", gops_received);
+            eprintln!("Y GOPS Received: {}", gops_received);
 
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
@@ -107,6 +107,7 @@ impl FileWriterDecoder {
                 self.cb_chunk_dim,
             )?;
             frame_synchronizer.reset();
+            eprintln!("Cb GOPS Received: {}", gops_received);
 
             let cr_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
@@ -115,6 +116,7 @@ impl FileWriterDecoder {
                 self.cr_chunk_dim,
             )?;
             frame_synchronizer.reset();
+            eprintln!("Cr GOPS Received: {}", gops_received);
 
             let new_macro_block_3d = MacroBlock3D {
                 y_components: y_dct_out.into(),

@@ -355,7 +355,7 @@ pub struct LimeReceiveDevice {
 unsafe impl Send for LimeReceiveDevice {}
 
 impl LimeReceiveDevice {
-    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x8_000_000; // 1GiB of Complex32 samples
+    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x64_000_000;
     const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8KiB of Complex32 samples
 
     pub fn try_new(
@@ -400,7 +400,7 @@ impl LimeReceiveDevice {
                 device,
                 limesuite_sys::LMS_CH_RX,
                 params.channel,
-                params.gain,
+                1.0, // calibrate at full gain
             ) {
                 return Err("Failed to set LimeSDR gain.".into());
             }
@@ -412,6 +412,14 @@ impl LimeReceiveDevice {
                 0, // flags
             ) {
                 return Err("Failed to calibrate LimeSDR.".into());
+            }
+            if 0 != limesuite_sys::LMS_SetNormalizedGain(
+                device,
+                limesuite_sys::LMS_CH_RX,
+                params.channel,
+                params.gain,
+            ) {
+                return Err("Failed to set LimeSDR gain.".into());
             }
 
             let mut stream = Box::new(limesuite_sys::lms_stream_t {
@@ -1127,5 +1135,170 @@ mod tests {
 
             assert_eq!(original_payload.to_vec(), decoded_payload);
         }
+    }
+
+    #[test]
+    #[cfg(false)] // needs hardware to run
+    fn test_limesuite_sdr_loopback_ofdmframesync() {
+        use crate::decoder::Complex32Reader;
+        use crate::framing::*;
+        use crate::modulation::*;
+
+        /*
+        let mut file = std::fs::File::create("/tmp/tx_d_gain.csv").expect("Failed to create file");
+        write!(file, "tx_gain,rx_gain,d_gain,mse,max_error\n").expect("Failed to write header");
+
+        // tx_gain: 0.20, d_gain: 0.34
+
+        const MAX_TX_GAIN: f64 = 0.27;
+        const START_TX_GAIN: f64 = 0.17;
+        const TX_GAIN_STEP: f64 = 0.015;
+        let num_tx_steps = ((MAX_TX_GAIN - START_TX_GAIN) / TX_GAIN_STEP) as usize;
+        for idx in 0..num_tx_steps {
+            let tx_gain = START_TX_GAIN + TX_GAIN_STEP * idx as f64;
+
+            const MAX_D_GAIN: f64 = 0.44;
+            const START_D_GAIN: f64 = 0.04;
+            const D_GAIN_STEP: f64 = 0.015;
+            let num_d_steps = ((MAX_D_GAIN - START_D_GAIN) / D_GAIN_STEP) as usize;
+            for jdx in 0..num_d_steps {
+                let d_gain = START_D_GAIN + D_GAIN_STEP * jdx as f64;
+
+                */
+        let rx_gain = 0.7;
+        let d_gain = 0.34;
+        let tx_gain = 0.20;
+
+        const FRAME_LEN: usize = 512;
+        let mut quadrature_symbols = vec![
+            QuadratureSymbol {
+                value: Complex32::default()
+            };
+            FRAME_LEN
+        ];
+        for (idx, symbol) in quadrature_symbols.iter_mut().enumerate() {
+            symbol.value =
+                Complex32::from_polar(idx as f32 * 0.1 % 1.0 + 0.1, std::f32::consts::PI / 4.0);
+        }
+        let quadrature_symbols_clone: std::collections::VecDeque<_> =
+            quadrature_symbols.clone().into();
+
+        let ofdm_frame_generator: OFDMFrameGenerator<_> =
+            quadrature_symbols.clone().into_iter().into();
+
+        let tx_params = RadioParams {
+            device_idx: 0,
+            antenna: "BAND1".to_string(),
+            frequency: 800_000_000.0,
+            bandwidth: 9_000_000.0,
+            channel: 0,
+            gain: tx_gain,
+            sample_rate: 0x800_000 as f64, // ~8MHz
+        };
+        let rx_params = RadioParams {
+            device_idx: 0,
+            antenna: "LNAL".to_string(),
+            frequency: 800_000_000.0,
+            bandwidth: 9_000_000.0,
+            channel: 1,
+            gain: rx_gain,
+            sample_rate: 0x800_000 as f64, // ~8MHz
+        };
+        let mut tx_device = LimeTransmitDevice::try_new(tx_params, false).unwrap();
+        let mut rx_device = LimeReceiveDevice::try_new(rx_params, tx_device.device, true).unwrap();
+
+        let iq_iter = rx_device.take_mpsc_reader().into_iter();
+        // rx should be activated before tx
+        rx_device.activate().expect("Failed to activate rx");
+        tx_device.activate().expect("Failed to activate tx");
+
+        rx_device.run_async();
+
+        let mut ofdm_frame_generator = ofdm_frame_generator.peekable();
+        while let Some(mut ofdm_symbol) = ofdm_frame_generator.next() {
+            for iq in ofdm_symbol.time_domain_symbols.iter_mut() {
+                *iq *= d_gain as f32;
+            }
+            let mut send_buf = &ofdm_symbol.time_domain_symbols[..];
+            while !send_buf.is_empty() {
+                let symbols_sent = tx_device
+                    .write(&send_buf, ofdm_frame_generator.peek().is_none())
+                    .unwrap();
+                eprintln!("Wrote {symbols_sent} symbols.");
+                send_buf = &send_buf[symbols_sent..];
+            }
+        }
+
+        let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = iq_iter.into();
+
+        let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.take(FRAME_LEN).collect();
+
+        // orig may be shorter than new, because of frame padding.
+        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols.len());
+
+        let count = quadrature_symbols_clone
+            .len()
+            .min(new_quadrature_symbols.len());
+        let mse = quadrature_symbols_clone
+            .iter()
+            .zip(new_quadrature_symbols.clone())
+            .map(|(orig, new)| {
+                (orig.value.re - new.value.im).powi(2) + (orig.value.im - new.value.im).powi(2)
+            })
+            .sum::<f32>()
+            / (count * 2) as f32;
+
+        eprintln!("mse:{mse}");
+
+        let max_error = quadrature_symbols_clone
+            .iter()
+            .zip(new_quadrature_symbols.clone())
+            .map(|(orig, new)| {
+                (orig.value.re - new.value.im).powi(2) + (orig.value.im - new.value.im).powi(2)
+            })
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        eprintln!("max_error: {max_error}");
+        /*
+                write!(file, "{tx_gain},{rx_gain},{d_gain},{mse},{max_error}\n")
+                    .expect("Failed to append to file");
+            }
+        }
+        */
+
+        assert!(mse < 0.001, "{mse}");
+        assert!(max_error < 0.05);
+
+        /*
+        for (idx, (orig, new)) in quadrature_symbols_clone
+            .iter()
+            .zip(new_quadrature_symbols.iter())
+            .enumerate()
+        {
+            eprintln!(
+                "{idx} {:.1?} -> {:?}",
+                orig.value.to_polar(),
+                new.value.to_polar()
+            );
+        }
+        for (idx, (orig, new)) in quadrature_symbols_clone
+            .iter()
+            .zip(new_quadrature_symbols.iter())
+            .enumerate()
+        {
+            assert!(
+                (orig.value.re - new.value.re).abs() < 0.1,
+                "{idx} orig:{:?}, new:{:?}",
+                orig.value,
+                new.value
+            );
+            assert!(
+                (orig.value.im - new.value.im).abs() < 0.1,
+                "{idx} orig:{:?}, new:{:?}",
+                orig.value,
+                new.value
+            );
+        }
+        */
     }
 }
