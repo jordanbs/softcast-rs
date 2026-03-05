@@ -47,8 +47,8 @@ where
 
     // compress chunks
     for (idx, chunk_metadata) in chunk_metadata_iter.enumerate() {
-        let mean_i8 = chunk_metadata.mean as i8;
-        encoder.write_all(&mean_i8.to_be_bytes())?;
+        let mean_f16 = f16::from_f32(chunk_metadata.mean);
+        encoder.write_all(&mean_f16.to_be_bytes())?;
         if metadata_bitmap.values[idx] {
             let energy_f16 = f16::from_f32(chunk_metadata.energy.sqrt());
             encoder.write_all(&energy_f16.to_be_bytes())?;
@@ -169,10 +169,10 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
         let decoder = self.decoder.get_mut().unwrap();
         let metadata_bitmap = self.metadata_bitmap.as_ref().unwrap();
 
-        let mut mean_buf = [0u8; size_of::<i8>()];
+        let mut mean_buf = [0u8; size_of::<f16>()];
         match decoder.read_exact(&mut mean_buf) {
             Ok(()) => {
-                let mean = i8::from_be_bytes(mean_buf) as f32;
+                let mean = f16::from_be_bytes(mean_buf).to_f32();
                 if !mean.is_finite() {
                     let err = std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
