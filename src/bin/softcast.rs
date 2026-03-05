@@ -208,10 +208,10 @@ fn loopback(
     rx_radio.activate()?;
     tx_radio.activate()?;
 
-    let ofdm_symbol_reader = rx_radio.take_mpsc_reader();
+    let iq_reader = rx_radio.take_mpsc_reader();
     let rx_radio_join = rx_radio.run_async();
     let decoder_join = std::thread::spawn(move || {
-        let result = decoder.run(ofdm_symbol_reader).map_err(|e| e.to_string());
+        let result = decoder.run(iq_reader).map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
     });

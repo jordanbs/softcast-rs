@@ -238,6 +238,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     working_iq_symbols_consumed: usize,
     freq_domain_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
     symbols_received_since_reset: usize,
+    pub aborted: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[allow(non_snake_case)]
@@ -327,6 +328,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             working_iq_symbols_consumed: 0,
             freq_domain_symbols_iter: vec![].into_iter().peekable(),
             symbols_received_since_reset: 0,
+            aborted: None,
         }
     }
 }
@@ -336,6 +338,15 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.freq_domain_symbols_iter.peek().is_none() {
+            // break out if aborted
+            if self
+                .aborted
+                .as_ref()
+                .is_some_and(|aborted| aborted.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                return None;
+            }
+
             if self.symbols_received_since_reset == RESET_LEN {
                 self.reset();
             }

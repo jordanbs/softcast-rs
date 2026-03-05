@@ -84,6 +84,12 @@ impl FileWriterDecoder {
         self.started_writing = true;
 
         let mut frame_synchronizer: OFDMFrameSynchronizer<_> = complex32_reader.into_iter().into();
+        let aborted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        frame_synchronizer.aborted = Some(aborted.clone());
+
+        ctrlc::set_handler(move || {
+            aborted.store(true, std::sync::atomic::Ordering::SeqCst);
+        })?;
 
         let mut gops_received = 0;
         eprintln!("GOPS Received: {}", gops_received);
