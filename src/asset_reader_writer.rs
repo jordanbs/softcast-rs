@@ -291,6 +291,7 @@ pub mod asset_writer {
                     &url,
                     AVFileTypeMPEG4.unwrap(),
                 )?;
+                writer.setMovieFragmentInterval(CMTime::new(1, 1));
 
                 let codec_value = NSString::from_str(&settings.codec.as_string());
                 let width_value = NSNumber::new_i32(settings.resolution.0);

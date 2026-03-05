@@ -180,7 +180,7 @@ pub struct LimeTransmitDevice {
 }
 
 impl LimeTransmitDevice {
-    const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000; // 8MiB of Complex32 samples
+    const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000;
 
     pub fn try_new(
         params: RadioParams,
@@ -265,7 +265,7 @@ impl LimeTransmitDevice {
                 isTx: true,
                 handle: 0,
                 fifoSize: Self::SEND_BUF_SIZE_IN_SAMPLES as u32,
-                throughputVsLatency: 0.5, // balance latency and throughput to prevent underruns
+                throughputVsLatency: 1.0, // balance latency and throughput to prevent underruns
             });
             if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
                 return Err("Failed to set up LimeSDR tx stream.".into());
@@ -293,6 +293,26 @@ impl LimeTransmitDevice {
         symbols: &[Complex32],
         flush: bool,
     ) -> Result<usize, Box<dyn std::error::Error>> {
+        let stream_status = unsafe {
+            let mut stream_status: limesuite_sys::lms_stream_status_t = std::mem::zeroed();
+            let success =
+                limesuite_sys::LMS_GetStreamStatus(self.stream.as_mut(), &mut stream_status);
+            assert_eq!(0, success);
+            stream_status
+        };
+        if 0 < stream_status.underrun {
+            eprintln!(
+                "WARNING: Underrun detected. Count:{}",
+                stream_status.underrun
+            );
+        }
+        if 0 < stream_status.droppedPackets {
+            eprintln!(
+                "WARNING: Dropped packets detected. Count:{}",
+                stream_status.droppedPackets
+            );
+        }
+
         let num_symbols_written = unsafe {
             let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();
             metadata.flushPartialPacket = flush;
@@ -355,8 +375,8 @@ pub struct LimeReceiveDevice {
 unsafe impl Send for LimeReceiveDevice {}
 
 impl LimeReceiveDevice {
-    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x64_000_000;
-    const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400; // 8KiB of Complex32 samples
+    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x256_000_000;
+    const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400;
 
     pub fn try_new(
         params: RadioParams,
@@ -459,6 +479,23 @@ impl LimeReceiveDevice {
 
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
+            let stream_status = unsafe {
+                let mut stream_status: limesuite_sys::lms_stream_status_t = std::mem::zeroed();
+                let success =
+                    limesuite_sys::LMS_GetStreamStatus(self.stream.as_mut(), &mut stream_status);
+                assert_eq!(0, success);
+                stream_status
+            };
+            if 0 < stream_status.overrun {
+                eprintln!("WARNING: Overrun detected. Count:{}", stream_status.overrun);
+            }
+            if 0 < stream_status.droppedPackets {
+                eprintln!(
+                    "WARNING: Dropped packets detected. Count:{}",
+                    stream_status.droppedPackets
+                );
+            }
+
             let mut read_buf = vec![Complex32::default(); Self::READ_BUF_SIZE_IN_SAMPLES];
             let samples_read = unsafe {
                 let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();

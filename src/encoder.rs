@@ -183,10 +183,6 @@ impl FileReaderEncoder {
                     }
                 }
 
-                for iq in frame.iter_mut() {
-                    *iq *= 0.1;
-                }
-
                 ofdm_symbol_writer.consume(frame, true)?;
             }
         }

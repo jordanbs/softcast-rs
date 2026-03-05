@@ -53,6 +53,18 @@ impl FromByte for BPSKModulatedByte {
     }
 }
 
+trait ScaleBy {
+    fn scale_by(&mut self, scale: f32);
+}
+
+impl ScaleBy for BPSKModulatedByte {
+    fn scale_by(&mut self, scale: f32) {
+        for q_symbol in self.iter_mut() {
+            q_symbol.value *= scale;
+        }
+    }
+}
+
 pub mod metadata {
     use super::*;
 
@@ -91,13 +103,15 @@ pub mod metadata {
             }
             let working_packet = self.working_packet.as_ref()?;
             let byte = working_packet.encoded_data[self.working_packet_pos];
-            let quadrature_symbols = BPSKModulatedByte::from_byte(byte, self.modemcf_wrapper.ptr);
+            let mut quadrature_symbols =
+                BPSKModulatedByte::from_byte(byte, self.modemcf_wrapper.ptr);
 
             self.working_packet_pos += 1;
             if working_packet.encoded_data.len() == self.working_packet_pos {
                 self.working_packet = None;
                 self.working_packet_pos = 0;
             }
+            quadrature_symbols.scale_by(4.0); // TODO: factor out
             Some(quadrature_symbols)
         }
     }
