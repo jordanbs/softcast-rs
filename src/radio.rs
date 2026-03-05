@@ -261,7 +261,7 @@ impl LimeTransmitDevice {
             let mut stream = Box::new(limesuite_sys::lms_stream_t {
                 channel: params.channel as u32,
                 dataFmt: limesuite_sys::lms_stream_t_LMS_FMT_F32,
-                linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_DEFAULT,
+                linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_I12,
                 isTx: true,
                 handle: 0,
                 fifoSize: Self::SEND_BUF_SIZE_IN_SAMPLES as u32,
@@ -445,7 +445,7 @@ impl LimeReceiveDevice {
             let mut stream = Box::new(limesuite_sys::lms_stream_t {
                 channel: params.channel as u32,
                 dataFmt: limesuite_sys::lms_stream_t_LMS_FMT_F32,
-                linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_DEFAULT,
+                linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_I12,
                 isTx: false,
                 handle: 0, // not to be modified manually
                 fifoSize: Self::RECEIVE_BUF_SIZE_IN_SAMPLES as u32,
