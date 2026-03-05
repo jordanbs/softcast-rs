@@ -112,7 +112,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     dct_components: &mut TransformBlock3DDCT<PixelType>,
     compression_ratio: f64,
     chunk_dimensions: (usize, usize, usize),
-) -> impl Iterator<Item = OFDMSymbol> {
+) -> impl Iterator<Item = OFDMFrame> {
     let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
 
     // metadata
@@ -167,35 +167,27 @@ impl FileReaderEncoder {
                 self.cr_chunk_dimensions,
             );
 
-            let encoder = y_framer.chain(cb_framer).chain(cr_framer);
+            let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
 
-            let noise_power = self.noise_power; // should sqrt?
-            let encoder_plus_noise = encoder.map(|mut ofdmsymbol| {
-                if 0.0 >= noise_power {
-                    return ofdmsymbol;
+            while let Some(frame) = encoder.next() {
+                let mut frame = frame.into_box_complex32_slice();
+                // TODO: Factor this out
+                if 0.0 < self.noise_power {
+                    let noise_power = self.noise_power;
+                    let mut rng = rand::rng();
+                    for iq in frame.iter_mut() {
+                        let i_distortion = rng.random_range(-noise_power..noise_power);
+                        let q_distortion = rng.random_range(-noise_power..noise_power);
+                        iq.re += i_distortion;
+                        iq.im += q_distortion;
+                    }
                 }
-                let mut rng = rand::rng();
-                for iq in ofdmsymbol.time_domain_symbols.iter_mut() {
-                    let i_distortion = rng.random_range(-noise_power..noise_power);
-                    let q_distortion = rng.random_range(-noise_power..noise_power);
-                    iq.re += i_distortion;
-                    iq.im += q_distortion;
-                }
-                ofdmsymbol
-            });
 
-            // TODO: Factor this out
-            let encoder_attenuated = encoder_plus_noise.map(|mut ofdmsymbol| {
-                for iq in ofdmsymbol.time_domain_symbols.iter_mut() {
+                for iq in frame.iter_mut() {
                     *iq *= 0.1;
                 }
-                ofdmsymbol
-            });
 
-            let mut encoder = encoder_attenuated.peekable();
-            while let Some(symbol) = encoder.next() {
-                let flush = encoder.peek().is_none();
-                ofdm_symbol_writer.consume(symbol.time_domain_symbols, flush)?; // TODO: consume/write should accept a slice
+                ofdm_symbol_writer.consume(frame, true)?;
             }
         }
         Ok(())

@@ -22,22 +22,42 @@ use num_complex::Complex32;
 pub const NUM_SUBCARRIERS: usize = 64;
 const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
-const FRAME_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
-pub const OFDM_SYMBOL_LEN: usize = FRAME_LEN;
+pub const OFDM_SYMBOL_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
-const RESET_LEN: usize = usize::MAX;
+const RESET_LEN: usize = 0x8000;
 
 static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug)]
+#[repr(transparent)]
 pub struct OFDMSymbol {
-    pub time_domain_symbols: Box<[Complex32]>,
+    pub time_domain_symbols: [Complex32; OFDM_SYMBOL_LEN],
 }
 
 impl Default for OFDMSymbol {
     fn default() -> Self {
         Self {
-            time_domain_symbols: vec![Complex32::default(); FRAME_LEN].into(),
+            time_domain_symbols: [Complex32::default(); OFDM_SYMBOL_LEN],
+        }
+    }
+}
+
+pub struct OFDMFrame {
+    symbols: Vec<OFDMSymbol>,
+}
+
+pub trait AsBoxComplex32Slice {
+    fn as_box_complex32_slice(&self) -> Box<[Complex32]>;
+}
+
+impl OFDMFrame {
+    pub fn into_box_complex32_slice(self) -> Box<[Complex32]> {
+        unsafe {
+            let len = self.symbols.len() * OFDM_SYMBOL_LEN;
+            let symbols_ptr: *mut Complex32 =
+                Box::into_raw(self.symbols.into_boxed_slice()) as *mut Complex32;
+            let symbols_slice = std::slice::from_raw_parts_mut(symbols_ptr, len);
+            Box::from_raw(symbols_slice)
         }
     }
 }
@@ -95,90 +115,111 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
 }
 
 impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
-    type Item = OFDMSymbol;
+    type Item = OFDMFrame;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut symbol = OFDMSymbol::default();
+        let mut frame = OFDMFrame {
+            symbols: Vec::with_capacity(RESET_LEN + 4), // S0a, S0b, S1, tail, + Data
+        };
 
-        match self.state {
-            OFDMFrameGeneratorState::S0a => unsafe {
-                self.state = OFDMFrameGeneratorState::S0b;
-                let status = liquid_sys::ofdmframegen_write_S0a(
-                    self.ofdm_framegen,
-                    symbol.time_domain_symbols.as_mut_ptr(),
-                ) as u32;
-                assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-            },
-            OFDMFrameGeneratorState::S0b => unsafe {
-                self.state = OFDMFrameGeneratorState::S1;
-                let status = liquid_sys::ofdmframegen_write_S0b(
-                    self.ofdm_framegen,
-                    symbol.time_domain_symbols.as_mut_ptr(),
-                ) as u32;
-                assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-            },
-            OFDMFrameGeneratorState::S1 => unsafe {
-                self.state = OFDMFrameGeneratorState::Data;
-                let status = liquid_sys::ofdmframegen_write_S1(
-                    self.ofdm_framegen,
-                    symbol.time_domain_symbols.as_mut_ptr(),
-                ) as u32;
-                assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-            },
-            OFDMFrameGeneratorState::Data => {
-                if self.quadrature_symbol_iter.peek().is_none() || self.is_resetting {
-                    self.state = if self.is_resetting {
-                        OFDMFrameGeneratorState::S0a
-                    } else {
-                        OFDMFrameGeneratorState::Complete
-                    };
-                    // write tail
-                    let status = unsafe {
-                        liquid_sys::ofdmframegen_writetail(
-                            self.ofdm_framegen,
-                            symbol.time_domain_symbols.as_mut_ptr(),
-                        )
-                    } as u32;
-                    assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+        loop {
+            frame.symbols.push(OFDMSymbol::default());
+            let symbol = frame.symbols.last_mut().unwrap();
 
-                    if self.is_resetting {
-                        let status =
-                            unsafe { liquid_sys::ofdmframegen_reset(self.ofdm_framegen) } as u32;
-                        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+            match self.state {
+                OFDMFrameGeneratorState::S0a => unsafe {
+                    if self.quadrature_symbol_iter.peek().is_none() {
+                        self.state = OFDMFrameGeneratorState::Complete;
+                        continue;
                     }
-                    self.is_resetting = false;
-                    self.data_symbols_sent_since_reset = 0;
-                } else {
-                    let freq_domain: Box<_> = self
-                        .subcarrier_allocation
-                        .iter()
-                        // Insert placeholders for null and pilot subcarriers.
-                        .map(|subcarrier_type| match *subcarrier_type as u32 {
-                            // Pad frame with zero values; don't drop data.
-                            liquid_sys::OFDMFRAME_SCTYPE_DATA => {
-                                self.quadrature_symbol_iter.next().unwrap_or_default()
-                            }
-                            _ => QuadratureSymbol::default(),
-                        })
-                        .collect();
-                    let time_domain = &mut symbol.time_domain_symbols;
-                    let status = unsafe {
-                        liquid_sys::ofdmframegen_writesymbol(
-                            self.ofdm_framegen,
-                            freq_domain.as_ptr() as *mut Complex32,
-                            time_domain.as_mut_ptr(),
-                        )
-                    } as u32;
-                    assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
-                    self.data_symbols_sent_since_reset += 1;
-                    self.is_resetting = RESET_LEN == self.data_symbols_sent_since_reset;
+                    self.state = OFDMFrameGeneratorState::S0b;
+                    let status = liquid_sys::ofdmframegen_write_S0a(
+                        self.ofdm_framegen,
+                        symbol.time_domain_symbols.as_mut_ptr(),
+                    ) as u32;
+                    assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+                },
+                OFDMFrameGeneratorState::S0b => unsafe {
+                    self.state = OFDMFrameGeneratorState::S1;
+                    let status = liquid_sys::ofdmframegen_write_S0b(
+                        self.ofdm_framegen,
+                        symbol.time_domain_symbols.as_mut_ptr(),
+                    ) as u32;
+                    assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+                },
+                OFDMFrameGeneratorState::S1 => unsafe {
+                    self.state = OFDMFrameGeneratorState::Data;
+                    let status = liquid_sys::ofdmframegen_write_S1(
+                        self.ofdm_framegen,
+                        symbol.time_domain_symbols.as_mut_ptr(),
+                    ) as u32;
+                    assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+                },
+                OFDMFrameGeneratorState::Data => {
+                    if self.quadrature_symbol_iter.peek().is_none() || self.is_resetting {
+                        self.state = if self.is_resetting {
+                            OFDMFrameGeneratorState::S0a
+                        } else {
+                            OFDMFrameGeneratorState::Complete
+                        };
+                        // write tail
+                        let status = unsafe {
+                            liquid_sys::ofdmframegen_writetail(
+                                self.ofdm_framegen,
+                                symbol.time_domain_symbols.as_mut_ptr(),
+                            )
+                        } as u32;
+                        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+                        if self.is_resetting {
+                            let status =
+                                unsafe { liquid_sys::ofdmframegen_reset(self.ofdm_framegen) }
+                                    as u32;
+                            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+                        }
+                        self.is_resetting = false;
+                        self.data_symbols_sent_since_reset = 0;
+                        break;
+                    } else {
+                        let freq_domain: Box<_> = self
+                            .subcarrier_allocation
+                            .iter()
+                            // Insert placeholders for null and pilot subcarriers.
+                            .map(|subcarrier_type| match *subcarrier_type as u32 {
+                                // Pad frame with zero values; don't drop data.
+                                liquid_sys::OFDMFRAME_SCTYPE_DATA => {
+                                    self.quadrature_symbol_iter.next().unwrap_or_default()
+                                }
+                                _ => QuadratureSymbol::default(),
+                            })
+                            .collect();
+                        let time_domain = &mut symbol.time_domain_symbols;
+                        let status = unsafe {
+                            liquid_sys::ofdmframegen_writesymbol(
+                                self.ofdm_framegen,
+                                freq_domain.as_ptr() as *mut Complex32,
+                                time_domain.as_mut_ptr(),
+                            )
+                        } as u32;
+                        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+                        self.data_symbols_sent_since_reset += 1;
+                        self.is_resetting = RESET_LEN == self.data_symbols_sent_since_reset;
+                    }
+                }
+                OFDMFrameGeneratorState::Complete => {
+                    frame.symbols.pop();
+                    break;
                 }
             }
-            OFDMFrameGeneratorState::Complete => return None,
         }
 
-        Some(symbol)
+        if frame.symbols.is_empty() {
+            None
+        } else {
+            Some(frame)
+        }
     }
 }
 
@@ -371,12 +412,15 @@ mod tests {
             quadrature_symbols.clone().into();
 
         let ofdm_frame_generator: OFDMFrameGenerator<_> = quadrature_symbols.into_iter().into();
-        let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator.collect();
+        let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator
+            .map(|frame| frame.symbols)
+            .flatten()
+            .collect();
         eprintln!("{:?}", ofdm_symbols);
 
         let ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols
             .into_iter()
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .map(|ofdm_symbol| Box::new(ofdm_symbol.time_domain_symbols) as Box<[Complex32]>)
             .into();
 
         let new_quadrature_symbols: Vec<_> = ofdm_frame_synchronizer.collect();
@@ -414,11 +458,11 @@ mod tests {
         for _frame_idx in 0..2 {
             let ofdm_frame_generator: OFDMFrameGenerator<_> =
                 quadrature_symbols.clone().into_iter().into();
-            ofdm_symbols.extend(ofdm_frame_generator);
+            ofdm_symbols.extend(ofdm_frame_generator.map(|frame| frame.symbols).flatten());
         }
         let mut ofdm_frame_synchronizer: OFDMFrameSynchronizer<_> = ofdm_symbols
             .into_iter()
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .map(|ofdm_symbol| Box::new(ofdm_symbol.time_domain_symbols) as Box<[Complex32]>)
             .into();
 
         let new_quadrature_symbols_0: Vec<_> =
@@ -500,9 +544,8 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
-            .into();
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            framer.map(|frame| frame.into_box_complex32_slice()).into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
 
@@ -546,9 +589,8 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
-            .into();
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            framer.map(|frame| frame.into_box_complex32_slice()).into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -632,9 +674,8 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
-            .into();
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            framer.map(|frame| frame.into_box_complex32_slice()).into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -720,7 +761,7 @@ mod tests {
         let ofdm_generator: OFDMFrameGenerator<_> = metadata_modulator.flatten().into();
 
         let ofdm_synchronizer: OFDMFrameSynchronizer<_> = ofdm_generator
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
+            .map(|frame| frame.into_box_complex32_slice())
             .into();
         let metadata_demodulator: MetadataDemodulator<_> = ofdm_synchronizer.into();
         let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
@@ -1026,9 +1067,8 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
-            .into();
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            framer.map(|frame| frame.into_box_complex32_slice()).into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -1164,9 +1204,8 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
-            .into();
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            framer.map(|frame| frame.into_box_complex32_slice()).into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
@@ -1320,9 +1359,8 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> = framer
-            .map(|ofdm_symbol| ofdm_symbol.time_domain_symbols)
-            .into();
+        let synchronizer: OFDMFrameSynchronizer<_> =
+            framer.map(|frame| frame.into_box_complex32_slice()).into();
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
