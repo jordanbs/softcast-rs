@@ -72,7 +72,7 @@ impl OFDMFrame {
             max = max.max(iq.im.abs());
         }
         if max > 0.0 {
-            const MAX_VALUE: f32 = 0.9;
+            const MAX_VALUE: f32 = 0.5;
             let normalization_factor = MAX_VALUE / max;
 
             eprintln!("Normalizing by {max}");
