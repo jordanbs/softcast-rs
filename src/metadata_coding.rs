@@ -47,7 +47,7 @@ where
 
     // compress chunks
     for (idx, chunk_metadata) in chunk_metadata_iter.enumerate() {
-        let mean_i8 = chunk_metadata.mean as i8;
+        let mean_i8 = chunk_metadata.mean.round() as i8;
         encoder.write_all(&mean_i8.to_be_bytes())?;
         if metadata_bitmap.values[idx] {
             let energy_f16 = f16::from_f32(chunk_metadata.energy.sqrt());
