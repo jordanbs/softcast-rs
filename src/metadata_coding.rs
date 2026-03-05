@@ -19,38 +19,13 @@ use crate::compressor::*;
 use crate::modulation::IntoInnerQuadratureSymbolIter;
 use crate::modulation::QuadratureSymbol;
 use crate::source_coding::chunk::*;
+use half::f16;
 use liquid_sys;
 use std::io::{Read, Write};
 use zstd;
 
 // TODO: compress bitmap of discarded chunks with RLE and huffman
 // TODO: consider using protobuf or similar for metadata binary format
-
-trait SerializedSize {
-    const SERIALIZED_SIZE: usize;
-}
-
-impl SerializedSize for ChunkMetadata {
-    const SERIALIZED_SIZE: usize = 8;
-}
-
-impl From<&ChunkMetadata> for [u8; ChunkMetadata::SERIALIZED_SIZE] {
-    fn from(chunk: &ChunkMetadata) -> Self {
-        let mut bytes = [0u8; ChunkMetadata::SERIALIZED_SIZE];
-        bytes[0..4].copy_from_slice(&chunk.mean.to_be_bytes());
-        bytes[4..8].copy_from_slice(&chunk.energy.to_be_bytes());
-        bytes
-    }
-}
-
-impl From<&[u8; ChunkMetadata::SERIALIZED_SIZE]> for ChunkMetadata {
-    fn from(bytes: &[u8; ChunkMetadata::SERIALIZED_SIZE]) -> Self {
-        ChunkMetadata {
-            mean: f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-            energy: f32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
-        }
-    }
-}
 
 fn compress_metadata<'a, I>(
     metadata_bitmap: &MetadataBitmap,
@@ -72,9 +47,11 @@ where
 
     // compress chunks
     for (idx, chunk_metadata) in chunk_metadata_iter.enumerate() {
-        encoder.write_all(&chunk_metadata.mean.to_be_bytes())?;
+        let mean_i8 = chunk_metadata.mean as i8;
+        encoder.write_all(&mean_i8.to_be_bytes())?;
         if metadata_bitmap.values[idx] {
-            encoder.write_all(&chunk_metadata.energy.to_be_bytes())?;
+            let energy_f16 = f16::from_f32(chunk_metadata.energy.sqrt());
+            encoder.write_all(&energy_f16.to_be_bytes())?;
         }
     }
     let compressed_bytes = encoder.finish()?.into_inner();
@@ -192,10 +169,10 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
         let decoder = self.decoder.get_mut().unwrap();
         let metadata_bitmap = self.metadata_bitmap.as_ref().unwrap();
 
-        let mut buf = [0u8; size_of::<f32>()];
-        match decoder.read_exact(&mut buf) {
+        let mut mean_buf = [0u8; size_of::<i8>()];
+        match decoder.read_exact(&mut mean_buf) {
             Ok(()) => {
-                let mean = f32::from_be_bytes(buf);
+                let mean = i8::from_be_bytes(mean_buf) as f32;
                 if !mean.is_finite() {
                     let err = std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -205,9 +182,10 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
                 }
 
                 let energy = if metadata_bitmap.values[self.chunk_idx] {
-                    match decoder.read_exact(&mut buf) {
+                    let mut energy_buf = [0u8; size_of::<f16>()];
+                    match decoder.read_exact(&mut energy_buf) {
                         Ok(()) => {
-                            let energy = f32::from_be_bytes(buf);
+                            let energy = f16::from_be_bytes(energy_buf).to_f32().powi(2);
                             if !energy.is_finite() {
                                 let err = std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,

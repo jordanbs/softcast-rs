@@ -25,6 +25,7 @@ rayon = "1.11.0"
 soapysdr = "0.4.5"
 zstd = "0.13.3"
 ctrlc = "3.5.2"
+half = "2.7.1"
 
 [profile.bench]
 debug = 1
