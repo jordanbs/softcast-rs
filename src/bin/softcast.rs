@@ -200,9 +200,9 @@ fn loopback(
         asset_resolution,
         frame_rate,
         gop_len,
-        y_chunk_dimensions,
-        c_chunk_dimensions,
-        c_chunk_dimensions,
+        encoder.y_chunk_dimensions,
+        encoder.cb_chunk_dimensions,
+        encoder.cr_chunk_dimensions,
     )?;
 
     rx_radio.activate()?;
@@ -251,9 +251,9 @@ fn simulate(
         asset_resolution,
         frame_rate,
         gop_len,
-        y_chunk_dimensions,
-        c_chunk_dimensions,
-        c_chunk_dimensions,
+        encoder.y_chunk_dimensions,
+        encoder.cb_chunk_dimensions,
+        encoder.cr_chunk_dimensions,
     )?;
     run_simulation(encoder, decoder)?;
 

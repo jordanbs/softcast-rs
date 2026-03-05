@@ -49,9 +49,9 @@ impl FileWriterDecoder {
         asset_resolution: (usize, usize),
         frame_rate: f64,
         gop_len: usize,
-        y_chunk_dim: (usize, usize, usize),
-        cb_chunk_dim: (usize, usize, usize),
-        cr_chunk_dim: (usize, usize, usize),
+        y_chunk_dim: (usize, usize, usize), // length, height, width
+        cb_chunk_dim: (usize, usize, usize), // length, height, width
+        cr_chunk_dim: (usize, usize, usize), // length, height, width
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let writer_settings = AssetWritterSettings {
             path: out_path,
@@ -59,10 +59,6 @@ impl FileWriterDecoder {
             resolution: (asset_resolution.0 as i32, asset_resolution.1 as i32),
             frame_rate,
         };
-
-        let y_chunk_dim = chunk_dimensions_inverter(y_chunk_dim);
-        let cb_chunk_dim = chunk_dimensions_inverter(cb_chunk_dim);
-        let cr_chunk_dim = chunk_dimensions_inverter(cr_chunk_dim);
 
         let writer = AssetWriter::load_new(writer_settings)?;
         Ok(Self {
@@ -257,8 +253,4 @@ impl Drop for FileWriterDecoder {
                 .expect("Failed to finish writing.");
         }
     }
-}
-
-fn chunk_dimensions_inverter(chunk_dimensions: (usize, usize, usize)) -> (usize, usize, usize) {
-    (chunk_dimensions.2, chunk_dimensions.1, chunk_dimensions.0)
 }

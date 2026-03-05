@@ -68,9 +68,9 @@ mod tests {
             asset_resolution,
             frame_rate,
             gop_len,
-            y_chunk_dimensions,
-            c_chunk_dimensions,
-            c_chunk_dimensions,
+            encoder.y_chunk_dimensions,
+            encoder.cb_chunk_dimensions,
+            encoder.cr_chunk_dimensions,
         )
         .expect("Failed to create decoder.");
         run_simulation(encoder, decoder).expect("run_simulation failed.");

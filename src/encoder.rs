@@ -44,9 +44,9 @@ pub struct FileReaderEncoder {
     macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator>,
     compression_ratio: f64,
     noise_power: f32,
-    y_chunk_dimensions: (usize, usize, usize),
-    cb_chunk_dimensions: (usize, usize, usize),
-    cr_chunk_dimensions: (usize, usize, usize),
+    pub y_chunk_dimensions: (usize, usize, usize),
+    pub cb_chunk_dimensions: (usize, usize, usize),
+    pub cr_chunk_dimensions: (usize, usize, usize),
     asset_resolution: (usize, usize),
     frame_rate: f64,
 }
