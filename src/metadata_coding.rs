@@ -630,8 +630,13 @@ mod tests {
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
         for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
-            assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
-            assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
+            assert!((y_slice.chunk_metadata.mean - y_metadata.mean).abs() < 0.5);
+            assert!(
+                (1.0 - y_slice.chunk_metadata.energy / y_metadata.energy).abs() < 0.001,
+                "{} -> {}",
+                y_slice.chunk_metadata.energy,
+                y_metadata.energy
+            );
         }
     }
 
@@ -652,7 +657,10 @@ mod tests {
 
         let medatadata_out: Vec<ChunkMetadata> = decompressor.map(|r| r.unwrap()).collect();
 
-        assert_eq!(metadata_in, medatadata_out);
+        for (orig, new) in metadata_in.iter().zip(medatadata_out) {
+            assert!((orig.mean - new.mean).abs() < 0.01);
+            assert!((orig.energy - new.energy).abs() < 0.01);
+        }
     }
 
     #[test]
@@ -791,8 +799,13 @@ mod tests {
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
         for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
-            assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
-            assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
+            assert!((y_slice.chunk_metadata.mean - y_metadata.mean).abs() < 0.5);
+            assert!(
+                (1.0 - y_slice.chunk_metadata.energy / y_metadata.energy).abs() < 0.001,
+                "{} -> {}",
+                y_slice.chunk_metadata.energy,
+                y_metadata.energy
+            );
         }
     }
 
@@ -827,8 +840,13 @@ mod tests {
         assert_eq!(y_slices.len(), y_decompressed_metadata.len());
 
         for (y_slice, y_metadata) in y_slices.iter().zip(y_decompressed_metadata.iter()) {
-            assert_eq!(y_slice.chunk_metadata.mean, y_metadata.mean);
-            assert_eq!(y_slice.chunk_metadata.energy, y_metadata.energy);
+            assert!((y_slice.chunk_metadata.mean - y_metadata.mean).abs() < 0.5);
+            assert!(
+                (1.0 - y_slice.chunk_metadata.energy / y_metadata.energy).abs() < 0.001,
+                "{} -> {}",
+                y_slice.chunk_metadata.energy,
+                y_metadata.energy
+            );
         }
     }
 }

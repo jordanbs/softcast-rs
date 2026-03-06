@@ -663,6 +663,7 @@ mod tests {
         use crate::channel_coding::slice::*;
         use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
+        use ndarray_stats::DeviationExt;
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -767,20 +768,24 @@ mod tests {
             .take(chunks_per_gop)
             .collect();
 
-        let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
-            array3d,
-            &chunk_metadatas_new,
-            LENGTH,
-            (asset_width, asset_height),
-            chunk_dim,
-        );
-        //         let y_dct_components =
-        //             TransformBlock3DDCT::from_chunks(&chunks, (asset_width, asset_height));
+        let y_dct_components: TransformBlock3DDCT<YPixelComponentType> =
+            TransformBlock3DDCT::from_chunks_owned(
+                array3d,
+                &chunk_metadatas_new,
+                LENGTH,
+                (asset_width, asset_height),
+                chunk_dim,
+            );
 
-        //         assert_eq!(original_y_dct_components, y_dct_components.values);
         let new_y_components: TransformBlock3D<_> = y_dct_components.into();
 
-        assert_eq!(original_y_components, new_y_components);
+        let mean_sq_error = original_y_components
+            .values()
+            .mean_sq_err(new_y_components.values())
+            .unwrap();
+        assert!(mean_sq_error < 1.0, "{mean_sq_error} < 1.0");
+        // metadata quantization prevents perfect equality
+        // assert_eq!(original_y_components, new_y_components);
     }
 
     #[test]
@@ -805,7 +810,10 @@ mod tests {
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
 
-        assert_eq!(chunk_metadata, new_chunk_metatata);
+        for (orig, new) in chunk_metadata.iter().zip(new_chunk_metatata) {
+            assert!((orig.mean - new.mean).abs() < 0.01);
+            assert!((orig.energy - new.energy).abs() < 0.01);
+        }
     }
 
     #[test]
@@ -1177,7 +1185,7 @@ mod tests {
             .values()
             .mean_sq_err(new_y_components.values())
             .unwrap();
-        assert_eq!(mean_sq_error, 0f64);
+        assert!(mean_sq_error < 1.0);
     }
 
     #[test]

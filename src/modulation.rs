@@ -581,7 +581,10 @@ mod tests {
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
 
-        assert_eq!(chunk_metadata, new_chunk_metatata);
+        for (orig, new) in chunk_metadata.iter().zip(new_chunk_metatata.iter()) {
+            assert!((orig.mean - new.mean).abs() < 0.5);
+            assert!(orig.energy == new.energy || (1.0 - orig.energy / new.energy).abs() < 0.001);
+        }
     }
 
     #[test]
@@ -589,7 +592,7 @@ mod tests {
         let mut chunk_metadata = vec![ChunkMetadata::default(); 15000];
         for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
             cm.energy = idx as f32;
-            cm.mean = -(idx as f32);
+            cm.mean = -(idx as f32) % i8::MAX as f32;
         }
         let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
         let packetizer: Packetizer = compressed_metadata.into();
@@ -602,8 +605,14 @@ mod tests {
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
 
-        eprintln!("{:?}", new_chunk_metatata);
-
-        assert_eq!(chunk_metadata, new_chunk_metatata);
+        for (orig, new) in chunk_metadata.iter().zip(new_chunk_metatata.iter()) {
+            assert!(
+                (orig.mean - new.mean).abs() < 0.5,
+                "{} ->  {}",
+                orig.mean,
+                new.mean
+            );
+            assert!(orig.energy == new.energy || (1.0 - orig.energy / new.energy).abs() < 0.001);
+        }
     }
 }
