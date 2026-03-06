@@ -25,7 +25,7 @@ const DEFAULT_COMPRESSION_RATIO: f64 = 0.1875;
 const DEFAULT_GOP_LEN: usize = 22;
 const DEFAULT_Y_CHUNK_DIMENSIONS: &str = "48x40x1";
 const DEFAULT_C_CHUNK_DIMENSIONS: &str = "40x30x1";
-const DEFAULT_NOISE_POWER: f32 = 0.0;
+const DEFAULT_NOISE: f32 = 0.0;
 const DEFAULT_TX_GAIN: f64 = 0.08;
 const DEFAULT_RX_GAIN: f64 = 0.7;
 const DEFAULT_FREQ: f64 = 800_000_000.0;
@@ -105,8 +105,8 @@ enum Commands {
         #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
         compression_ratio: f64,
 
-        #[arg(short, default_value_t = DEFAULT_NOISE_POWER)]
-        noise_power: f32,
+        #[arg(long, default_value_t = DEFAULT_NOISE)]
+        noise: f32,
 
         #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
         gop_len: usize,
@@ -231,7 +231,7 @@ fn simulate(
     outfile: std::path::PathBuf,
     gop_len: usize,
     compression_ratio: f64,
-    noise_power: f32,
+    noise: f32,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -239,7 +239,7 @@ fn simulate(
         infile,
         gop_len,
         compression_ratio,
-        noise_power,
+        noise,
         y_chunk_dimensions,
         c_chunk_dimensions,
         c_chunk_dimensions,
@@ -302,7 +302,7 @@ fn main() -> Result<(), String> {
             outfile,
             gop_len,
             compression_ratio,
-            noise_power,
+            noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
         } => simulate(
@@ -310,7 +310,7 @@ fn main() -> Result<(), String> {
             outfile,
             gop_len,
             compression_ratio,
-            noise_power,
+            noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
         ),
