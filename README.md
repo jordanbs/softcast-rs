@@ -13,6 +13,9 @@ softcast-rs currently only runs on macOS.
 - fftw
 - limesuite
 
+## Installation
+After installing dependencies, use cargo to build.
+
 ## Usage
 ```
 softcast loopback path/to/infile.mp4 path/to/outfile.mp4
@@ -22,6 +25,9 @@ Without a software defined radio, a digital simulation can be performed.
 ```
 softcast simulate --noise 0.01 path/to/infile/mp4 path/to/outfile.mp4
 ```
+
+![Bird falling off tree branch discernable amidst snowy luma and color distortion](images/bigbuck-noise.png)
+*Example of a highly compressed SoftCast-encoded image frame recovered over a noisy channel*
 
 ## Contact
 If you would like to collaborate on, deploy, or commercially license softcast-rs, please email me at rockers.grate.4y at icloud.com.
