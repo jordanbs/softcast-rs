@@ -278,10 +278,10 @@ pub mod packetizer {
         }
     }
 
-    const DECODED_MESSAGE_LENGTH: usize = 223 * 4; // liquid uses {255, 223}-rs
-    pub const ENCODED_MESSAGE_LENGTH: usize = 1060;
+    const DECODED_MESSAGE_LENGTH: usize = 127 * 4; // liquid uses {255, 223}-rs
+    pub const ENCODED_MESSAGE_LENGTH: usize = 1155;
     const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
-    const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8;
+    const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8_50;
     const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
 
     pub struct Packetizer {
@@ -669,7 +669,7 @@ mod tests {
         let packetizer = Packetizer::new(data.into());
 
         for encoded_data in packetizer {
-            assert_eq!(encoded_data.encoded_data.len(), 1060);
+            assert_eq!(encoded_data.encoded_data.len(), ENCODED_MESSAGE_LENGTH);
         }
     }
 
@@ -750,7 +750,7 @@ mod tests {
         };
         let packetizer = Packetizer::from(compressed_metadata);
 
-        let zeros = [0u8; 1060];
+        let zeros = [0u8; ENCODED_MESSAGE_LENGTH];
         let zeros_encoded_tail = EncodedPacket {
             encoded_data: zeros,
         };
