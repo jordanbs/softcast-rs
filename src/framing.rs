@@ -75,7 +75,7 @@ impl OFDMFrame {
             const MAX_VALUE: f32 = 0.5;
             let normalization_factor = MAX_VALUE / max;
 
-            eprintln!("Normalizing by {max}");
+            // eprintln!("Normalizing by {max}");
 
             for symbol in self.symbols.iter_mut() {
                 for iq in symbol.time_domain_symbols.iter_mut() {
@@ -93,6 +93,9 @@ pub struct OFDMFrameGenerator<I: Iterator<Item = QuadratureSymbol>> {
     subcarrier_allocation: Box<[u8]>,
     data_symbols_sent_since_reset: usize,
     is_resetting: bool,
+    average_power: f64,
+    peak_power: f64,
+    count_time_domain_symbols: i64,
 }
 
 enum OFDMFrameGeneratorState {
@@ -134,7 +137,34 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
             subcarrier_allocation,
             data_symbols_sent_since_reset: 0,
             is_resetting: false,
+            average_power: 0.0,
+            peak_power: 0.0,
+            count_time_domain_symbols: 0,
         }
+    }
+}
+
+impl<I: Iterator<Item = QuadratureSymbol>> OFDMFrameGenerator<I> {
+    fn update_statistics(&mut self, frame: &OFDMFrame) {
+        for iq_symbol in frame
+            .symbols
+            .iter()
+            .flat_map(|ofdmsymbol| ofdmsymbol.time_domain_symbols)
+        {
+            self.count_time_domain_symbols += 1;
+            let iq_power = iq_symbol.norm_sqr() as f64;
+            self.average_power +=
+                (iq_power - self.average_power) / self.count_time_domain_symbols as f64;
+            self.peak_power = self.peak_power.max(iq_power);
+        }
+    }
+    fn papr(&self) -> f64 {
+        self.peak_power / self.average_power
+    }
+    fn reset_statistics(&mut self) {
+        self.average_power = 0.0;
+        self.peak_power = 0.0;
+        self.count_time_domain_symbols = 0;
     }
 }
 
@@ -242,6 +272,9 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
             None
         } else {
             frame.normalize();
+            self.update_statistics(&frame);
+            eprintln!("PAPR:AVG {:.0}:{:.5}", self.papr(), self.average_power);
+            self.reset_statistics();
             Some(frame)
         }
     }

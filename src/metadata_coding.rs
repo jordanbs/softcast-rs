@@ -278,8 +278,8 @@ pub mod packetizer {
         }
     }
 
-    const DECODED_MESSAGE_LENGTH: usize = 127 * 4; // liquid uses {255, 223}-rs
-    pub const ENCODED_MESSAGE_LENGTH: usize = 1155;
+    const DECODED_MESSAGE_LENGTH: usize = 2056; // liquid uses {255, 127}-rs
+    pub const ENCODED_MESSAGE_LENGTH: usize = 4250;
     const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
     const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8_50;
     const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
@@ -471,7 +471,7 @@ pub mod packetizer {
             if success != 1 {
                 return Err("packetizer_decode failed.".into());
             }
-            eprintln!("packet integrity check succeeded {}", decoded_data.len());
+            // eprintln!("packet integrity check succeeded {}", decoded_data.len());
 
             // decode packet_len
             {
@@ -497,7 +497,7 @@ pub mod packetizer {
                 // TODO: any upper bound for payload_len?
 
                 decoded_data.truncate(decoded_data.len() - FOOTER_LEN); // truncates payload_len
-                eprintln!("payload_len:{payload_len}");
+                // eprintln!("payload_len:{payload_len}");
 
                 Some(payload_len)
             } else {
