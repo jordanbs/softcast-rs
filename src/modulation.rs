@@ -111,7 +111,7 @@ pub mod metadata {
                 self.working_packet = None;
                 self.working_packet_pos = 0;
             }
-            quadrature_symbols.scale_by(4.0); // TODO: factor out
+            quadrature_symbols.scale_by(1.0); // TODO: factor out
             Some(quadrature_symbols)
         }
     }
