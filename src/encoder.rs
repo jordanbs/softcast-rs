@@ -130,9 +130,16 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
         .map(|slice_and_chunk_metadata| slice_and_chunk_metadata.slice)
         .into();
 
+    let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
+    let whitener = Whitener::new(
+        frequency_domain_signal,
+        ofdm_symbols_per_frame(),
+        data_symbols_per_frame(),
+        false,
+    );
+
     // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_> =
-        metadata_modulator.flatten().chain(slice_modulator).into(); // TODO: interleave
+    let ofdm_framer: OFDMFrameGenerator<_> = whitener.into(); // TODO: interleave
     ofdm_framer
 }
 

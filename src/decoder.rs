@@ -178,7 +178,14 @@ fn into_transform_block_3d_dct<
     let chunks_per_gop =
         (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-    let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
+    let de_whitener = Whitener::new(
+        synchronizer,
+        ofdm_symbols_per_frame(),
+        data_symbols_per_frame(),
+        true,
+    );
+
+    let metadata_demodulator: MetadataDemodulator<_> = de_whitener.into();
     let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
     let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
@@ -204,7 +211,7 @@ fn into_transform_block_3d_dct<
     let num_included_chunks = metadata_bitmap.values.count_ones();
     let num_included_slices = num_included_chunks.next_power_of_two();
 
-    let synchronizer = metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+    let de_whitener = metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
     let mut dct_allocation = slices_allocation::<PixelType>(
         gop_len,
@@ -212,12 +219,8 @@ fn into_transform_block_3d_dct<
         chunk_dim,
         num_included_slices - num_included_chunks,
     );
-    let slice_demodulator: SliceDemodulator<'_, PixelType, _> = SliceDemodulator::new(
-        chunk_dim,
-        metadata_bitmap,
-        synchronizer,
-        &mut dct_allocation,
-    );
+    let slice_demodulator: SliceDemodulator<'_, PixelType, _> =
+        SliceDemodulator::new(chunk_dim, metadata_bitmap, de_whitener, &mut dct_allocation);
 
     let mut slice_and_metadatas = vec![];
     let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();

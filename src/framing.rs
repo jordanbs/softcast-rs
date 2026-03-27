@@ -27,7 +27,7 @@ const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
 pub const OFDM_SYMBOL_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
-const RESET_LEN: usize = 0x8000;
+const RESET_LEN: usize = 44 * 0x400; // must be a power of 2. 44 is the number of data subcarriers from 64 total.
 
 static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -47,6 +47,29 @@ impl Default for OFDMSymbol {
 
 pub struct OFDMFrame {
     symbols: Vec<OFDMSymbol>,
+}
+
+pub fn data_symbols_per_frame() -> usize {
+    static DATA_SYMBOLS_PER_FRAME: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+    *DATA_SYMBOLS_PER_FRAME.get_or_init(|| {
+        let mut subcarrier_allocation = Box::new([0u8; NUM_SUBCARRIERS]);
+        let status = unsafe {
+            liquid_sys::ofdmframe_init_default_sctype(
+                NUM_SUBCARRIERS as u32,
+                subcarrier_allocation.as_mut_ptr(),
+            )
+        } as u32;
+        assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+        subcarrier_allocation
+            .iter()
+            .filter(|&subcarrier_type| liquid_sys::OFDMFRAME_SCTYPE_DATA == *subcarrier_type as u32)
+            .count()
+    })
+}
+pub fn ofdm_symbols_per_frame() -> usize {
+    RESET_LEN / data_symbols_per_frame()
 }
 
 pub trait AsBoxComplex32Slice {
@@ -576,8 +599,8 @@ pub struct Whitener<I: Iterator<Item = QuadratureSymbol>> {
 }
 impl<I: Iterator<Item = QuadratureSymbol>> Whitener<I> {
     pub fn new(inner: I, rows: usize, cols: usize, reverse: bool) -> Self {
-        assert!(rows.is_power_of_two());
-        assert_eq!(0, cols % 2);
+        assert!(rows.is_power_of_two(), "{rows}");
+        assert_eq!(0, cols % 2, "{cols}");
         Self {
             inner: inner.peekable(),
             working_iter: vec![].into_iter(),
