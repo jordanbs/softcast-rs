@@ -16,8 +16,11 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::modulation::*;
+use fwht;
 use liquid_sys;
 use num_complex::Complex32;
+use rand::{Rng, SeedableRng};
+use rand_xoshiro;
 
 pub const NUM_SUBCARRIERS: usize = 64;
 const CP_LEN: usize = 16;
@@ -457,6 +460,156 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Drop for OFDMFrameSynchronizer<I> {
     fn drop(&mut self) {
         let status = unsafe { liquid_sys::ofdmframesync_destroy(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+    }
+}
+
+trait PermuteColumns {
+    fn permute_columns(&mut self, rows: usize, columns: usize, seed: u64);
+    fn permute_columns_reverse(&mut self, rows: usize, columns: usize, seed: u64);
+}
+
+fn permutation_indexes(rows: usize, cols: usize, seed: u64) -> Box<[(usize, usize)]> {
+    let mut indexes = Vec::with_capacity(rows * cols);
+    let mut rng = rand_xoshiro::Xoshiro128PlusPlus::seed_from_u64(seed);
+
+    for row_idx in 0..rows {
+        for col_idx_i in (1..cols - 1).rev() {
+            let col_idx_j = rng.random_range(..=col_idx_i);
+            let i = col_idx_i * rows + row_idx;
+            let j = col_idx_j * rows + row_idx;
+            indexes.push((i, j));
+        }
+    }
+    indexes.into()
+}
+impl PermuteColumns for Vec<Complex32> {
+    fn permute_columns(&mut self, rows: usize, cols: usize, seed: u64) {
+        for (i, j) in permutation_indexes(rows, cols, seed) {
+            self.swap(i, j);
+        }
+    }
+    fn permute_columns_reverse(&mut self, rows: usize, cols: usize, seed: u64) {
+        for (i, j) in permutation_indexes(rows, cols, seed).into_iter().rev() {
+            self.swap(i, j);
+        }
+    }
+}
+
+trait ScrambleSigns {
+    fn scramble_signs(&mut self, seed: u64);
+    fn scramble_signs_reverse(&mut self, seed: u64);
+}
+impl ScrambleSigns for Vec<Complex32> {
+    fn scramble_signs(&mut self, seed: u64) {
+        let mut rng = rand_xoshiro::Xoshiro128PlusPlus::seed_from_u64(seed);
+        for symbol in self.iter_mut() {
+            if rng.random_bool(0.5) {
+                *symbol *= -1.0;
+            }
+        }
+    }
+    fn scramble_signs_reverse(&mut self, seed: u64) {
+        self.scramble_signs(seed);
+    }
+}
+
+trait Fwht2d {
+    fn fwht_2d_mut(&mut self, rows: usize, cols: usize);
+}
+impl Fwht2d for Vec<Complex32> {
+    fn fwht_2d_mut(&mut self, rows: usize, cols: usize) {
+        // hadamard across rows
+        for col_idx in 0..cols {
+            let row_start = col_idx * rows;
+            let row_end = (col_idx + 1) * rows;
+            fwht::fwht_slice(&mut self[row_start..row_end]).expect("FWHT failed in whitener");
+        }
+        let orthonormalization_factor = 1.0 / (rows as f32).sqrt();
+        for value in self.iter_mut() {
+            *value *= orthonormalization_factor;
+        }
+    }
+}
+
+trait Whiten {
+    fn whiten(&mut self, rows: usize, cols: usize);
+    fn whiten_reverse(&mut self, rows: usize, cols: usize);
+}
+impl Whiten for Vec<Complex32> {
+    fn whiten(&mut self, rows: usize, cols: usize) {
+        // major axis is columns, minor axis is rows, reverse from what is usual
+        // this is to match subfrequency allocation to rows language from the paper
+        // and to perform fwht in-place on the minor axis
+
+        // rows -> frequency
+        // columns -> time
+
+        // X'  = ScrambleSign(PermuteColumns(X))
+        // X'' = Hadamard(X')
+        // X†  = ScrambleSign(PermuteColumns(X"))
+
+        self.permute_columns(rows, cols, 0);
+        self.scramble_signs(1);
+
+        self.fwht_2d_mut(rows, cols);
+
+        self.permute_columns(rows, cols, 2);
+        self.scramble_signs(3);
+    }
+    fn whiten_reverse(&mut self, rows: usize, cols: usize) {
+        self.scramble_signs_reverse(3);
+        self.permute_columns_reverse(rows, cols, 2);
+
+        self.fwht_2d_mut(rows, cols);
+
+        self.scramble_signs_reverse(1);
+        self.permute_columns_reverse(rows, cols, 0);
+    }
+}
+
+pub struct Whitener<I: Iterator<Item = QuadratureSymbol>> {
+    inner: std::iter::Peekable<I>,
+    working_iter: std::vec::IntoIter<Complex32>,
+    rows: usize,
+    cols: usize,
+    reverse: bool,
+}
+impl<I: Iterator<Item = QuadratureSymbol>> Whitener<I> {
+    pub fn new(inner: I, rows: usize, cols: usize, reverse: bool) -> Self {
+        assert!(rows.is_power_of_two());
+        assert_eq!(0, cols % 2);
+        Self {
+            inner: inner.peekable(),
+            working_iter: vec![].into_iter(),
+            rows,
+            cols,
+            reverse,
+        }
+    }
+}
+impl<I: Iterator<Item = QuadratureSymbol>> Iterator for Whitener<I> {
+    type Item = QuadratureSymbol;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(symbol) = self.working_iter.next() {
+                return Some(unsafe { std::mem::transmute(symbol) });
+            }
+            if self.inner.peek().is_none() {
+                return None;
+            }
+            // collect from inner iter with any necessary padding
+            let mut signal = vec![Complex32::default(); self.rows * self.cols];
+            for (dst, src) in signal.iter_mut().zip(self.inner.by_ref()) {
+                *dst = unsafe { std::mem::transmute(src) };
+            }
+            if self.reverse {
+                signal.whiten_reverse(self.rows, self.cols);
+            } else {
+                signal.whiten(self.rows, self.cols);
+            }
+            self.working_iter = signal.into_iter();
+        }
     }
 }
 
@@ -1514,5 +1667,27 @@ mod tests {
             .mean_sq_err(new_cb_components.values())
             .unwrap();
         assert!(mean_sq_error < 1.0);
+    }
+
+    #[test]
+    fn test_whitener() {
+        let cols = 32; // num subfrequency bins
+        let rows = 16; // num ofdm symbols
+        let signal: Vec<QuadratureSymbol> = (0..(cols * rows))
+            .map(|idx| Complex32::new(idx as f32, -(idx as f32)).into())
+            .collect();
+        let signal_clone = signal.clone();
+
+        let whitened_signal: Vec<QuadratureSymbol> =
+            Whitener::new(signal.into_iter(), rows, cols, false).collect();
+
+        let recovered_signal: Vec<QuadratureSymbol> =
+            Whitener::new(whitened_signal.into_iter(), rows, cols, true).collect();
+
+        assert_eq!(signal_clone.len(), recovered_signal.len());
+        for (orig, new) in signal_clone.iter().zip(recovered_signal.iter()) {
+            assert!((orig.value.re - new.value.re).abs() < 0.00001);
+            assert!((orig.value.im - new.value.im).abs() < 0.00001);
+        }
     }
 }

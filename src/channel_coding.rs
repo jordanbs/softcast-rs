@@ -20,8 +20,8 @@ use crate::source_coding::chunk::*;
 use slice::*;
 
 pub mod slice {
+    use self::fwht;
     use super::*;
-    use fwht;
 
     // TODO: there is no reason for slices to carry chunk metadata
     pub struct SliceAndChunkMetadata<'a, PixelType: HasPixelComponentType> {
