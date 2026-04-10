@@ -44,6 +44,80 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
+    Tx {
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        #[arg(value_parser = validate_file_exists)]
+        infile: std::path::PathBuf,
+
+        #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
+        compression_ratio: f64,
+
+        #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
+        gop_len: usize,
+
+        // defaults set for 1080p
+        #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
+        y_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
+        c_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(short, default_value_t = DEFAULT_FREQ)]
+        frequency: f64,
+
+        #[arg(short = 'n', default_value_t = DEFAULT_SAMPLE_RATE)]
+        sample_rate: f64,
+
+        #[arg(short, default_value_t = DEAFULT_BANDWIDTH)]
+        bandwidth: f64,
+
+        #[arg(long, default_value = DEFAULT_TX_ANTENNA)]
+        antenna: String,
+
+        #[arg(long, default_value_t = DEFAULT_TX_CHANNEL)]
+        channel: usize,
+
+        #[arg(long, default_value_t = DEFAULT_TX_GAIN)]
+        gain: f64,
+    },
+    Rx {
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        #[arg(value_parser = validate_file_does_not_exist)]
+        outfile: std::path::PathBuf,
+
+        #[arg(value_parser = parse_dimensions_2d)]
+        asset_resolution: (usize, usize),
+
+        frame_rate: f64,
+
+        #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
+        gop_len: usize,
+
+        // defaults set for 1080p
+        #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
+        y_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
+        c_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(short, default_value_t = DEFAULT_FREQ)]
+        frequency: f64,
+
+        #[arg(short = 'n', default_value_t = DEFAULT_SAMPLE_RATE)]
+        sample_rate: f64,
+
+        #[arg(short, default_value_t = DEAFULT_BANDWIDTH)]
+        bandwidth: f64,
+
+        #[arg(long, default_value = DEFAULT_RX_ANTENNA)]
+        antenna: String,
+
+        #[arg(long, default_value_t = DEFAULT_RX_CHANNEL)]
+        channel: usize,
+
+        #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
+        gain: f64,
+    },
     Loopback {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         #[arg(value_parser = validate_file_exists)]
@@ -60,10 +134,10 @@ enum Commands {
         gop_len: usize,
 
         // defaults set for 1080p
-        #[arg(long="y", value_parser = parse_dimensions, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
+        #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
         y_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long="cbcr", value_parser = parse_dimensions, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
+        #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
@@ -112,15 +186,27 @@ enum Commands {
         gop_len: usize,
 
         // defaults set for 1080p
-        #[arg(long="y", value_parser = parse_dimensions, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
+        #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
         y_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long="cbcr", value_parser = parse_dimensions, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
+        #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
     },
 }
 
-fn parse_dimensions(s: &str) -> Result<(usize, usize, usize), String> {
+fn parse_dimensions_2d(s: &str) -> Result<(usize, usize), String> {
+    let parts: Box<[&str]> = s.split('x').collect();
+    if parts.len() != 2 {
+        return Err("Expected WxHxD format".into());
+    }
+
+    let x = parts[0].parse().map_err(|_| "Invalid width")?;
+    let y = parts[1].parse().map_err(|_| "Invalid height")?;
+
+    Ok((x, y))
+}
+
+fn parse_dimensions_3d(s: &str) -> Result<(usize, usize, usize), String> {
     let parts: Box<[&str]> = s.split('x').collect();
     if parts.len() != 3 {
         return Err("Expected WxHxD format".into());
@@ -260,10 +346,151 @@ fn simulate(
     Ok(())
 }
 
+fn transmit(
+    infile: std::path::PathBuf,
+    gop_len: usize,
+    compression_ratio: f64,
+    y_chunk_dimensions: (usize, usize, usize),
+    c_chunk_dimensions: (usize, usize, usize),
+    frequency: f64,
+    sample_rate: f64,
+    bandwidth: f64,
+    antenna: &str,
+    channel: usize,
+    gain: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut tx_params = RadioParams::default();
+    tx_params.frequency = frequency;
+    tx_params.sample_rate = sample_rate;
+    tx_params.bandwidth = bandwidth;
+    tx_params.channel = channel;
+    tx_params.antenna = antenna.to_string();
+    tx_params.gain = gain;
+
+    let mut tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
+    let mut encoder = FileReaderEncoder::try_new(
+        infile,
+        gop_len,
+        compression_ratio,
+        0.0,
+        y_chunk_dimensions,
+        c_chunk_dimensions,
+        c_chunk_dimensions,
+    )?;
+
+    tx_radio.activate()?;
+
+    encoder.run(tx_radio)?;
+
+    Ok(())
+}
+
+fn receive(
+    outfile: std::path::PathBuf,
+    asset_resolution: (usize, usize),
+    frame_rate: f64,
+    gop_len: usize,
+    y_chunk_dimensions: (usize, usize, usize),
+    c_chunk_dimensions: (usize, usize, usize),
+    frequency: f64,
+    sample_rate: f64,
+    bandwidth: f64,
+    antenna: &str,
+    channel: usize,
+    gain: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut rx_params = RadioParams::default();
+    rx_params.frequency = frequency;
+    rx_params.sample_rate = sample_rate;
+    rx_params.bandwidth = bandwidth;
+    rx_params.channel = channel;
+    rx_params.antenna = antenna.to_string();
+    rx_params.gain = gain;
+
+    let mut rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, true)?;
+
+    let mut decoder = FileWriterDecoder::try_new(
+        outfile,
+        asset_resolution,
+        frame_rate,
+        gop_len,
+        y_chunk_dimensions,
+        c_chunk_dimensions,
+        c_chunk_dimensions,
+    )?;
+
+    rx_radio.activate()?;
+
+    let iq_reader = rx_radio.take_mpsc_reader();
+    let rx_radio_join = rx_radio.run_async();
+    let decoder_join = std::thread::spawn(move || {
+        let result = decoder.run(iq_reader).map_err(|e| e.to_string());
+        eprintln!("decoder result: {:?}", result);
+        result
+    });
+
+    let _ = rx_radio_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
+    let _ = decoder_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
+
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
     match args.command {
+        Commands::Tx {
+            infile,
+            compression_ratio,
+            gop_len,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            frequency,
+            sample_rate,
+            bandwidth,
+            antenna,
+            channel,
+            gain,
+        } => transmit(
+            infile,
+            gop_len,
+            compression_ratio,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            frequency,
+            sample_rate,
+            bandwidth,
+            &antenna,
+            channel,
+            gain,
+        ),
+        Commands::Rx {
+            outfile,
+            asset_resolution,
+            frame_rate,
+            gop_len,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            frequency,
+            sample_rate,
+            bandwidth,
+            antenna,
+            channel,
+            gain,
+        } => receive(
+            outfile,
+            asset_resolution,
+            frame_rate,
+            gop_len,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            frequency,
+            sample_rate,
+            bandwidth,
+            &antenna,
+            channel,
+            gain,
+        ),
         Commands::Loopback {
             infile,
             outfile,

@@ -173,6 +173,23 @@ impl ReceiveDevice {
     }
 }
 
+pub fn new_lime_device() -> Result<*mut limesuite_sys::lms_device_t, &'static str> {
+    unsafe {
+        let num_devices = limesuite_sys::LMS_GetDeviceList(std::ptr::null_mut());
+        if 0 == num_devices {
+            return Err("No LimeSDR devices found.");
+        }
+        let mut device: *mut limesuite_sys::lms_device_t = std::ptr::null_mut();
+        if 0 != limesuite_sys::LMS_Open(&mut device, std::ptr::null_mut(), std::ptr::null_mut()) {
+            return Err("Failed to open LimeSDR device.");
+        }
+        if 0 != limesuite_sys::LMS_Init(device) {
+            return Err("Failed to init LimeSDR device.");
+        }
+        Ok(device)
+    }
+}
+
 pub struct LimeTransmitDevice {
     pub device: *mut limesuite_sys::lms_device_t,
     stream: Box<limesuite_sys::lms_stream_t>,
@@ -187,18 +204,8 @@ impl LimeTransmitDevice {
         dump_file: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         unsafe {
-            let num_devices = limesuite_sys::LMS_GetDeviceList(std::ptr::null_mut());
-            if 0 == num_devices {
-                return Err("No LimeSDR devices found.".into());
-            }
-            let mut device: *mut limesuite_sys::lms_device_t = std::ptr::null_mut();
-            if 0 != limesuite_sys::LMS_Open(&mut device, std::ptr::null_mut(), std::ptr::null_mut())
-            {
-                return Err("Failed to open LimeSDR device.".into());
-            }
-            if 0 != limesuite_sys::LMS_Init(device) {
-                return Err("Failed to init LimeSDR device.".into());
-            }
+            let device = new_lime_device()?;
+
             if 0 != limesuite_sys::LMS_EnableChannel(
                 device,
                 limesuite_sys::LMS_CH_TX,
