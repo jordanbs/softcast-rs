@@ -144,9 +144,9 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
 }
 
 impl FileReaderEncoder {
-    pub fn run<W: Complex32Consumer>(
+    pub fn run(
         &mut self,
-        mut ofdm_symbol_writer: W,
+        ofdm_symbol_writer: &mut dyn Complex32Consumer,
     ) -> Result<(), Box<dyn std::error::Error>> {
         for macro_block in self.macro_block_3d_iter.by_ref() {
             // encoder

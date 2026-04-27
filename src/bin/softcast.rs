@@ -71,6 +71,9 @@ enum Commands {
         #[arg(short, default_value_t = DEAFULT_BANDWIDTH)]
         bandwidth: f64,
 
+        #[arg(long, default_value_t = 0)]
+        device_idx: usize,
+
         #[arg(long, default_value = DEFAULT_TX_ANTENNA)]
         antenna: String,
 
@@ -79,6 +82,9 @@ enum Commands {
 
         #[arg(long, default_value_t = DEFAULT_TX_GAIN)]
         gain: f64,
+
+        #[arg(long)]
+        lime: bool,
     },
     Rx {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -109,6 +115,9 @@ enum Commands {
         #[arg(short, default_value_t = DEAFULT_BANDWIDTH)]
         bandwidth: f64,
 
+        #[arg(long, default_value_t = 0)]
+        device_idx: usize,
+
         #[arg(long, default_value = DEFAULT_RX_ANTENNA)]
         antenna: String,
 
@@ -117,6 +126,9 @@ enum Commands {
 
         #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         gain: f64,
+
+        #[arg(long)]
+        lime: bool,
     },
     Loopback {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -149,6 +161,9 @@ enum Commands {
         #[arg(short, default_value_t = DEAFULT_BANDWIDTH)]
         bandwidth: f64,
 
+        #[arg(long, default_value_t = 0)]
+        device_idx: usize,
+
         #[arg(long, default_value = DEFAULT_TX_ANTENNA)]
         tx_antenna: String,
 
@@ -166,6 +181,9 @@ enum Commands {
 
         #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         rx_gain: f64,
+
+        #[arg(long)]
+        lime: bool,
     },
     Simulate {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -248,17 +266,20 @@ fn loopback(
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
+    device_idx: usize,
     tx_antenna: &str,
     rx_antenna: &str,
     tx_channel: usize,
     rx_channel: usize,
     tx_gain: f64,
     rx_gain: f64,
+    lime: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut tx_params = RadioParams::default();
     tx_params.frequency = frequency;
     tx_params.sample_rate = sample_rate;
     tx_params.bandwidth = bandwidth;
+    tx_params.device_idx = device_idx;
     tx_params.channel = tx_channel;
     tx_params.antenna = tx_antenna.to_string();
     tx_params.gain = tx_gain;
@@ -268,8 +289,16 @@ fn loopback(
     rx_params.channel = rx_channel;
     rx_params.gain = rx_gain;
 
-    let mut tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
-    let mut rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
+    let (mut tx_radio, mut rx_radio): (Box<dyn TransmitDevice>, Box<dyn ReceiveDevice>) = if lime {
+        let tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
+        let rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
+        (Box::new(tx_radio), Box::new(rx_radio))
+    } else {
+        let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
+        let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, true)?;
+        (Box::new(tx_radio), Box::new(rx_radio))
+    };
+
     let mut encoder = FileReaderEncoder::try_new(
         infile,
         gop_len,
@@ -295,14 +324,14 @@ fn loopback(
     tx_radio.activate()?;
 
     let iq_reader = rx_radio.take_mpsc_reader();
-    let rx_radio_join = rx_radio.run_async();
+    let rx_radio_join = run_async(rx_radio);
     let decoder_join = std::thread::spawn(move || {
         let result = decoder.run(iq_reader).map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
     });
 
-    encoder.run(tx_radio)?;
+    encoder.run(tx_radio.as_mut())?;
 
     //     play_dump_file(tx_radio.stream, &std::path::PathBuf::from("/tmp/dumpw_063"));
 
@@ -355,19 +384,28 @@ fn transmit(
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
+    device_idx: usize,
     antenna: &str,
     channel: usize,
     gain: f64,
+    lime: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut tx_params = RadioParams::default();
     tx_params.frequency = frequency;
     tx_params.sample_rate = sample_rate;
     tx_params.bandwidth = bandwidth;
+    tx_params.device_idx = device_idx;
     tx_params.channel = channel;
     tx_params.antenna = antenna.to_string();
     tx_params.gain = gain;
 
-    let mut tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
+    let mut tx_radio: Box<dyn TransmitDevice> = if lime {
+        let tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
+        Box::new(tx_radio)
+    } else {
+        let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
+        Box::new(tx_radio)
+    };
     let mut encoder = FileReaderEncoder::try_new(
         infile,
         gop_len,
@@ -380,7 +418,7 @@ fn transmit(
 
     tx_radio.activate()?;
 
-    encoder.run(tx_radio)?;
+    encoder.run(tx_radio.as_mut())?;
 
     Ok(())
 }
@@ -395,9 +433,11 @@ fn receive(
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
+    device_idx: usize,
     antenna: &str,
     channel: usize,
     gain: f64,
+    lime: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut rx_params = RadioParams::default();
     rx_params.frequency = frequency;
@@ -406,8 +446,16 @@ fn receive(
     rx_params.channel = channel;
     rx_params.antenna = antenna.to_string();
     rx_params.gain = gain;
+    rx_params.device_idx = device_idx;
 
-    let mut rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, true)?;
+    let mut rx_radio: Box<dyn ReceiveDevice> = if lime {
+        let rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, true)?;
+        Box::new(rx_radio)
+    } else {
+        let device = &new_soapy_device(&rx_params)?;
+        let rx_radio = SoapyReceiveDevice::try_new(rx_params, device, true)?;
+        Box::new(rx_radio)
+    };
 
     let mut decoder = FileWriterDecoder::try_new(
         outfile,
@@ -422,14 +470,14 @@ fn receive(
     rx_radio.activate()?;
 
     let iq_reader = rx_radio.take_mpsc_reader();
-    let rx_radio_join = rx_radio.run_async();
     let decoder_join = std::thread::spawn(move || {
         let result = decoder.run(iq_reader).map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
     });
 
-    let _ = rx_radio_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
+    rx_radio.run()?;
+
     let _ = decoder_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
 
     Ok(())
@@ -448,9 +496,11 @@ fn main() -> Result<(), String> {
             frequency,
             sample_rate,
             bandwidth,
+            device_idx,
             antenna,
             channel,
             gain,
+            lime,
         } => transmit(
             infile,
             gop_len,
@@ -460,9 +510,11 @@ fn main() -> Result<(), String> {
             frequency,
             sample_rate,
             bandwidth,
+            device_idx,
             &antenna,
             channel,
             gain,
+            lime,
         ),
         Commands::Rx {
             outfile,
@@ -474,9 +526,11 @@ fn main() -> Result<(), String> {
             frequency,
             sample_rate,
             bandwidth,
+            device_idx,
             antenna,
             channel,
             gain,
+            lime,
         } => receive(
             outfile,
             asset_resolution,
@@ -487,9 +541,11 @@ fn main() -> Result<(), String> {
             frequency,
             sample_rate,
             bandwidth,
+            device_idx,
             &antenna,
             channel,
             gain,
+            lime,
         ),
         Commands::Loopback {
             infile,
@@ -501,12 +557,14 @@ fn main() -> Result<(), String> {
             frequency,
             sample_rate,
             bandwidth,
+            device_idx,
             tx_antenna,
             rx_antenna,
             tx_channel,
             rx_channel,
             tx_gain,
             rx_gain,
+            lime,
         } => loopback(
             infile,
             outfile,
@@ -517,12 +575,14 @@ fn main() -> Result<(), String> {
             frequency,
             sample_rate,
             bandwidth,
+            device_idx,
             &tx_antenna,
             &rx_antenna,
             tx_channel,
             rx_channel,
             tx_gain,
             rx_gain,
+            lime,
         ),
         Commands::Simulate {
             infile,

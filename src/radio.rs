@@ -16,12 +16,15 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::encoder::Complex32Consumer;
-use crate::framing::OFDM_SYMBOL_LEN;
 use crate::sync::*;
 use limesuite_sys;
 use num_complex::Complex32;
 use soapysdr;
 use std::io::{Read, Write};
+
+const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x256_000_000;
+const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400;
+const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000;
 
 #[derive(Default, Clone)]
 pub struct RadioParams {
@@ -34,24 +37,41 @@ pub struct RadioParams {
     pub bandwidth: f64,
 }
 
-pub struct TransmitDevice {
+pub trait RadioDevice {
+    fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+pub trait TransmitDevice: RadioDevice + Complex32Consumer {}
+
+pub trait ReceiveDevice: RadioDevice + Send {
+    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+    fn take_mpsc_reader(&mut self) -> MPSCReader;
+}
+
+pub struct SoapyTransmitDevice {
     pub sdr: soapysdr::Device,
     pub stream: soapysdr::TxStream<Complex32>,
     dump_file: Option<std::fs::File>,
     activated: bool,
 }
 
-impl TransmitDevice {
+pub fn new_soapy_device(
+    params: &RadioParams,
+) -> Result<soapysdr::Device, Box<dyn std::error::Error>> {
+    let devices = soapysdr::enumerate("")?;
+    let device_args = devices
+        .into_iter()
+        .nth(params.device_idx)
+        .ok_or("No device at index.")?;
+    Ok(soapysdr::Device::new(device_args)?)
+}
+
+impl SoapyTransmitDevice {
     pub fn try_new(
         params: RadioParams,
         dump_file: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let devices = soapysdr::enumerate("")?;
-        let device_args = devices
-            .into_iter()
-            .nth(params.device_idx)
-            .ok_or("No device at index.")?;
-        let device = soapysdr::Device::new(device_args)?;
+        let device = new_soapy_device(&params)?;
 
         device.set_antenna(soapysdr::Direction::Tx, params.channel, params.antenna)?;
         device.set_gain_mode(soapysdr::Direction::Tx, params.channel, false)?;
@@ -74,14 +94,8 @@ impl TransmitDevice {
             activated: false,
         })
     }
-
-    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.stream.activate(None)?;
-        self.activated = true;
-        Ok(())
-    }
 }
-impl Complex32Consumer for TransmitDevice {
+impl Complex32Consumer for SoapyTransmitDevice {
     fn consume(
         &mut self,
         buf: Box<[Complex32]>,
@@ -102,15 +116,23 @@ impl Complex32Consumer for TransmitDevice {
         Ok(())
     }
 }
+impl RadioDevice for SoapyTransmitDevice {
+    fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.stream.activate(None)?;
+        self.activated = true;
+        Ok(())
+    }
+}
+impl TransmitDevice for SoapyTransmitDevice {}
 
-pub struct ReceiveDevice {
+pub struct SoapyReceiveDevice {
     stream: soapysdr::RxStream<Complex32>,
     mpsc_writer: MPSCWriter,
     mpsc_reader: Option<MPSCReader>,
     dump_file: Option<std::fs::File>,
     activated: bool,
 }
-impl ReceiveDevice {
+impl SoapyReceiveDevice {
     pub fn try_new(
         params: RadioParams,
         sdr: &soapysdr::Device,
@@ -128,9 +150,8 @@ impl ReceiveDevice {
         )?;
         sdr.set_bandwidth(soapysdr::Direction::Rx, params.channel, params.bandwidth)?;
 
-        let (sender, receiver) = std::sync::mpsc::sync_channel(0x80); // 64 KiB
-        let mpsc_reader = MPSCReader { receiver };
-        let mpsc_writer = MPSCWriter { sender };
+        let (mpsc_writer, mpsc_reader) =
+            MPSCWriter::new_channel(RECEIVE_BUF_SIZE_IN_SAMPLES / READ_BUF_SIZE_IN_SAMPLES);
 
         let stream = sdr.rx_stream(&[params.channel])?;
 
@@ -142,34 +163,41 @@ impl ReceiveDevice {
             activated: false,
         })
     }
-    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+}
+impl RadioDevice for SoapyReceiveDevice {
+    fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.stream.activate(None)?;
         self.activated = true;
         Ok(())
     }
+}
+pub fn run_async(
+    mut rx_device: Box<dyn ReceiveDevice + Send>,
+) -> std::thread::JoinHandle<Result<(), std::string::String>> {
+    std::thread::spawn(move || rx_device.run().map_err(|e| e.to_string()))
+}
+
+impl ReceiveDevice for SoapyReceiveDevice {
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.activated {
-            self.stream.activate(None)?;
-            self.activated = true;
-        }
         loop {
-            let mut ofdm_symbol_buf = vec![Complex32::default(); OFDM_SYMBOL_LEN];
-            let mut samples_read = 0;
-            while OFDM_SYMBOL_LEN != samples_read {
-                let read_buf = &mut ofdm_symbol_buf[samples_read..];
-                samples_read += self.stream.read(&mut [read_buf], i32::MAX as i64)?;
-            }
+            let mut read_buf = vec![Complex32::ZERO; self.stream.mtu()?];
+            let samples_read = match self.stream.read(&mut [&mut read_buf], i32::MAX as i64) {
+                Ok(samples_read) => samples_read,
+                Err(err) => {
+                    eprintln!("Read error: {err}");
+                    return Err(err.into());
+                }
+            };
+            read_buf.truncate(samples_read);
+
             if let Some(dump_file) = self.dump_file.as_mut() {
-                write_complex32_symbols(dump_file, &ofdm_symbol_buf)?;
+                write_symbols(dump_file, &read_buf)?;
             }
-            self.mpsc_writer.consume(ofdm_symbol_buf.into(), false)?;
+            self.mpsc_writer.consume(read_buf.into(), false)?;
         }
     }
-    pub fn take_mpsc_reader(&mut self) -> MPSCReader {
+    fn take_mpsc_reader(&mut self) -> MPSCReader {
         self.mpsc_reader.take().expect("MPSCReader already taken.")
-    }
-    pub fn run_async(mut self) -> std::thread::JoinHandle<Result<(), std::string::String>> {
-        std::thread::spawn(move || self.run().map_err(|e| e.to_string()))
     }
 }
 
@@ -197,8 +225,6 @@ pub struct LimeTransmitDevice {
 }
 
 impl LimeTransmitDevice {
-    const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000;
-
     pub fn try_new(
         params: RadioParams,
         dump_file: bool,
@@ -271,7 +297,7 @@ impl LimeTransmitDevice {
                 linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_I12,
                 isTx: true,
                 handle: 0,
-                fifoSize: Self::SEND_BUF_SIZE_IN_SAMPLES as u32,
+                fifoSize: SEND_BUF_SIZE_IN_SAMPLES as u32,
                 throughputVsLatency: 1.0, // balance latency and throughput to prevent underruns
             });
             if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
@@ -286,16 +312,7 @@ impl LimeTransmitDevice {
         }
     }
 
-    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        unsafe {
-            if 0 != limesuite_sys::LMS_StartStream(self.stream.as_mut()) {
-                return Err("Failed to start LimeSDR tx stream.".into());
-            }
-        }
-        Ok(())
-    }
-
-    pub fn write(
+    fn write(
         &mut self,
         symbols: &[Complex32],
         flush: bool,
@@ -344,7 +361,16 @@ impl LimeTransmitDevice {
         Ok(num_symbols_written)
     }
 }
-
+impl RadioDevice for LimeTransmitDevice {
+    fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        unsafe {
+            if 0 != limesuite_sys::LMS_StartStream(self.stream.as_mut()) {
+                return Err("Failed to start LimeSDR tx stream.".into());
+            }
+        }
+        Ok(())
+    }
+}
 impl Complex32Consumer for LimeTransmitDevice {
     fn consume(
         &mut self,
@@ -359,6 +385,7 @@ impl Complex32Consumer for LimeTransmitDevice {
         Ok(())
     }
 }
+impl TransmitDevice for LimeTransmitDevice {}
 
 impl Drop for LimeTransmitDevice {
     fn drop(&mut self) {
@@ -382,9 +409,6 @@ pub struct LimeReceiveDevice {
 unsafe impl Send for LimeReceiveDevice {}
 
 impl LimeReceiveDevice {
-    const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x256_000_000;
-    const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400;
-
     pub fn try_new(
         params: RadioParams,
         device: *mut limesuite_sys::lms_device_t,
@@ -455,16 +479,15 @@ impl LimeReceiveDevice {
                 linkFmt: limesuite_sys::lms_stream_t_LMS_LINK_FMT_I12,
                 isTx: false,
                 handle: 0, // not to be modified manually
-                fifoSize: Self::RECEIVE_BUF_SIZE_IN_SAMPLES as u32,
+                fifoSize: RECEIVE_BUF_SIZE_IN_SAMPLES as u32,
                 throughputVsLatency: 1.0, // maximize throughput
             });
             if 0 != limesuite_sys::LMS_SetupStream(device, stream.as_mut()) {
                 return Err("Failed to set up LimeSDR tx stream.".into());
             }
 
-            let (mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(
-                Self::RECEIVE_BUF_SIZE_IN_SAMPLES / Self::READ_BUF_SIZE_IN_SAMPLES,
-            );
+            let (mpsc_writer, mpsc_reader) =
+                MPSCWriter::new_channel(RECEIVE_BUF_SIZE_IN_SAMPLES / READ_BUF_SIZE_IN_SAMPLES);
 
             Ok(Self {
                 stream,
@@ -474,8 +497,9 @@ impl LimeReceiveDevice {
             })
         }
     }
-
-    pub fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+}
+impl RadioDevice for LimeReceiveDevice {
+    fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
             if 0 != limesuite_sys::LMS_StartStream(self.stream.as_mut()) {
                 return Err("Failed to start LimeSDR tx stream.".into());
@@ -483,7 +507,8 @@ impl LimeReceiveDevice {
         }
         Ok(())
     }
-
+}
+impl ReceiveDevice for LimeReceiveDevice {
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             let stream_status = unsafe {
@@ -503,7 +528,7 @@ impl LimeReceiveDevice {
                 );
             }
 
-            let mut read_buf = vec![Complex32::default(); Self::READ_BUF_SIZE_IN_SAMPLES];
+            let mut read_buf = vec![Complex32::default(); READ_BUF_SIZE_IN_SAMPLES];
             let samples_read = unsafe {
                 let mut metadata: limesuite_sys::lms_stream_meta_t = std::mem::zeroed();
                 let num_symbols_read_or_failure = limesuite_sys::LMS_RecvStream(
@@ -526,11 +551,8 @@ impl LimeReceiveDevice {
             self.mpsc_writer.sender.send(read_buf.into())?;
         }
     }
-    pub fn take_mpsc_reader(&mut self) -> MPSCReader {
+    fn take_mpsc_reader(&mut self) -> MPSCReader {
         self.mpsc_reader.take().expect("MPSCReader already taken.")
-    }
-    pub fn run_async(mut self) -> std::thread::JoinHandle<Result<(), std::string::String>> {
-        std::thread::spawn(move || self.run().map_err(|e| e.to_string()))
     }
 }
 
