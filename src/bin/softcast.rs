@@ -83,8 +83,11 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_TX_GAIN)]
         gain: f64,
 
-        #[arg(long)]
-        lime: bool,
+        #[arg(long, value_enum, default_value_t = Driver::Soapy)]
+        driver: Driver,
+
+        #[arg(long, default_value_t = false)]
+        skip_cal: bool,
     },
     Rx {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -127,8 +130,8 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         gain: f64,
 
-        #[arg(long)]
-        lime: bool,
+        #[arg(long, value_enum, default_value_t = Driver::Soapy)]
+        driver: Driver,
     },
     Loopback {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -182,8 +185,8 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         rx_gain: f64,
 
-        #[arg(long)]
-        lime: bool,
+        #[arg(long, value_enum, default_value_t = Driver::Soapy)]
+        driver: Driver,
     },
     Simulate {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -210,6 +213,13 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum Driver {
+    Soapy,
+    Lime,
+    RtlSdr,
 }
 
 fn parse_dimensions_2d(s: &str) -> Result<(usize, usize), String> {
@@ -273,7 +283,7 @@ fn loopback(
     rx_channel: usize,
     tx_gain: f64,
     rx_gain: f64,
-    lime: bool,
+    driver: Driver,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut tx_params = RadioParams::default();
     tx_params.frequency = frequency;
@@ -289,15 +299,20 @@ fn loopback(
     rx_params.channel = rx_channel;
     rx_params.gain = rx_gain;
 
-    let (mut tx_radio, mut rx_radio): (Box<dyn TransmitDevice>, Box<dyn ReceiveDevice>) = if lime {
-        let tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
-        let rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
-        (Box::new(tx_radio), Box::new(rx_radio))
-    } else {
-        let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
-        let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, true)?;
-        (Box::new(tx_radio), Box::new(rx_radio))
-    };
+    let (mut tx_radio, mut rx_radio): (Box<dyn TransmitDevice>, Box<dyn ReceiveDevice>) =
+        match driver {
+            Driver::Lime => {
+                let tx_radio = LimeTransmitDevice::try_new(tx_params, false, false)?;
+                let rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
+                (Box::new(tx_radio), Box::new(rx_radio))
+            }
+            Driver::Soapy => {
+                let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
+                let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, true)?;
+                (Box::new(tx_radio), Box::new(rx_radio))
+            }
+            _ => return Err("Driver does not support transmit.".into()),
+        };
 
     let mut encoder = FileReaderEncoder::try_new(
         infile,
@@ -388,7 +403,8 @@ fn transmit(
     antenna: &str,
     channel: usize,
     gain: f64,
-    lime: bool,
+    driver: Driver,
+    skip_cal: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut tx_params = RadioParams::default();
     tx_params.frequency = frequency;
@@ -399,12 +415,16 @@ fn transmit(
     tx_params.antenna = antenna.to_string();
     tx_params.gain = gain;
 
-    let mut tx_radio: Box<dyn TransmitDevice> = if lime {
-        let tx_radio = LimeTransmitDevice::try_new(tx_params, false)?;
-        Box::new(tx_radio)
-    } else {
-        let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
-        Box::new(tx_radio)
+    let mut tx_radio: Box<dyn TransmitDevice> = match driver {
+        Driver::Lime => {
+            let tx_radio = LimeTransmitDevice::try_new(tx_params, skip_cal, false)?;
+            Box::new(tx_radio)
+        }
+        Driver::Soapy => {
+            let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
+            Box::new(tx_radio)
+        }
+        _ => return Err("Driver does not support transmit.".into()),
     };
     let mut encoder = FileReaderEncoder::try_new(
         infile,
@@ -437,7 +457,7 @@ fn receive(
     antenna: &str,
     channel: usize,
     gain: f64,
-    lime: bool,
+    driver: Driver,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut rx_params = RadioParams::default();
     rx_params.frequency = frequency;
@@ -448,14 +468,33 @@ fn receive(
     rx_params.gain = gain;
     rx_params.device_idx = device_idx;
 
-    let mut rx_radio: Box<dyn ReceiveDevice> = if lime {
-        let rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, true)?;
-        Box::new(rx_radio)
-    } else {
-        let device = &new_soapy_device(&rx_params)?;
-        let rx_radio = SoapyReceiveDevice::try_new(rx_params, device, true)?;
-        Box::new(rx_radio)
+    let mut rx_radio: Box<dyn ReceiveDevice> = match driver {
+        Driver::Lime => {
+            let rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, true)?;
+            Box::new(rx_radio)
+        }
+        Driver::Soapy => {
+            let device = &new_soapy_device(&rx_params)?;
+            let rx_radio = SoapyReceiveDevice::try_new(rx_params, device, true)?;
+            Box::new(rx_radio)
+        }
+        Driver::RtlSdr => {
+            let device = RtlSdrReceiveDevice::try_new(rx_params, false)?;
+            Box::new(device)
+        }
     };
+
+    // invert dimensions to match encode
+    let y_chunk_dimensions = (
+        y_chunk_dimensions.2,
+        y_chunk_dimensions.1,
+        y_chunk_dimensions.0,
+    );
+    let c_chunk_dimensions = (
+        c_chunk_dimensions.2,
+        c_chunk_dimensions.1,
+        c_chunk_dimensions.0,
+    );
 
     let mut decoder = FileWriterDecoder::try_new(
         outfile,
@@ -500,7 +539,8 @@ fn main() -> Result<(), String> {
             antenna,
             channel,
             gain,
-            lime,
+            driver,
+            skip_cal,
         } => transmit(
             infile,
             gop_len,
@@ -514,7 +554,8 @@ fn main() -> Result<(), String> {
             &antenna,
             channel,
             gain,
-            lime,
+            driver,
+            skip_cal,
         ),
         Commands::Rx {
             outfile,
@@ -530,7 +571,7 @@ fn main() -> Result<(), String> {
             antenna,
             channel,
             gain,
-            lime,
+            driver,
         } => receive(
             outfile,
             asset_resolution,
@@ -545,7 +586,7 @@ fn main() -> Result<(), String> {
             &antenna,
             channel,
             gain,
-            lime,
+            driver,
         ),
         Commands::Loopback {
             infile,
@@ -564,7 +605,7 @@ fn main() -> Result<(), String> {
             rx_channel,
             tx_gain,
             rx_gain,
-            lime,
+            driver,
         } => loopback(
             infile,
             outfile,
@@ -582,7 +623,7 @@ fn main() -> Result<(), String> {
             rx_channel,
             tx_gain,
             rx_gain,
-            lime,
+            driver,
         ),
         Commands::Simulate {
             infile,

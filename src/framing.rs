@@ -331,6 +331,8 @@ extern "C" fn ofdm_framesync_callback(
     _M: u32,
     _userdata: *mut core::ffi::c_void,
 ) -> i32 {
+    // eprintln!("Detected preamble.");
+
     let subcarrier_samples = unsafe { std::slice::from_raw_parts(_y, _M as usize) };
     let subcarrier_allocation = unsafe { std::slice::from_raw_parts(_p, _M as usize) };
 

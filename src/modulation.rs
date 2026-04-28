@@ -281,6 +281,7 @@ pub mod slices {
             quadrature_symbol_iter: I,
             array3: &'a mut ndarray::Array3<f32>,
         ) -> Self {
+            // TODO: Add check to see that slice_dimensions is compatible with array3
             Self {
                 quadrature_symbol_iter,
                 metadata_bitmap_iter: metadata_bitmap.values.into_iter(),

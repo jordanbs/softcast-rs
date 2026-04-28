@@ -1,0 +1,2 @@
+softcast rx --driver rtl-sdr --gain 350 -n 2400000 -b 8000000 -f 400000000 /tmp/apr27.103.mp4 768x432 --y 48x36x1 --cbcr 32x27x1  30
+softcast tx sample-media/bipbop-768x432-5s.mp4 --skip-cal -n 2400000 -b 8000000 -f 400000000  --gain 0.64 --driver lime

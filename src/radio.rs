@@ -16,14 +16,16 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::encoder::Complex32Consumer;
+use crate::rtlsdr_iq;
 use crate::sync::*;
 use limesuite_sys;
 use num_complex::Complex32;
+use rtlsdr;
 use soapysdr;
 use std::io::{Read, Write};
 
 const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x256_000_000;
-const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400;
+const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400_000;
 const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000;
 
 #[derive(Default, Clone)]
@@ -227,6 +229,7 @@ pub struct LimeTransmitDevice {
 impl LimeTransmitDevice {
     pub fn try_new(
         params: RadioParams,
+        skip_cal: bool,
         dump_file: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         unsafe {
@@ -265,22 +268,25 @@ impl LimeTransmitDevice {
             ) {
                 return Err("Failed to set LimeSDR antenna.".into());
             }
-            if 0 != limesuite_sys::LMS_SetNormalizedGain(
-                device,
-                limesuite_sys::LMS_CH_TX,
-                params.channel,
-                1.0, // calibrate at full gain
-            ) {
-                return Err("Failed to set LimeSDR gain.".into());
-            }
-            if 0 != limesuite_sys::LMS_Calibrate(
-                device,
-                limesuite_sys::LMS_CH_TX,
-                params.channel,
-                params.bandwidth,
-                0,
-            ) {
-                return Err("Failed to calibrate LimeSDR.".into());
+
+            if !skip_cal {
+                if 0 != limesuite_sys::LMS_SetNormalizedGain(
+                    device,
+                    limesuite_sys::LMS_CH_TX,
+                    params.channel,
+                    1.0, // calibrate at full gain
+                ) {
+                    return Err("Failed to set LimeSDR gain.".into());
+                }
+                if 0 != limesuite_sys::LMS_Calibrate(
+                    device,
+                    limesuite_sys::LMS_CH_TX,
+                    params.channel,
+                    params.bandwidth,
+                    0,
+                ) {
+                    return Err("Failed to calibrate LimeSDR.".into());
+                }
             }
             // lower gain
             if 0 != limesuite_sys::LMS_SetNormalizedGain(
@@ -405,8 +411,6 @@ pub struct LimeReceiveDevice {
     mpsc_reader: Option<MPSCReader>,
     dump_file: Option<std::fs::File>,
 }
-
-unsafe impl Send for LimeReceiveDevice {}
 
 impl LimeReceiveDevice {
     pub fn try_new(
@@ -622,6 +626,149 @@ pub fn play_dump_file(mut stream: soapysdr::TxStream<Complex32>, path: &std::pat
         stream
             .write_all(&[&[iq]], None, false, i32::MAX as i64)
             .expect("Failed to write");
+    }
+}
+
+pub struct RtlSdrReceiveDevice {
+    device: std::sync::Arc<rtlsdr::Device>,
+    mpsc_writer: Option<MPSCWriter>,
+    mpsc_reader: Option<MPSCReader>,
+    dump_file: Option<std::fs::File>,
+}
+
+impl RtlSdrReceiveDevice {
+    pub fn try_new(
+        params: RadioParams,
+        dump_file: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        // rtl-sdr only has one channel, ignore
+
+        let (device, err) = rtlsdr::open(params.device_idx as i32);
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to open RTL-SDR: {:?}", err).into());
+        }
+
+        let err = device.set_sample_rate(params.sample_rate as i32);
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to set sample rate: {:?}", err).into());
+        }
+
+        let err = device.set_center_freq(params.frequency as i32);
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to set center freq: {:?}", err).into());
+        }
+
+        let err = device.set_tuner_bandwidth(params.bandwidth as i32);
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to set bandwidth: {:?}", err).into());
+        }
+
+        let err = device.set_tuner_gain_mode(true); // manual mode
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to set manual gain mode: {:?}", err).into());
+        }
+
+        let err = device.set_agc_mode(false); // manual mode
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to set manual agc mode: {:?}", err).into());
+        }
+
+        let err = device.set_tuner_gain(params.gain.round() as i32);
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to set tuner gain: {:?}", err).into());
+        }
+
+        let (mpsc_writer, mpsc_reader) =
+            MPSCWriter::new_channel(RECEIVE_BUF_SIZE_IN_SAMPLES / READ_BUF_SIZE_IN_SAMPLES);
+
+        Ok(Self {
+            device,
+            mpsc_writer: Some(mpsc_writer),
+            mpsc_reader: Some(mpsc_reader),
+            dump_file: dump_file.then(|| create_dump_file(false)),
+        })
+    }
+}
+
+impl RadioDevice for RtlSdrReceiveDevice {
+    fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let err = self.device.reset_buffer();
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("Failed to reset buffer on activate: {:?}", err).into());
+        }
+        Ok(())
+    }
+}
+
+struct RtlSdrCallbackContext {
+    mpsc_writer: MPSCWriter,
+    dump_file: Option<std::fs::File>,
+}
+
+unsafe extern "C" fn rtlsdr_read_callback(
+    read_buf: *mut core::ffi::c_uchar,
+    samples_read: u32,
+    ctx: *mut core::ffi::c_void,
+) {
+    let callback_context_ptr = ctx as *mut RtlSdrCallbackContext;
+    let callback_context = unsafe { callback_context_ptr.as_mut().expect("NULL context_ptr") };
+    let mpsc_writer = &mut callback_context.mpsc_writer;
+    let dump_file = &mut callback_context.dump_file;
+    let read_buf_u8 = unsafe { std::slice::from_raw_parts(read_buf, samples_read as usize) };
+
+    // eprintln!("read {samples_read}");
+
+    let (prefix, read_buf_u16, suffix) = unsafe { read_buf_u8.align_to::<u16>() };
+    assert_eq!(0, prefix.len());
+    assert_eq!(0, suffix.len());
+
+    let read_buf_iq: Box<[Complex32]> = read_buf_u16
+        .into_iter()
+        .map(|&sample| rtlsdr_iq::IQ[sample])
+        .collect();
+
+    if let Some(dump_file) = dump_file.as_mut() {
+        let _ = write_symbols(dump_file, &read_buf_iq); // ingore err
+    }
+    mpsc_writer
+        .consume(read_buf_iq, false)
+        .expect("Failed to consume sample.");
+}
+
+impl ReceiveDevice for RtlSdrReceiveDevice {
+    fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let read_buf_size: i32 = READ_BUF_SIZE_IN_SAMPLES
+            .try_into()
+            .expect("READ_BUF too big for rtl-sdr.");
+
+        let mut callback_context_box = Box::new(RtlSdrCallbackContext {
+            mpsc_writer: self.mpsc_writer.take().expect("No mpsc_writer."),
+            dump_file: self.dump_file.take(),
+        });
+        let callback_context_ptr: *mut RtlSdrCallbackContext = callback_context_box.as_mut();
+        let callback_context_ptr = callback_context_ptr as *mut core::ffi::c_void;
+
+        let err = self.device.read_async(
+            // blocks until read_cancel is called
+            Some(rtlsdr_read_callback),
+            callback_context_ptr,
+            0,
+            read_buf_size,
+        );
+        if !matches!(err, rtlsdr::Error::NoError) {
+            return Err(format!("RTL-SDR read_async failed: {:?}", err).into());
+        }
+        Ok(())
+    }
+
+    fn take_mpsc_reader(&mut self) -> MPSCReader {
+        self.mpsc_reader.take().expect("MPSCReader already taken.")
+    }
+}
+
+impl Drop for RtlSdrReceiveDevice {
+    fn drop(&mut self) {
+        let _ = self.device.close();
     }
 }
 
@@ -1366,5 +1513,27 @@ mod tests {
             );
         }
         */
+    }
+
+    #[test]
+    fn test_link_rtlsdr() {
+        let count = rtlsdr::get_device_count();
+        eprintln!("RTL-SDR devices found: {count}");
+    }
+
+    #[test]
+    #[cfg(false)] // needs hardware to run
+    fn test_rtlsdr_open_close() {
+        let params = RadioParams {
+            device_idx: 0,
+            channel: 0,
+            gain: 30.0,
+            antenna: String::new(),
+            frequency: 100_000_000.0,
+            sample_rate: 2_048_000.0,
+            bandwidth: 0.0,
+        };
+        let _rx = RtlSdrReceiveDevice::try_new(params, false)
+            .expect("Failed to create RTL-SDR rx device.");
     }
 }

@@ -1014,6 +1014,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "rtl-sdr"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06fdb7092d7807b9d33920d8e0ba1d0258dbaf9676f6c4c87dcf7223b4c4599b"
+
+[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1102,6 +1108,7 @@ dependencies = [
  "rand 0.9.2",
  "rand_xoshiro",
  "rayon",
+ "rtl-sdr",
  "soapysdr",
  "zstd",
 ]

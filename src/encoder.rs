@@ -193,6 +193,8 @@ impl FileReaderEncoder {
                 ofdm_symbol_writer.consume(frame, true)?;
             }
         }
+        // TODO: wait until all symbols are transmitted
+        std::thread::sleep(std::time::Duration::MAX);
         Ok(())
     }
 }

@@ -24,6 +24,8 @@ pub mod framing;
 pub mod metadata_coding;
 pub mod modulation;
 pub mod radio;
+#[path = "../vendor/rtlsdr_iq/lib.rs"]
+mod rtlsdr_iq;
 pub mod simulator;
 pub mod source_coding;
 pub mod sync;
