@@ -344,9 +344,26 @@ extern "C" fn ofdm_framesync_callback(
     liquid_sys::liquid_error_code_LIQUID_OK as i32 // always ok
 }
 
-#[derive(Default)]
 struct CallbackContext {
     freq_domain_symbols: Option<Vec<QuadratureSymbol>>,
+    error_vector_magnitude: f32,
+    signal_vector_magnitude: f32,
+    ms_pilot: liquid_sys::msequence,
+}
+impl Default for CallbackContext {
+    fn default() -> Self {
+        Self {
+            freq_domain_symbols: Option::default(),
+            error_vector_magnitude: f32::default(),
+            signal_vector_magnitude: f32::default(),
+            ms_pilot: unsafe { liquid_sys::msequence_create_default(8) },
+        }
+    }
+}
+impl Drop for CallbackContext {
+    fn drop(&mut self) {
+        unsafe { liquid_sys::msequence_destroy(self.ms_pilot) };
+    }
 }
 
 impl CallbackContext {
@@ -370,16 +387,55 @@ impl CallbackContext {
                 })
                 .map(|(_, sample)| QuadratureSymbol { value: *sample }),
         );
+
+        // compute evm
+        let mut error_power = 0.0;
+        let mut pilot_count = 0u32;
+
+        for idx in 0..NUM_SUBCARRIERS {
+            let kdx = (idx + NUM_SUBCARRIERS / 2) % NUM_SUBCARRIERS; // fftshift order from ofdmframesync_rxsymbol
+            if liquid_sys::OFDMFRAME_SCTYPE_PILOT != subcarrier_allocation[kdx].into() {
+                continue;
+            }
+
+            let pilot_reference: Complex32 =
+                ((unsafe { liquid_sys::msequence_advance(self.ms_pilot) } as i64 * 2 - 1) as f32)
+                    .into(); // 1.0 ? -1.0
+
+            error_power += (subcarrier_samples[kdx] - pilot_reference).norm_sqr();
+            pilot_count += 1;
+        }
+
+        let signal_power = pilot_count as f32;
+
+        self.error_vector_magnitude += error_power;
+        self.signal_vector_magnitude += signal_power;
+    }
+    pub fn snr(&self) -> f32 {
+        // in dB
+        -10.0 * (self.error_vector_magnitude / self.signal_vector_magnitude).log10()
+    }
+    fn reset(&mut self) {
+        unsafe {
+            liquid_sys::msequence_destroy(self.ms_pilot);
+            self.ms_pilot = liquid_sys::msequence_create_default(8);
+        }
+        self.error_vector_magnitude = 0.0;
+        self.signal_vector_magnitude = 0.0;
     }
 }
 
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     pub fn reset(&mut self) {
+        eprintln!("Frame SNR: {:.2} dB", self.callback_context.snr());
+
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
         self.freq_domain_symbols_iter = vec![].into_iter().peekable();
         self.symbols_received_since_reset = 0;
+
+        self.callback_context.reset();
     }
 }
 
