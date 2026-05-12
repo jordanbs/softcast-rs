@@ -411,9 +411,11 @@ impl CallbackContext {
         self.error_vector_magnitude += error_power;
         self.signal_vector_magnitude += signal_power;
     }
-    pub fn snr(&self) -> f32 {
-        // in dB
+    pub fn signal_to_noise_db(&self) -> f32 {
         -10.0 * (self.error_vector_magnitude / self.signal_vector_magnitude).log10()
+    }
+    pub fn signal_to_noise_ratio(&self) -> f32 {
+        self.signal_vector_magnitude / self.error_vector_magnitude
     }
     fn reset(&mut self) {
         unsafe {
@@ -427,7 +429,10 @@ impl CallbackContext {
 
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     pub fn reset(&mut self) {
-        eprintln!("Frame SNR: {:.2} dB", self.callback_context.snr());
+        eprintln!(
+            "Frame SNR: {:.2} dB",
+            self.callback_context.signal_to_noise_db()
+        );
 
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
@@ -436,6 +441,9 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
         self.symbols_received_since_reset = 0;
 
         self.callback_context.reset();
+    }
+    pub fn signal_to_noise_ratio(&self) -> f32 {
+        self.callback_context.signal_to_noise_ratio()
     }
 }
 
@@ -1029,7 +1037,7 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let power_descaler = PowerScaler::inverse(chunks.into_iter());
+        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f32::default());
         let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
             .take(chunks_per_gop)
@@ -1428,7 +1436,7 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let power_descaler = PowerScaler::inverse(chunks.into_iter());
+        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f32::default());
 
         let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
@@ -1575,7 +1583,7 @@ mod tests {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter);
+        let power_descaler = PowerScaler::inverse(chunks_iter, f32::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
@@ -1729,7 +1737,7 @@ mod tests {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter);
+        let power_descaler = PowerScaler::inverse(chunks_iter, f32::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(

@@ -88,34 +88,42 @@ impl FileWriterDecoder {
         })?;
 
         let mut gops_received = 0;
-        eprintln!("GOPS Received: {}", gops_received);
 
         loop {
+            let snr = frame_synchronizer.signal_to_noise_ratio(); // TODO: will be 0.0 first iteration
+
             let y_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
                 self.asset_resolution,
                 self.y_chunk_dim,
+                snr, // a bit stale
             )?;
             frame_synchronizer.reset();
 
             gops_received += 1;
             eprintln!("Y GOPS Received: {}", gops_received);
 
+            let snr = frame_synchronizer.signal_to_noise_ratio();
+
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
                 self.asset_resolution,
                 self.cb_chunk_dim,
+                snr,
             )?;
             frame_synchronizer.reset();
             eprintln!("Cb GOPS Received: {}", gops_received);
+
+            let snr = frame_synchronizer.signal_to_noise_ratio();
 
             let cr_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
                 self.asset_resolution,
                 self.cr_chunk_dim,
+                snr,
             )?;
             frame_synchronizer.reset();
             eprintln!("Cr GOPS Received: {}", gops_received);
@@ -170,6 +178,7 @@ fn into_transform_block_3d_dct<
     gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
+    snr: f32,
 ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
     let (frame_width, frame_height) = (
         asset_resolution.0 / PixelType::TYPE.interleave_step(),
@@ -237,7 +246,7 @@ fn into_transform_block_3d_dct<
     let chunks_iter = slice_and_chunk_metadata_iter
         .into_chunks_iter(num_included_chunks)
         .take(num_included_chunks);
-    let power_descaler = PowerScaler::inverse(chunks_iter);
+    let power_descaler = PowerScaler::inverse(chunks_iter, snr);
     let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
     let dct = TransformBlock3DDCT::from_chunks_owned(
