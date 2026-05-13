@@ -178,7 +178,7 @@ fn into_transform_block_3d_dct<
     gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
-    snr: f32,
+    snr: f64,
 ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
     let (frame_width, frame_height) = (
         asset_resolution.0 / PixelType::TYPE.interleave_step(),

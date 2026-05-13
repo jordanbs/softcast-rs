@@ -346,16 +346,16 @@ extern "C" fn ofdm_framesync_callback(
 
 struct CallbackContext {
     freq_domain_symbols: Option<Vec<QuadratureSymbol>>,
-    error_vector_magnitude: f32,
-    signal_vector_magnitude: f32,
+    error_vector_magnitude: f64,
+    signal_vector_magnitude: f64,
     ms_pilot: liquid_sys::msequence,
 }
 impl Default for CallbackContext {
     fn default() -> Self {
         Self {
             freq_domain_symbols: Option::default(),
-            error_vector_magnitude: f32::default(),
-            signal_vector_magnitude: f32::default(),
+            error_vector_magnitude: f64::default(),
+            signal_vector_magnitude: f64::default(),
             ms_pilot: unsafe { liquid_sys::msequence_create_default(8) },
         }
     }
@@ -408,13 +408,13 @@ impl CallbackContext {
 
         let signal_power = pilot_count as f32;
 
-        self.error_vector_magnitude += error_power;
-        self.signal_vector_magnitude += signal_power;
+        self.error_vector_magnitude += error_power as f64;
+        self.signal_vector_magnitude += signal_power as f64;
     }
-    pub fn signal_to_noise_db(&self) -> f32 {
+    pub fn signal_to_noise_db(&self) -> f64 {
         -10.0 * (self.error_vector_magnitude / self.signal_vector_magnitude).log10()
     }
-    pub fn signal_to_noise_ratio(&self) -> f32 {
+    pub fn signal_to_noise_ratio(&self) -> f64 {
         self.signal_vector_magnitude / self.error_vector_magnitude
     }
     fn reset(&mut self) {
@@ -422,17 +422,12 @@ impl CallbackContext {
             liquid_sys::msequence_destroy(self.ms_pilot);
             self.ms_pilot = liquid_sys::msequence_create_default(8);
         }
-        self.error_vector_magnitude = 0.0;
-        self.signal_vector_magnitude = 0.0;
     }
 }
 
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     pub fn reset(&mut self) {
-        eprintln!(
-            "Frame SNR: {:.2} dB",
-            self.callback_context.signal_to_noise_db()
-        );
+        eprintln!("SNR: {:.2} dB", self.callback_context.signal_to_noise_db());
 
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
@@ -442,7 +437,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
 
         self.callback_context.reset();
     }
-    pub fn signal_to_noise_ratio(&self) -> f32 {
+    pub fn signal_to_noise_ratio(&self) -> f64 {
         self.callback_context.signal_to_noise_ratio()
     }
 }
@@ -1037,7 +1032,7 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f32::default());
+        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f64::default());
         let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
             .take(chunks_per_gop)
@@ -1436,7 +1431,7 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f32::default());
+        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f64::default());
 
         let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
@@ -1583,7 +1578,7 @@ mod tests {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter, f32::default());
+        let power_descaler = PowerScaler::inverse(chunks_iter, f64::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
@@ -1737,7 +1732,7 @@ mod tests {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter, f32::default());
+        let power_descaler = PowerScaler::inverse(chunks_iter, f64::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(

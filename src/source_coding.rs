@@ -306,7 +306,7 @@ pub mod power_scaling {
         chunk_energies: std::cell::OnceCell<Box<[f32]>>,
         compute_cache: std::cell::OnceCell<f32>,
         inverse: bool,
-        signal_to_noise_ratio: f32,
+        signal_to_noise_ratio: f64,
     }
     impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
         PowerScaler<'a, PixelType, I>
@@ -318,10 +318,10 @@ pub mod power_scaling {
                 chunk_energies: std::cell::OnceCell::new(),
                 compute_cache: std::cell::OnceCell::new(),
                 inverse: false,
-                signal_to_noise_ratio: f32::default(),
+                signal_to_noise_ratio: f64::default(),
             }
         }
-        pub fn inverse(chunks_iter: I, signal_to_noise_ratio: f32) -> Self {
+        pub fn inverse(chunks_iter: I, signal_to_noise_ratio: f64) -> Self {
             Self {
                 inner1: Some(chunks_iter),
                 inner2: std::cell::OnceCell::new(),
@@ -354,10 +354,10 @@ pub mod power_scaling {
             if power_scale.is_normal() {
                 if self.inverse {
                     let avg_noise_power = if self.signal_to_noise_ratio.is_normal() {
-                        chunk_energies.len() as f32 / self.signal_to_noise_ratio
+                        chunk_energies.len() as f64 / self.signal_to_noise_ratio
                     } else {
                         0.0
-                    };
+                    } as f32;
                     chunk.values.mapv_inplace(|elm| {
                         (elm * power_scale * chunk.metadata.energy)
                             / (power_scale.powi(2) * chunk.metadata.energy + avg_noise_power)
