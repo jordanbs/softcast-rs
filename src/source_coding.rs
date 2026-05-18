@@ -353,11 +353,13 @@ pub mod power_scaling {
                 power_scale(chunk.metadata.energy, chunk_energies, &self.compute_cache);
             if power_scale.is_normal() {
                 if self.inverse {
-                    let avg_noise_power = if self.signal_to_noise_ratio.is_normal() {
-                        chunk_energies.len() as f64 / self.signal_to_noise_ratio
-                    } else {
-                        0.0
-                    } as f32;
+                    let avg_noise_power = self
+                        .signal_to_noise_ratio
+                        .is_normal()
+                        .then(|| chunk_energies.len() as f64 / self.signal_to_noise_ratio)
+                        .map(|avg_noise_power| avg_noise_power as f32)
+                        .unwrap_or_default();
+
                     chunk.values.mapv_inplace(|elm| {
                         (elm * power_scale * chunk.metadata.energy)
                             / (power_scale.powi(2) * chunk.metadata.energy + avg_noise_power)
