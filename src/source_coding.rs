@@ -356,7 +356,7 @@ pub mod power_scaling {
                     let avg_noise_power = self
                         .signal_to_noise_ratio
                         .is_normal()
-                        .then(|| chunk_energies.len() as f64 / self.signal_to_noise_ratio)
+                        .then(|| 1.0 / self.signal_to_noise_ratio)
                         .map(|avg_noise_power| avg_noise_power as f32)
                         .unwrap_or_default();
 
