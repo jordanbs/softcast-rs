@@ -387,14 +387,29 @@ pub mod chunk {
     pub struct Chunk<'a, PixelType: HasPixelComponentType> {
         pub values: ndarray::ArrayViewMut3<'a, f32>,
         pub metadata: ChunkMetadata,
+        _owned_arc: Option<ndarray::ArcArray<f32, ndarray::Ix3>>,
         _marker: std::marker::PhantomData<PixelType>,
     }
 
     impl<'a, PixelType: HasPixelComponentType> Chunk<'a, PixelType> {
         pub fn new(values: ndarray::ArrayViewMut3<'a, f32>, metadata: ChunkMetadata) -> Self {
-            Chunk {
+            Self {
                 values,
                 metadata,
+                _owned_arc: None,
+                _marker: std::marker::PhantomData,
+            }
+        }
+        pub fn with_owned_arc(
+            mut owned_arc: ndarray::ArcArray<f32, ndarray::Ix3>,
+            metadata: ChunkMetadata,
+        ) -> Self {
+            let view: ndarray::ArrayViewMut3<'a, f32> =
+                unsafe { owned_arc.raw_view_mut().deref_into_view_mut() }; // trust me, self referential is safe
+            Self {
+                values: view,
+                metadata,
+                _owned_arc: Some(owned_arc),
                 _marker: std::marker::PhantomData,
             }
         }

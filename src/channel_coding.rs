@@ -17,10 +17,11 @@
 
 use crate::asset_reader_writer::*;
 use crate::source_coding::chunk::*;
+use crate::utils::*;
+use fwht;
 use slice::*;
 
 pub mod slice {
-    use self::fwht;
     use super::*;
 
     // TODO: there is no reason for slices to carry chunk metadata
@@ -35,11 +36,6 @@ pub mod slice {
                 chunk_metadata,
             }
         }
-    }
-
-    pub enum ViewOrOwnedArray3<'a> {
-        View(ndarray::ArrayViewMut3<'a, f32>),
-        Owned(ndarray::Array3<f32>),
     }
 
     pub struct Slice<'a, PixelType: HasPixelComponentType> {
@@ -61,11 +57,15 @@ pub mod slice {
         pub fn from_owned(owned: ndarray::Array3<f32>) -> Self {
             Self::new(ViewOrOwnedArray3::Owned(owned))
         }
+        pub fn from_owned_arc(owned_arc: ndarray::ArcArray<f32, ndarray::Ix3>) -> Self {
+            Self::new(ViewOrOwnedArray3::OwnedArc(owned_arc))
+        }
 
         pub fn values(&self) -> ndarray::ArrayView3<'_, f32> {
             match &self.values {
                 ViewOrOwnedArray3::View(view) => view.into(),
                 ViewOrOwnedArray3::Owned(owned) => owned.view(),
+                ViewOrOwnedArray3::OwnedArc(owned) => owned.view(),
             }
         }
 
@@ -73,6 +73,7 @@ pub mod slice {
             match &mut self.values {
                 ViewOrOwnedArray3::View(view) => view.into(),
                 ViewOrOwnedArray3::Owned(owned) => owned.view_mut(),
+                ViewOrOwnedArray3::OwnedArc(owned) => owned.view_mut(),
             }
         }
     }
@@ -115,7 +116,8 @@ pub mod slice {
                     return None;
                 }
 
-                let slices = fwht::fwht_chunks(chunks).expect("Failed to create slices.");
+                let slices =
+                    fwht_softcast::fwht_chunks_copy(chunks).expect("Failed to create slices.");
                 self.inner_slice_iter = slices.into_iter();
             }
         }
@@ -169,7 +171,7 @@ pub mod slice {
                 }
                 assert_eq!(slices.len(), hadamard_len, "Not enough slices.");
 
-                let chunks = fwht::fwht_slices(slices, hadamard_len - self.chunks_per_gop)
+                let chunks = fwht_softcast::fwht_slices(slices, hadamard_len - self.chunks_per_gop)
                     .expect("Failed to create chunks.");
                 self.inner_chunk_iter = chunks.into_iter();
             }
@@ -206,7 +208,7 @@ pub mod slice {
     }
 }
 
-pub mod fwht {
+pub mod fwht_softcast {
     use super::*;
     use rayon::prelude::*;
 
@@ -252,6 +254,7 @@ pub mod fwht {
             let value = match &self.values {
                 ViewOrOwnedArray3::View(view) => &view[idx],
                 ViewOrOwnedArray3::Owned(owned) => &owned[idx],
+                ViewOrOwnedArray3::OwnedArc(owned_arc) => &owned_arc[idx],
             };
             let ptr: *const f32 = value;
             ptr as *mut f32
@@ -411,6 +414,63 @@ pub mod fwht {
         Ok(slices.into())
     }
 
+    pub fn fwht_chunks_copy<PixelType: HasPixelComponentType>(
+        chunks: Box<[Chunk<'_, PixelType>]>,
+    ) -> Result<Box<[SliceAndChunkMetadata<'_, PixelType>]>, &'static str> {
+        // adapted from fwht crate, with the intention of making copies
+        // add padding so each fwht is a power of two
+        let hadamard_len = chunks.len().next_power_of_two();
+
+        // each chunk is spread on the major axis, such that fwht is performed on the minor axis.
+        let chunk_dim = chunks.first().expect("no data").values.raw_dim();
+        let num_pixels_per_chunk = chunk_dim[0] * chunk_dim[1] * chunk_dim[2];
+        let mut new_alloc = ndarray::Array2::<f32>::zeros((num_pixels_per_chunk, hadamard_len));
+        for (col, chunk) in chunks.iter().enumerate() {
+            for (mut dst, src) in new_alloc
+                .axis_iter_mut(ndarray::Axis(0))
+                .zip(chunk.values.iter())
+            {
+                dst[col] = *src;
+            }
+        }
+
+        for mut row_view in new_alloc.outer_iter_mut() {
+            let mut memory_slice = row_view.as_slice_mut().expect("Not in memory order.");
+            fwht::fwht_slice(&mut memory_slice)?;
+            let orthonormalization_factor = 1f32 / (hadamard_len as f32).sqrt();
+            memory_slice
+                .iter_mut()
+                .for_each(|elm| *elm *= orthonormalization_factor);
+        }
+
+        // transpose the axis for slices to be arranged in memory order
+        let new_alloc = new_alloc.t().as_standard_layout().to_owned().into_shared();
+        assert!(new_alloc.is_standard_layout());
+
+        let mut slices = Vec::with_capacity(hadamard_len);
+        let mut chunks_iter = chunks.iter();
+        for slice_idx in 0..hadamard_len {
+            let row_view = new_alloc
+                .clone() // refcount++
+                .index_axis_move(ndarray::Axis(0), slice_idx);
+            assert!(row_view.is_standard_layout());
+
+            let reshaped_view = row_view
+                .into_shape_with_order(chunk_dim)
+                .expect("Reshape failed.");
+            let slice: Slice<'_, PixelType> = Slice::from_owned_arc(reshaped_view);
+            let chunk_metadata = chunks_iter
+                .next()
+                .map(|chunk| chunk.metadata)
+                .unwrap_or_default();
+            let slice_and_chunk_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
+            slices.push(slice_and_chunk_metadata);
+        }
+
+        return Ok(slices.into());
+    }
+
+    // no copy version atm
     pub fn fwht_slices<'a, PixelType: HasPixelComponentType>(
         slices: Box<[SliceAndChunkMetadata<'a, PixelType>]>,
         num_padding_rows: usize,
@@ -423,15 +483,17 @@ pub mod fwht {
         let mut chunks = Vec::with_capacity(slices.len() - num_padding_rows);
         for slice in slices {
             // consume slice.values
-            let values = match slice.slice.values {
-                ViewOrOwnedArray3::View(view) => view,
+            let chunk: Chunk<'a, PixelType> = match slice.slice.values {
+                ViewOrOwnedArray3::View(view) => Chunk::new(view, slice.chunk_metadata),
                 ViewOrOwnedArray3::Owned(_) => {
                     // TODO: This assumption might not be true in the testing loopback.
                     panic!("slice not expected to own its data in decode.")
                 }
+                ViewOrOwnedArray3::OwnedArc(owned_arc) => {
+                    Chunk::with_owned_arc(owned_arc, slice.chunk_metadata)
+                }
             };
 
-            let chunk: Chunk<'a, PixelType> = Chunk::new(values, slice.chunk_metadata);
             chunks.push(chunk);
         }
 
@@ -519,7 +581,7 @@ mod tests {
         data[3][(0, 0, 1)] = 8f32;
 
         let mut empty: Box<[ndarray::Array3<f32>]> = vec![].into();
-        fwht::fwht(&mut data, &mut empty);
+        fwht_softcast::fwht(&mut data, &mut empty);
 
         assert_eq!(data[0][(0, 0, 0)], 5f32);
         assert_eq!(data[1][(0, 0, 0)], -1f32);
@@ -549,7 +611,7 @@ mod tests {
         data[4][(0, 0, 1)] = 10f32;
 
         let mut padding: Box<_> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 3].into();
-        fwht::fwht(&mut data, &mut padding);
+        fwht_softcast::fwht(&mut data, &mut padding);
 
         assert!((data[0][(0, 0, 0)] - 5.3033).abs() < 0.001);
         assert!((data[1][(0, 0, 0)] - 1.0607).abs() < 0.001);
@@ -587,8 +649,8 @@ mod tests {
         data[3][(0, 0, 1)] = 8f32;
 
         let mut empty: Box<[ndarray::Array3<f32>]> = vec![].into();
-        fwht::fwht(&mut data, &mut empty);
-        fwht::fwht(&mut data, &mut empty);
+        fwht_softcast::fwht(&mut data, &mut empty);
+        fwht_softcast::fwht(&mut data, &mut empty);
 
         assert_eq!(data[0][(0, 0, 0)], 1f32);
         assert_eq!(data[1][(0, 0, 0)], 2f32);
@@ -618,8 +680,8 @@ mod tests {
         data[4][(0, 0, 1)] = 10f32;
 
         let mut padding: Box<_> = vec![ndarray::Array3::<f32>::zeros((1, 1, 2)); 3].into();
-        fwht::fwht(&mut data, &mut padding);
-        fwht::fwht(&mut data, &mut padding);
+        fwht_softcast::fwht(&mut data, &mut padding);
+        fwht_softcast::fwht(&mut data, &mut padding);
 
         assert!((data[0][(0, 0, 0)] - 1f32).abs() < 0.001);
         assert!((data[1][(0, 0, 0)] - 2f32).abs() < 0.001);
@@ -643,20 +705,66 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_fwht_chunks_copy() {
+        let num_chunks = 9;
+        let chunk_len = 5;
+        let mut all_values_1 = ndarray::Array3::zeros((num_chunks, 1, chunk_len));
+        for mut subview in all_values_1.outer_iter_mut() {
+            for (idx, elm) in subview.iter_mut().enumerate() {
+                *elm = idx as f32;
+            }
+        }
+        let mut all_values_2 = all_values_1.clone();
+
+        let chunks_1: Box<_> = all_values_1
+            .exact_chunks_mut((1, 1, chunk_len))
+            .into_iter()
+            .map(|chunk_values| {
+                Chunk::<'_, YPixelComponentType>::new(chunk_values, ChunkMetadata::default())
+            })
+            .collect();
+        let chunks_2: Box<_> = all_values_2
+            .exact_chunks_mut((1, 1, chunk_len))
+            .into_iter()
+            .map(|chunk_values| {
+                Chunk::<'_, YPixelComponentType>::new(chunk_values, ChunkMetadata::default())
+            })
+            .collect();
+
+        let slices_1 = fwht_softcast::fwht_chunks(chunks_1).expect("fwht_chunks failed");
+        let slices_2 = fwht_softcast::fwht_chunks_copy(chunks_2).expect("fwht_chunks_copy failed");
+
+        for (slice_1, slice_2) in slices_1.iter().zip(slices_2.iter()) {
+            assert_eq!(
+                slice_1.slice.values(),
+                slice_2.slice.values(),
+                "slices_1: {:?}\n slices_2: {:?}",
+                slices_1
+                    .iter()
+                    .map(|slice| slice.slice.values())
+                    .collect::<Vec<_>>(),
+                slices_2
+                    .iter()
+                    .map(|slice| slice.slice.values())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn test_reader_to_slice_inverse_equality() {
         use crate::asset_reader_writer::pixel_buffer::*;
         use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::{ChunkIterIntoExt, SliceIterExt};
         use asset_reader::*; // idk why this only works here..
 
-        let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
+        let path = "sample-media/bipbop-768x432-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
         let frame_resolution = reader.resolution().expect("Failed to get resolution.");
         let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
 
-        const LENGTH: usize = 8;
+        const LENGTH: usize = 2;
         let mut macro_block_3d_iterator: MacroBlock3DIterator<_> =
             reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
@@ -675,7 +783,7 @@ mod tests {
 
         //         let original_y_dct = y_dct.clone();
         let y_slices: Box<_> = y_dct
-            .chunks_iter((1, 30, 40))
+            .chunks_iter((1, 36, 48))
             .into_slice_iter(LENGTH)
             .collect();
         let new_y_dct = y_slices
@@ -690,7 +798,7 @@ mod tests {
         let new_y_components = new_y_dct.into();
 
         let cb_slices: Box<_> = cb_dct
-            .chunks_iter((1, 30, 40))
+            .chunks_iter((1, 27, 32))
             .into_slice_iter(LENGTH)
             .collect();
         let new_cb_components = cb_slices
@@ -702,7 +810,7 @@ mod tests {
             .into();
 
         let cr_slices: Box<_> = cr_dct
-            .chunks_iter((1, 30, 40))
+            .chunks_iter((1, 27, 32))
             .into_slice_iter(LENGTH)
             .collect();
         let new_cr_components = cr_slices

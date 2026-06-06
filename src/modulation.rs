@@ -199,7 +199,7 @@ pub trait IntoInnerQuadratureSymbolIter<I: Iterator<Item = QuadratureSymbol>> {
 pub mod slices {
     use super::*;
     use crate::asset_reader_writer::HasPixelComponentType;
-    use crate::channel_coding::fwht::ValuesProvider;
+    use crate::channel_coding::fwht_softcast::ValuesProvider;
     use crate::channel_coding::slice::*;
     use ndarray;
 

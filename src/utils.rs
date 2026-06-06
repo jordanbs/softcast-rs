@@ -15,18 +15,9 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod asset_reader_writer;
-pub mod channel_coding;
-pub mod compressor;
-pub mod decoder;
-pub mod encoder;
-pub mod framing;
-pub mod metadata_coding;
-pub mod modulation;
-pub mod radio;
-#[path = "../vendor/rtlsdr_iq/lib.rs"]
-mod rtlsdr_iq;
-pub mod simulator;
-pub mod source_coding;
-pub mod sync;
-pub mod utils;
+#[derive(Debug)]
+pub enum ViewOrOwnedArray3<'a> {
+    View(ndarray::ArrayViewMut3<'a, f32>),
+    Owned(ndarray::Array3<f32>),
+    OwnedArc(ndarray::ArcArray<f32, ndarray::Ix3>),
+}
