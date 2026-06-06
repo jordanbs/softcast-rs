@@ -313,6 +313,25 @@ impl<I: Iterator<Item = QuadratureSymbol>> Drop for OFDMFrameGenerator<I> {
     }
 }
 
+struct OFDMFrameSynchronizerStats {
+    pub iq_samples_read: usize,
+    start: std::time::Instant,
+}
+
+impl OFDMFrameSynchronizerStats {
+    fn new() -> Self {
+        Self {
+            iq_samples_read: 0,
+            start: std::time::Instant::now(),
+        }
+    }
+
+    pub fn samples_read_per_second(&self) -> f64 {
+        let elapsed = self.start.elapsed();
+        self.iq_samples_read as f64 / elapsed.as_secs_f64()
+    }
+}
+
 pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     iq_buf_iter: I,
     ofdm_framesync: liquid_sys::ofdmframesync,
@@ -322,6 +341,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     freq_domain_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
     symbols_received_since_reset: usize,
     pub aborted: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    stats: OFDMFrameSynchronizerStats,
 }
 
 #[allow(non_snake_case)]
@@ -428,6 +448,10 @@ impl CallbackContext {
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     pub fn reset(&mut self) {
         eprintln!("SNR: {:.2} dB", self.callback_context.signal_to_noise_db());
+        eprintln!(
+            "Samples Read / Second: {:.0}k",
+            self.stats.samples_read_per_second() / 1000.0
+        );
 
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
@@ -473,6 +497,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             freq_domain_symbols_iter: vec![].into_iter().peekable(),
             symbols_received_since_reset: 0,
             aborted: None,
+            stats: OFDMFrameSynchronizerStats::new(),
         }
     }
 }
@@ -500,6 +525,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
                 if new_buf.is_empty() {
                     continue;
                 }
+                self.stats.iq_samples_read += new_buf.len();
                 self.working_iq_buf = Some(new_buf);
             }
             let iq_buf = self.working_iq_buf.as_ref().unwrap();
