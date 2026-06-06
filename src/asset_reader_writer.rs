@@ -511,22 +511,37 @@ impl HasPixelComponentType for CrPixelComponentType {
     const TYPE: PixelComponentType = PixelComponentType::Cr;
 }
 
-trait As<Dst>
+trait DomainShiftedAs<Dst>
 where
     Dst: Copy,
 {
-    fn as_(&self) -> Dst;
+    fn domain_shifted_as_(&self) -> Dst;
 }
 
-impl As<u8> for f32 {
-    fn as_(&self) -> u8 {
-        *self as u8
+impl DomainShiftedAs<u8> for f32 {
+    fn domain_shifted_as_(&self) -> u8 {
+        self.uncenter_u8_domain() as u8
     }
 }
 
-impl As<f32> for u8 {
-    fn as_(&self) -> f32 {
-        *self as f32
+impl DomainShiftedAs<f32> for u8 {
+    fn domain_shifted_as_(&self) -> f32 {
+        (*self as f32).center_u8_domain()
+    }
+}
+
+trait ShiftU8Domain {
+    const CENTER_SHIFT: f32 = 127.5;
+
+    fn center_u8_domain(&self) -> Self;
+    fn uncenter_u8_domain(&self) -> Self;
+}
+impl ShiftU8Domain for f32 {
+    fn center_u8_domain(&self) -> Self {
+        self - Self::CENTER_SHIFT
+    }
+    fn uncenter_u8_domain(&self) -> Self {
+        self + Self::CENTER_SHIFT
     }
 }
 
@@ -535,7 +550,6 @@ pub trait GOPLen {
 }
 
 pub mod pixel_buffer {
-    use super::As;
     use super::*;
     use transform_block_3d::*;
 
@@ -671,7 +685,7 @@ pub mod pixel_buffer {
             interleave_step: usize,
         ) where
             DstType: Copy,
-            SrcType: As<DstType>,
+            SrcType: DomainShiftedAs<DstType>,
         {
             unsafe {
                 let mut src_ptr = src_ptr;
@@ -685,7 +699,7 @@ pub mod pixel_buffer {
 
                 let dst_ptr_end = dst_ptr.add(dst_len);
                 while dst_ptr < dst_ptr_end {
-                    *dst_ptr = (*src_ptr).as_();
+                    *dst_ptr = (*src_ptr).domain_shifted_as_();
 
                     if interleave_src {
                         src_ptr = src_ptr.add(interleave_step);
