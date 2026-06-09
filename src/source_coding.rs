@@ -123,7 +123,6 @@ pub mod transform_block_3d_dct {
             // rustdct applies a 2n scale factor per dimension
             let scale = 0.125 * (length * width * height) as f32;
             component_values.mapv_inplace(|value| value / scale);
-            component_values.mapv_inplace(|value| value.round());
 
             transform_block_3d::TransformBlock3D::with_values(component_values)
         }

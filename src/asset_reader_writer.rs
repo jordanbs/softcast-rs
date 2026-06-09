@@ -520,7 +520,7 @@ where
 
 impl DomainShiftedAs<u8> for f32 {
     fn domain_shifted_as_(&self) -> u8 {
-        self.uncenter_u8_domain() as u8
+        self.uncenter_u8_domain().round() as u8
     }
 }
 
