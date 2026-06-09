@@ -471,7 +471,6 @@ pub mod packetizer {
             if success != 1 {
                 return Err("packetizer_decode failed.".into());
             }
-            eprintln!("packet integrity check succeeded {}", decoded_data.len());
 
             // decode packet_len
             {

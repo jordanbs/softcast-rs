@@ -219,8 +219,7 @@ fn into_transform_block_3d_dct<
 
     let num_included_chunks = metadata_bitmap.values.count_ones();
     let num_included_slices = num_included_chunks.next_power_of_two();
-    eprintln!("num included chunks: {num_included_chunks}");
-    eprintln!("num included slices: {num_included_slices}");
+    println!("{num_included_chunks} chunks | {num_included_slices} slices");
 
     let de_whitener = metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
