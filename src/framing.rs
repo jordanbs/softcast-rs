@@ -27,7 +27,7 @@ const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
 pub const OFDM_SYMBOL_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
-const RESET_LEN: usize = 44 * 0x400; // must be a power of 2. 44 is the number of data subcarriers from 64 total.
+const RESET_LEN: usize = 44 * 0x100; // must be a power of 2. 44 is the number of data subcarriers from 64 total.
 
 static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
