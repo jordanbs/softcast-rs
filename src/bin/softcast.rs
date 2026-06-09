@@ -303,7 +303,7 @@ fn loopback(
         match driver {
             Driver::Lime => {
                 let tx_radio = LimeTransmitDevice::try_new(tx_params, false, false)?;
-                let rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, true)?;
+                let rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, false)?;
                 (Box::new(tx_radio), Box::new(rx_radio))
             }
             Driver::Soapy => {

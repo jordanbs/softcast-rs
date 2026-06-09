@@ -26,7 +26,7 @@ use std::io::{Read, Write};
 
 const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x256_000_000;
 const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400_000;
-const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x100_000;
+const SEND_BUF_SIZE_IN_SAMPLES: usize = 0x320_000_000;
 
 #[derive(Default, Clone)]
 pub struct RadioParams {
