@@ -28,6 +28,7 @@ use crate::modulation::*;
 use crate::source_coding::chunk::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
+use crate::sync::*;
 use num_complex::Complex32;
 
 pub trait Complex32Reader {
@@ -75,17 +76,13 @@ impl FileWriterDecoder {
     pub fn run<R: Complex32Reader>(
         &mut self,
         complex32_reader: R,
+        abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.asset_writer.start_writing()?;
         self.started_writing = true;
 
         let mut frame_synchronizer: OFDMFrameSynchronizer<_> = complex32_reader.into_iter().into();
-        let aborted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        frame_synchronizer.aborted = Some(aborted.clone());
-
-        ctrlc::set_handler(move || {
-            aborted.store(true, std::sync::atomic::Ordering::SeqCst);
-        })?;
+        frame_synchronizer.abort_token = Some(abort_token);
 
         let mut gops_received = 0;
 

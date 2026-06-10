@@ -20,6 +20,7 @@ use softcast_rs::decoder::*;
 use softcast_rs::encoder::*;
 use softcast_rs::radio::*;
 use softcast_rs::simulator::*;
+use softcast_rs::sync::AbortToken;
 
 const DEFAULT_COMPRESSION_RATIO: f64 = 0.1875;
 const DEFAULT_GOP_LEN: usize = 22;
@@ -83,7 +84,7 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_TX_GAIN)]
         gain: f64,
 
-        #[arg(long, value_enum, default_value_t = Driver::Soapy)]
+        #[arg(long, value_enum, default_value_t = Driver::Lime)]
         driver: Driver,
 
         #[arg(long, default_value_t = false)]
@@ -130,7 +131,7 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         gain: f64,
 
-        #[arg(long, value_enum, default_value_t = Driver::Soapy)]
+        #[arg(long, value_enum, default_value_t = Driver::Lime)]
         driver: Driver,
     },
     Loopback {
@@ -185,7 +186,7 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_RX_GAIN)]
         rx_gain: f64,
 
-        #[arg(long, value_enum, default_value_t = Driver::Soapy)]
+        #[arg(long, value_enum, default_value_t = Driver::Lime)]
         driver: Driver,
     },
     Simulate {
@@ -308,11 +309,14 @@ fn loopback(
             }
             Driver::Soapy => {
                 let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
-                let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, true)?;
+                let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, false)?;
                 (Box::new(tx_radio), Box::new(rx_radio))
             }
             _ => return Err("Driver does not support transmit.".into()),
         };
+
+    let abort_token = AbortToken::new();
+    let abort_token_clone = abort_token.clone();
 
     let mut encoder = FileReaderEncoder::try_new(
         infile,
@@ -341,17 +345,20 @@ fn loopback(
     let iq_reader = rx_radio.take_mpsc_reader();
     let rx_radio_join = run_async(rx_radio);
     let decoder_join = std::thread::spawn(move || {
-        let result = decoder.run(iq_reader).map_err(|e| e.to_string());
+        let result = decoder
+            .run(iq_reader, abort_token_clone)
+            .map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
     });
 
-    encoder.run(tx_radio.as_mut())?;
+    encoder.run(tx_radio.as_mut(), abort_token)?;
 
     //     play_dump_file(tx_radio.stream, &std::path::PathBuf::from("/tmp/dumpw_063"));
 
     let _ = rx_radio_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
     let _ = decoder_join.join().map_err(|_| "decoder thread panic'd")?; // TODO: preserve inner error
+    tx_radio.drain();
 
     Ok(())
 }
@@ -438,7 +445,7 @@ fn transmit(
 
     tx_radio.activate()?;
 
-    encoder.run(tx_radio.as_mut())?;
+    encoder.run(tx_radio.as_mut(), AbortToken::new())?;
 
     Ok(())
 }
@@ -510,7 +517,9 @@ fn receive(
 
     let iq_reader = rx_radio.take_mpsc_reader();
     let decoder_join = std::thread::spawn(move || {
-        let result = decoder.run(iq_reader).map_err(|e| e.to_string());
+        let result = decoder
+            .run(iq_reader, AbortToken::new())
+            .map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
     });

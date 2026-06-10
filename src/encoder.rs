@@ -28,6 +28,7 @@ use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
+use crate::sync::AbortToken;
 use num_complex::Complex32;
 use rand::Rng;
 
@@ -147,6 +148,7 @@ impl FileReaderEncoder {
     pub fn run(
         &mut self,
         ofdm_symbol_writer: &mut dyn Complex32Consumer,
+        abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
         for macro_block in self.macro_block_3d_iter.by_ref() {
             // encoder
@@ -191,10 +193,12 @@ impl FileReaderEncoder {
                 }
 
                 ofdm_symbol_writer.consume(frame, true)?;
+
+                if abort_token.is_aborted() {
+                    return Err("Encoder aborted.".into());
+                }
             }
         }
-        // TODO: wait until all symbols are transmitted
-        std::thread::sleep(std::time::Duration::MAX);
         Ok(())
     }
 }

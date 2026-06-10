@@ -16,6 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::modulation::*;
+use crate::sync::AbortToken;
 use fwht;
 use liquid_sys;
 use num_complex::Complex32;
@@ -341,7 +342,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     working_iq_symbols_consumed: usize,
     freq_domain_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
     symbols_received_since_reset: usize,
-    pub aborted: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub abort_token: Option<AbortToken>,
     stats: OFDMFrameSynchronizerStats,
 }
 
@@ -498,7 +499,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             working_iq_symbols_consumed: 0,
             freq_domain_symbols_iter: vec![].into_iter().peekable(),
             symbols_received_since_reset: 0,
-            aborted: None,
+            abort_token: None,
             stats: OFDMFrameSynchronizerStats::new(),
         }
     }
@@ -511,9 +512,9 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
         while self.freq_domain_symbols_iter.peek().is_none() {
             // break out if aborted
             if self
-                .aborted
+                .abort_token
                 .as_ref()
-                .is_some_and(|aborted| aborted.load(std::sync::atomic::Ordering::SeqCst))
+                .is_some_and(|abort_token| abort_token.is_aborted())
             {
                 return None;
             }

@@ -18,6 +18,7 @@
 use crate::decoder::Complex32Reader;
 use crate::encoder::Complex32Consumer;
 use num_complex::Complex32;
+use std::sync::*;
 
 pub struct MPSCWriter {
     pub sender: std::sync::mpsc::SyncSender<Box<[Complex32]>>,
@@ -47,5 +48,33 @@ pub struct MPSCReader {
 impl Complex32Reader for MPSCReader {
     fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>> {
         self.receiver.into_iter()
+    }
+}
+
+#[derive(Clone)]
+pub struct AbortToken {
+    aborted: Arc<atomic::AtomicBool>,
+}
+
+impl AbortToken {
+    pub fn new() -> Self {
+        let token = AbortToken {
+            aborted: Arc::new(atomic::AtomicBool::new(false)),
+        };
+
+        let mut token_clone = token.clone();
+        ctrlc::set_handler(move || {
+            token_clone.abort();
+        })
+        .expect("Failed to set ctrlc handler");
+
+        token
+    }
+
+    fn abort(&mut self) {
+        self.aborted.store(true, atomic::Ordering::SeqCst);
+    }
+    pub fn is_aborted(&self) -> bool {
+        self.aborted.load(atomic::Ordering::SeqCst)
     }
 }

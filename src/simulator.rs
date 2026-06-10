@@ -24,12 +24,18 @@ pub fn run_simulation(
     mut decoder: FileWriterDecoder,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
+
+    let abort_token = AbortToken::new();
+    let abort_token_clone = abort_token.clone();
+
     let decoder_result = std::thread::spawn(move || {
-        let result = decoder.run(mpsc_reader).map_err(|e| e.to_string());
+        let result = decoder
+            .run(mpsc_reader, abort_token_clone)
+            .map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
     });
-    encoder.run(&mut mpsc_writer)?;
+    encoder.run(&mut mpsc_writer, abort_token)?;
 
     let _ = decoder_result.join().map_err(|_| "thread panic'd")?; // TODO: preserve inner error
 

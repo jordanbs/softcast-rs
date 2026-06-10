@@ -43,7 +43,9 @@ pub trait RadioDevice {
     fn activate(&mut self) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-pub trait TransmitDevice: RadioDevice + Complex32Consumer {}
+pub trait TransmitDevice: RadioDevice + Complex32Consumer {
+    fn drain(&mut self);
+}
 
 pub trait ReceiveDevice: RadioDevice + Send {
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>>;
@@ -125,7 +127,11 @@ impl RadioDevice for SoapyTransmitDevice {
         Ok(())
     }
 }
-impl TransmitDevice for SoapyTransmitDevice {}
+impl TransmitDevice for SoapyTransmitDevice {
+    fn drain(&mut self) {
+        let _ = self.stream.write(&[], None, true, i32::MAX as i64);
+    }
+}
 
 pub struct SoapyReceiveDevice {
     stream: soapysdr::RxStream<Complex32>,
@@ -391,7 +397,23 @@ impl Complex32Consumer for LimeTransmitDevice {
         Ok(())
     }
 }
-impl TransmitDevice for LimeTransmitDevice {}
+impl TransmitDevice for LimeTransmitDevice {
+    fn drain(&mut self) {
+        loop {
+            let drained = unsafe {
+                let mut stream_status: limesuite_sys::lms_stream_status_t = std::mem::zeroed();
+                let success =
+                    limesuite_sys::LMS_GetStreamStatus(self.stream.as_mut(), &mut stream_status);
+                assert_eq!(0, success);
+                0 == stream_status.fifoFilledCount
+            };
+            if drained {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
 
 impl Drop for LimeTransmitDevice {
     fn drop(&mut self) {
