@@ -145,8 +145,16 @@ struct CVPixelBufferAccessGuard<'a> {
 struct CVPixelBufferAccessGuardMut<'a> {
     pixel_buffer: &'a mut CVPixelBufferWrapper,
 }
-impl PixelBufferAccessGuard for CVPixelBufferAccessGuard<'_> {}
-impl PixelBufferAccessGuard for CVPixelBufferAccessGuardMut<'_> {}
+impl PixelBufferAccessGuard<CVPixelBufferWrapper> for CVPixelBufferAccessGuard<'_> {
+    fn pixel_buffer(&self) -> &CVPixelBufferWrapper {
+        self.pixel_buffer
+    }
+}
+impl PixelBufferAccessGuard<CVPixelBufferWrapper> for CVPixelBufferAccessGuardMut<'_> {
+    fn pixel_buffer(&self) -> &CVPixelBufferWrapper {
+        self.pixel_buffer
+    }
+}
 impl<'a> PixelBufferAccessGuardMut<CVPixelBufferWrapper> for CVPixelBufferAccessGuardMut<'a> {
     fn pixel_buffer_mut(&mut self) -> &mut CVPixelBufferWrapper {
         self.pixel_buffer
@@ -182,7 +190,7 @@ impl PixelBuffer for CVPixelBufferWrapper {
     fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8 {
         CVPixelBufferGetBaseAddressOfPlane(&self.cv_image_buffer, plane_index) as *mut u8
     }
-    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard + 'a> {
+    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a> {
         Box::new(CVPixelBufferAccessGuard::new(self))
     }
     fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a> {

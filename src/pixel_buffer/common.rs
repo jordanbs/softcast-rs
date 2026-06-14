@@ -136,11 +136,13 @@ pub trait PixelBuffer: Sized {
     fn get_ptr<'a>(&'a self, plane_index: usize) -> *const u8;
     fn get_ptr_mut<'a>(&'a mut self, plane_index: usize) -> *mut u8;
 
-    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard + 'a>;
+    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a>;
     fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a>;
 }
-pub trait PixelBufferAccessGuard {} // shared borrow can be used to get_ptr
-pub trait PixelBufferAccessGuardMut<PB: PixelBuffer>: PixelBufferAccessGuard {
+pub trait PixelBufferAccessGuard<PB: PixelBuffer> {
+    fn pixel_buffer(&self) -> &PB;
+}
+pub trait PixelBufferAccessGuardMut<PB: PixelBuffer>: PixelBufferAccessGuard<PB> {
     fn pixel_buffer_mut(&mut self) -> &mut PB; // exclusive borrow
 }
 
@@ -180,16 +182,17 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Iterator for MacroBlock3DIterator<
 
         let mut pixel_buffer_iterator_is_empty = true;
         for pixel_buffer in self.pixel_buffer_iter.by_ref().take(self.gop_len) {
-            let _access_guard = pixel_buffer.access_guard();
+            let access_guard = pixel_buffer.access_guard();
+            let access_guard = &*access_guard;
 
             y_block
-                .populate_next_frame(&pixel_buffer)
+                .populate_next_frame(access_guard)
                 .expect("Populating Y block failed.");
             cb_block
-                .populate_next_frame(&pixel_buffer)
+                .populate_next_frame(access_guard)
                 .expect("Populating Cb block failed.");
             cr_block
-                .populate_next_frame(&pixel_buffer)
+                .populate_next_frame(access_guard)
                 .expect("Populating Cr block failed.");
 
             pixel_buffer_iterator_is_empty = false;
@@ -332,8 +335,9 @@ pub mod transform_block_3d {
 
         pub(super) fn populate_next_frame<PB: PixelBuffer>(
             &mut self,
-            pixel_buffer: &PB,
+            pixel_buffer_access_guard: &dyn PixelBufferAccessGuard<PB>,
         ) -> Result<(), Box<dyn std::error::Error>> {
+            let pixel_buffer = pixel_buffer_access_guard.pixel_buffer();
             let frame_idx = self.populated_frames_len;
             self.populated_frames_len += 1;
 
@@ -356,7 +360,6 @@ pub mod transform_block_3d {
             let dst_len = dst_width * dst_height;
 
             let plane_index = pixel_type.plane_index();
-            let _access_guard = pixel_buffer.access_guard();
             let src_ptr = pixel_buffer.get_ptr(plane_index);
 
             let dst_ptr = values_2d
