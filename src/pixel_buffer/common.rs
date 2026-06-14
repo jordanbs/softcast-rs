@@ -133,17 +133,16 @@ pub trait PixelBuffer: Sized {
         cr_components: &FrameComponentView<CrPixelComponentType>,
     ) -> Result<Self, Box<dyn std::error::Error>>;
 
-    fn get_ptr<'a>(&'a self, plane_index: usize) -> *const u8;
-    fn get_ptr_mut<'a>(&'a mut self, plane_index: usize) -> *mut u8;
-
     fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a>;
     fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a>;
 }
 pub trait PixelBufferAccessGuard<PB: PixelBuffer> {
     fn pixel_buffer(&self) -> &PB;
+    fn get_ptr(&self, plane_index: usize) -> *const u8;
 }
 pub trait PixelBufferAccessGuardMut<PB: PixelBuffer>: PixelBufferAccessGuard<PB> {
     fn pixel_buffer_mut(&mut self) -> &mut PB; // exclusive borrow
+    fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8;
 }
 
 pub struct MacroBlock3DIterator<I: Iterator<Item = PB>, PB: PixelBuffer> {
@@ -268,7 +267,7 @@ pub fn assign_values<
     let dst_len = dst.plane_row_len(pixel_type) * dst.plane_height(pixel_type);
     assert_eq!(src_len * interleave_step, dst_len);
 
-    let dst_ptr = dst.get_ptr_mut(plane_index);
+    let dst_ptr = dst_guard.get_ptr_mut(plane_index);
 
     copy_frame(
         src_ptr,
@@ -360,7 +359,7 @@ pub mod transform_block_3d {
             let dst_len = dst_width * dst_height;
 
             let plane_index = pixel_type.plane_index();
-            let src_ptr = pixel_buffer.get_ptr(plane_index);
+            let src_ptr = pixel_buffer_access_guard.get_ptr(plane_index);
 
             let dst_ptr = values_2d
                 .get_mut_ptr([0, 0])

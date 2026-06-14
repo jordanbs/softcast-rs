@@ -95,21 +95,14 @@ impl CVPixelBufferWrapper {
         use std::sync::atomic;
 
         unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
+            let guard = self.access_guard();
+            let y_ptr = guard.get_ptr(PixelComponentType::Y.plane_index());
 
-            let y_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Y.plane_index(),
-            ) as *const u8;
             let y_bytes_per_row = self.plane_row_len(PixelComponentType::Y);
             let y_height = self.plane_height(PixelComponentType::Y);
             let y_bytes: &[u8] = slice::from_raw_parts(y_ptr, y_bytes_per_row * y_height);
 
-            let cbcr_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Cb.plane_index(),
-            ) as *const u8;
+            let cbcr_ptr = guard.get_ptr(PixelComponentType::Cb.plane_index());
             let cbcr_bytes_per_row = self.plane_row_len(PixelComponentType::Cb);
             let cbcr_height = self.plane_height(PixelComponentType::Cb);
             let cbcr_bytes: &[u8] =
@@ -131,11 +124,15 @@ impl CVPixelBufferWrapper {
 
             fs::write(y_path, y_bytes)?;
             fs::write(cbcr_path, cbcr_bytes)?;
-
-            CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
         }
 
         Ok(())
+    }
+    pub(super) fn get_ptr(&self, plane_index: usize) -> *const u8 {
+        CVPixelBufferGetBaseAddressOfPlane(&self.cv_image_buffer, plane_index) as *const u8
+    }
+    pub(super) fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8 {
+        CVPixelBufferGetBaseAddressOfPlane(&self.cv_image_buffer, plane_index) as *mut u8
     }
 }
 
@@ -149,15 +146,24 @@ impl PixelBufferAccessGuard<CVPixelBufferWrapper> for CVPixelBufferAccessGuard<'
     fn pixel_buffer(&self) -> &CVPixelBufferWrapper {
         self.pixel_buffer
     }
+    fn get_ptr(&self, plane_index: usize) -> *const u8 {
+        self.pixel_buffer.get_ptr(plane_index)
+    }
 }
 impl PixelBufferAccessGuard<CVPixelBufferWrapper> for CVPixelBufferAccessGuardMut<'_> {
     fn pixel_buffer(&self) -> &CVPixelBufferWrapper {
         self.pixel_buffer
     }
+    fn get_ptr(&self, plane_index: usize) -> *const u8 {
+        self.pixel_buffer.get_ptr(plane_index)
+    }
 }
 impl<'a> PixelBufferAccessGuardMut<CVPixelBufferWrapper> for CVPixelBufferAccessGuardMut<'a> {
     fn pixel_buffer_mut(&mut self) -> &mut CVPixelBufferWrapper {
         self.pixel_buffer
+    }
+    fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8 {
+        self.pixel_buffer.get_ptr_mut(plane_index)
     }
 }
 impl<'a> CVPixelBufferAccessGuard<'a> {
@@ -184,12 +190,6 @@ impl Drop for CVPixelBufferAccessGuardMut<'_> {
 }
 
 impl PixelBuffer for CVPixelBufferWrapper {
-    fn get_ptr(&self, plane_index: usize) -> *const u8 {
-        CVPixelBufferGetBaseAddressOfPlane(&self.cv_image_buffer, plane_index) as *const u8
-    }
-    fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8 {
-        CVPixelBufferGetBaseAddressOfPlane(&self.cv_image_buffer, plane_index) as *mut u8
-    }
     fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a> {
         Box::new(CVPixelBufferAccessGuard::new(self))
     }
@@ -262,28 +262,15 @@ impl PartialEq for CVPixelBufferWrapper {
             return false;
         }
         unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
-            CVPixelBufferLockBaseAddress(&other.cv_image_buffer, flags);
+            let self_guard = self.access_guard();
+            let other_guard = other.access_guard();
 
-            // TODO: factor into a shared fn.
-
-            let l_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Y.plane_index(),
-            ) as *const u8;
-            let r_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &other.cv_image_buffer,
-                PixelComponentType::Y.plane_index(),
-            ) as *const u8;
-            let l_cv_cbcr_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Cb.plane_index(),
-            ) as *const u8;
-            let r_cv_cbcr_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &other.cv_image_buffer,
-                PixelComponentType::Cb.plane_index(),
-            ) as *const u8;
+            let l_cv_y_pixel_buffer_ptr = self_guard.get_ptr(PixelComponentType::Y.plane_index());
+            let r_cv_y_pixel_buffer_ptr = other_guard.get_ptr(PixelComponentType::Y.plane_index());
+            let l_cv_cbcr_pixel_buffer_ptr =
+                self_guard.get_ptr(PixelComponentType::Cb.plane_index());
+            let r_cv_cbcr_pixel_buffer_ptr =
+                other_guard.get_ptr(PixelComponentType::Cb.plane_index());
 
             let l_y_slice =
                 std::slice::from_raw_parts(l_cv_y_pixel_buffer_ptr, l_cv_y_pixel_buffer_len);
@@ -295,18 +282,11 @@ impl PartialEq for CVPixelBufferWrapper {
                 std::slice::from_raw_parts(r_cv_cbcr_pixel_buffer_ptr, r_cv_cbcr_pixel_buffer_len);
 
             if l_y_slice.cmp(r_y_slice) != std::cmp::Ordering::Equal {
-                CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
-                CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
                 return false;
             }
             if l_cbcr_slice.cmp(r_cbcr_slice) != std::cmp::Ordering::Equal {
-                CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
-                CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
                 return false;
             }
-
-            CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
-            CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
             true
         }
     }
