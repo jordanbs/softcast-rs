@@ -16,9 +16,6 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::asset_reader_writer::asset_reader::*;
-use crate::asset_reader_writer::pixel_buffer::*;
-use crate::asset_reader_writer::transform_block_3d::*;
-use crate::asset_reader_writer::*;
 use crate::channel_coding::slice::*;
 use crate::compressor::*;
 use crate::framing::*;
@@ -26,6 +23,8 @@ use crate::metadata_coding::packetizer::*;
 use crate::metadata_coding::*;
 use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
+use crate::pixel_buffer::transform_block_3d::*;
+use crate::pixel_buffer::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::AbortToken;

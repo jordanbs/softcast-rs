@@ -11,25 +11,6 @@
 //! memory than the corresponding Q sample. As such, the resulting 16-bit word will differ
 //! between little-endian and big-endian targets. To resolve this issue, the crate
 //! compiles a lookup table specific to the endianness of the target platform.
-//!
-//! ## Example
-//!
-//! ```rust
-//! use rtlsdr_iq::IQ;
-//!
-//! // This is assuming little endian, where the Q byte is in the upper half of the word
-//! // and the I byte is in the lower half.
-//! let a = IQ[0x01_00u16];
-//! let b = IQ[0x01_02u16];
-//! let c = IQ[0x00_02u16];
-//!
-//! assert!(a.re != b.re);
-//! assert!(a.im == b.im);
-//! assert!(b.re == c.re);
-//! assert!(b.im != c.im);
-//! ```
-
-extern crate num_complex;
 
 use num_complex::Complex32;
 

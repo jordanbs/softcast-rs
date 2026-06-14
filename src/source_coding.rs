@@ -15,7 +15,8 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::asset_reader_writer::{transform_block_3d::*, *};
+use crate::pixel_buffer::transform_block_3d::*;
+use crate::pixel_buffer::*;
 use ndarray;
 use ndrustfft;
 
@@ -520,7 +521,7 @@ pub mod chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use asset_reader::*;
+    use crate::asset_reader_writer::asset_reader::*;
     use chunk::*;
     use std::fs;
     use transform_block_3d_dct::*;
@@ -814,7 +815,7 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_count_zero_valued_chunk() {
-        use pixel_buffer::*;
+        use crate::pixel_buffer::*;
 
         let path1 = "sample-media/bipbop-1920x1080-5s.mp4";
         let path2 = "sample-media/sample-5s.mp4";

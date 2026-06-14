@@ -1,4 +1,4 @@
-// Copyright 2025-2026 Jordan Schneider
+// Copyright 2026 Jordan Schneider
 //
 // This file is part of softcast-rs.
 //
@@ -14,20 +14,3 @@
 //
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
-
-pub mod asset_reader_writer;
-pub mod channel_coding;
-pub mod compressor;
-pub mod decoder;
-pub mod encoder;
-pub mod framing;
-pub mod metadata_coding;
-pub mod modulation;
-pub mod pixel_buffer;
-pub mod radio;
-#[path = "../vendor/rtlsdr_iq/lib.rs"]
-mod rtlsdr_iq;
-pub mod simulator;
-pub mod source_coding;
-pub mod sync;
-pub mod utils;

@@ -198,9 +198,9 @@ pub trait IntoInnerQuadratureSymbolIter<I: Iterator<Item = QuadratureSymbol>> {
 
 pub mod slices {
     use super::*;
-    use crate::asset_reader_writer::HasPixelComponentType;
     use crate::channel_coding::fwht_softcast::ValuesProvider;
     use crate::channel_coding::slice::*;
+    use crate::pixel_buffer::HasPixelComponentType;
     use ndarray;
 
     pub struct SliceModulator<
@@ -327,9 +327,9 @@ pub mod slices {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asset_reader_writer::*;
     use crate::channel_coding::slice::*;
     use crate::modulation::slices::*;
+    use crate::pixel_buffer::*;
     use metadata::*;
 
     #[test]

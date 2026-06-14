@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::asset_reader_writer::*;
+use crate::pixel_buffer::*;
 use crate::source_coding::chunk::*;
 use std::io::{Read, Write};
 
@@ -358,8 +358,8 @@ mod tests {
 
     #[test]
     fn test_metadata_bitmap_basic() {
+        use crate::asset_reader_writer::asset_reader::*;
         use crate::source_coding::transform_block_3d_dct::*;
-        use asset_reader::*; // idk why this only works here..
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -390,8 +390,8 @@ mod tests {
     #[test]
     //     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_metadata_bitmap_zstd() {
+        use crate::asset_reader_writer::asset_reader::*;
         use crate::source_coding::transform_block_3d_dct::*;
-        use asset_reader::*; // idk why this only works here..
         use bitvec;
         use zstd;
 
@@ -452,8 +452,8 @@ mod tests {
 
     #[test]
     fn test_compressor_basic() {
+        use crate::asset_reader_writer::asset_reader::*;
         use crate::source_coding::transform_block_3d_dct::*;
-        use asset_reader::*; // idk why this only works here..
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);

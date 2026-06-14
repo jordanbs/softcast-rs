@@ -877,7 +877,12 @@ mod tests {
 
     #[test]
     fn test_cfo_flexframegen() {
+        use crate::framing::FFTW_PLANNER_LOCK;
         unsafe {
+            let _guard = FFTW_PLANNER_LOCK
+                .lock()
+                .expect("Failed to grab fftw planner lock.");
+
             let mut props = flexframegenprops_s {
                 check: 0,
                 fec0: 0,

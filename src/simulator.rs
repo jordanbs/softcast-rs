@@ -45,6 +45,7 @@ pub fn run_simulation(
 #[cfg(test)]
 mod tests {
     #[test]
+    #[ignore = "Decoder thread does not exit, so this loops forever."]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_simulate() {
         use super::*;

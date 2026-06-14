@@ -30,7 +30,7 @@ pub const OFDM_SYMBOL_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
 const RESET_LEN: usize = 44 * 0x100; // must be a power of 2. 44 is the number of data subcarriers from 64 total.
 
-static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -835,7 +835,6 @@ mod tests {
     }
 
     use crate::asset_reader_writer::asset_reader::*;
-    use crate::asset_reader_writer::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
     use crate::compressor::*;
     use crate::metadata_coding::packetizer::*;
@@ -889,6 +888,7 @@ mod tests {
 
     #[test]
     fn test_reader_to_frame_inverse_num_slices() {
+        use crate::pixel_buffer::*;
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
@@ -958,8 +958,9 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_frame_inverse_equality() {
-        use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
+        use crate::pixel_buffer::transform_block_3d::*;
+        use crate::pixel_buffer::*;
         use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
@@ -1356,9 +1357,9 @@ mod tests {
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_reader_to_frame_inverse_mean_squared_error() {
-        use crate::asset_reader_writer::pixel_buffer::*;
-        use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
+        use crate::pixel_buffer::transform_block_3d::*;
+        use crate::pixel_buffer::*;
         use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
@@ -1489,9 +1490,10 @@ mod tests {
 
     #[test]
     fn test_reader_to_frame_inverse_compression_mean_squared_error_y() {
-        use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
+        use crate::pixel_buffer::transform_block_3d::*;
+        use crate::pixel_buffer::*;
         use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;
@@ -1629,9 +1631,10 @@ mod tests {
 
     #[test]
     fn test_reader_to_frame_inverse_compression_mean_squared_error_cb() {
-        use crate::asset_reader_writer::transform_block_3d::*;
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
+        use crate::pixel_buffer::transform_block_3d::*;
+        use crate::pixel_buffer::*;
         use crate::source_coding::power_scaling::*;
         use crate::source_coding::transform_block_3d_dct::*;
         use ndarray_stats::DeviationExt;

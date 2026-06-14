@@ -13,12 +13,6 @@ ndarray = "0.17.1"
 ndarray-stats = "0.7.0"
 ndrustfft = "0.6.2"
 num-complex = "0.4.6"
-objc2 = "0.6.3"
-objc2-av-foundation = { version = "0.3.2", features = ["objc2-core-media"] }
-objc2-core-foundation = "0.3.2"
-objc2-core-media = "0.3.2"
-objc2-core-video = { version = "0.3.2", features = ["CVImageBuffer"] }
-objc2-foundation = { version = "0.3.2", features = ["NSObject"] }
 pkg-config = "0.3.32"
 rand = "0.9"
 rayon = "1.11.0"
@@ -29,6 +23,14 @@ half = "2.7.1"
 rand_xoshiro = "0.7"
 fwht = "0.1.0"
 rtl-sdr = "0.1.5"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6.3"
+objc2-av-foundation = { version = "0.3.2", features = ["objc2-core-media"] }
+objc2-core-foundation = "0.3.2"
+objc2-core-media = "0.3.2"
+objc2-core-video = { version = "0.3.2", features = ["CVImageBuffer"] }
+objc2-foundation = { version = "0.3.2", features = ["NSObject"] }
 
 [profile.bench]
 debug = 1

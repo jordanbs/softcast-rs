@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::asset_reader_writer::*;
+use crate::pixel_buffer::*;
 use crate::source_coding::chunk::*;
 use crate::utils::*;
 use fwht;
@@ -753,10 +753,10 @@ mod tests {
 
     #[test]
     fn test_reader_to_slice_inverse_equality() {
-        use crate::asset_reader_writer::pixel_buffer::*;
-        use crate::asset_reader_writer::transform_block_3d::*;
+        use crate::asset_reader_writer::asset_reader::*;
         use crate::channel_coding::slice::{ChunkIterIntoExt, SliceIterExt};
-        use asset_reader::*; // idk why this only works here..
+        use crate::pixel_buffer::transform_block_3d::*;
+        use crate::pixel_buffer::*;
 
         let path = "sample-media/bipbop-768x432-5s.mp4".into();
         let mut reader = AssetReader::new(path);
