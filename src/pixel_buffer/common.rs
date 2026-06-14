@@ -15,13 +15,8 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use transform_block_3d::*;
-
 use ndarray;
-use std::ptr::NonNull;
-
-use objc2_core_foundation::{CFRetained, kCFAllocatorDefault};
-use objc2_core_video::*;
+use transform_block_3d::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PixelComponentType {
@@ -43,13 +38,13 @@ impl std::fmt::Display for PixelComponentType {
     }
 }
 impl PixelComponentType {
-    fn plane_index(&self) -> usize {
+    pub fn plane_index(&self) -> usize {
         match self {
             Self::Y => 0,
             Self::Cb | Self::Cr => 1,
         }
     }
-    fn interleave_offset(self) -> usize {
+    pub fn interleave_offset(self) -> usize {
         match self {
             PixelComponentType::Y | PixelComponentType::Cb => 0,
             PixelComponentType::Cr => 1,
@@ -129,333 +124,49 @@ pub trait GOPLen {
 }
 
 // Holds a single frame
-#[derive(Debug)]
-pub struct PixelBuffer {
-    pub cv_image_buffer: CFRetained<CVImageBuffer>,
-}
-
-impl PixelBuffer {
-    pub fn new(cv_image_buffer: CFRetained<CVImageBuffer>) -> Self {
-        assert!(CVPixelBufferIsPlanar(&cv_image_buffer));
-
-        PixelBuffer { cv_image_buffer }
-    }
-
-    fn new_cv_pixel_buffer(
-        width: usize,
-        height: usize,
-    ) -> Result<CFRetained<CVPixelBuffer>, Box<dyn std::error::Error>> {
-        unsafe {
-            let mut cv_pixel_buffer: *mut CVPixelBuffer = std::ptr::null_mut();
-            let pixel_buffer_out: NonNull<*mut CVPixelBuffer> = NonNull::from(&mut cv_pixel_buffer);
-            let status = CVPixelBufferCreate(
-                kCFAllocatorDefault,
-                width,
-                height,
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-                None,
-                pixel_buffer_out,
-            );
-            if status != 0 {
-                return Err(format!("Failed to create CVPixelBuffer with error {}", status).into());
-            }
-
-            let cv_pixel_buffer = CFRetained::from_raw(
-                // coerce the mutable ptr into an immutable ptr
-                NonNull::new(cv_pixel_buffer).ok_or("CVPixelBuffer is NULL")?,
-            );
-            if !CVPixelBufferIsPlanar(&cv_pixel_buffer) {
-                return Err("New CVPixelBuffer is not planar.".into());
-            }
-            Ok(cv_pixel_buffer)
-        }
-    }
-
+pub trait PixelBuffer: Sized {
+    fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize;
+    fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize;
     fn from_frame_view(
         y_components: &FrameComponentView<YPixelComponentType>,
         cb_components: &FrameComponentView<CbPixelComponentType>,
         cr_components: &FrameComponentView<CrPixelComponentType>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        fn assign_values<PixelType: HasPixelComponentType>(
-            src: &FrameComponentView<PixelType>,
-            dst: &CVPixelBuffer,
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            let src_ptr = src
-                .values
-                .get_ptr([0, 0])
-                .ok_or("Could not get TransformBlock ptr.")?;
-            let src_len = src.values.len();
+    ) -> Result<Self, Box<dyn std::error::Error>>;
 
-            let pixel_type = PixelType::TYPE;
-            let interleave_step = pixel_type.interleave_step();
-            let interleave_offset = pixel_type.interleave_offset();
-            let plane_index = pixel_type.plane_index();
+    fn get_ptr<'a>(&'a self, plane_index: usize) -> *const u8;
+    fn get_ptr_mut<'a>(&'a mut self, plane_index: usize) -> *mut u8;
 
-            let dst_ptr = CVPixelBufferGetBaseAddressOfPlane(dst, plane_index) as *mut u8;
-            let dst_len = CVPixelBufferGetBytesPerRowOfPlane(dst, plane_index)
-                * CVPixelBufferGetHeightOfPlane(dst, plane_index);
-            assert_eq!(src_len * interleave_step, dst_len);
-
-            PixelBuffer::copy_frame(
-                src_ptr,
-                dst_ptr,
-                dst_len,
-                false,
-                interleave_offset,
-                interleave_step,
-            );
-            Ok(())
-        }
-
-        let (height, width) = y_components.values.dim();
-        let cv_pixel_buffer = Self::new_cv_pixel_buffer(width, height)?;
-
-        unsafe {
-            let flags = CVPixelBufferLockFlags::empty(); // empty means write
-            CVPixelBufferLockBaseAddress(&cv_pixel_buffer, flags);
-        };
-
-        assign_values(&y_components, &cv_pixel_buffer)?; // TODO: implement Drop for guarding cleanup
-        assign_values(&cb_components, &cv_pixel_buffer)?;
-        assign_values(&cr_components, &cv_pixel_buffer)?;
-
-        unsafe {
-            let flags = CVPixelBufferLockFlags::empty(); // empty means write
-            CVPixelBufferUnlockBaseAddress(&cv_pixel_buffer, flags);
-        };
-
-        Ok(Self {
-            cv_image_buffer: cv_pixel_buffer,
-        })
-    }
-
-    pub fn lock_base_address(&self, read_only: bool) {
-        let flags = match read_only {
-            true => CVPixelBufferLockFlags::ReadOnly,
-            false => CVPixelBufferLockFlags::empty(),
-        };
-        unsafe {
-            CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
-        }
-    }
-    pub fn unlock_base_address(&self, read_only: bool) {
-        let flags = match read_only {
-            true => CVPixelBufferLockFlags::ReadOnly,
-            false => CVPixelBufferLockFlags::empty(),
-        };
-        unsafe {
-            CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
-        }
-    }
-
-    pub(super) fn copy_frame<SrcType, DstType>(
-        src_ptr: *const SrcType,
-        dst_ptr: *mut DstType,
-        dst_len: usize,
-        interleave_src: bool,
-        interleave_offset: usize,
-        interleave_step: usize,
-    ) where
-        DstType: Copy,
-        SrcType: DomainShiftedAs<DstType>,
-    {
-        unsafe {
-            let mut src_ptr = src_ptr;
-            let mut dst_ptr = dst_ptr;
-
-            if interleave_src {
-                src_ptr = src_ptr.add(interleave_offset);
-            } else {
-                dst_ptr = dst_ptr.add(interleave_offset);
-            }
-
-            let dst_ptr_end = dst_ptr.add(dst_len);
-            while dst_ptr < dst_ptr_end {
-                *dst_ptr = (*src_ptr).domain_shifted_as_();
-
-                if interleave_src {
-                    src_ptr = src_ptr.add(interleave_step);
-                    dst_ptr = dst_ptr.add(1);
-                } else {
-                    src_ptr = src_ptr.add(1);
-                    dst_ptr = dst_ptr.add(interleave_step);
-                }
-            }
-        }
-    }
-
-    // The following functions are safe to call without locking the base address of CVPixelBuffer.
-
-    pub fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize {
-        let bytes_per_row = CVPixelBufferGetBytesPerRowOfPlane(
-            &self.cv_image_buffer,
-            pixel_component_type.plane_index(),
-        );
-
-        let (asset_width, _) = self.resolution();
-        let expected_bytes_per_row = asset_width;
-        assert_eq!(
-            expected_bytes_per_row, bytes_per_row,
-            "This asset has extra bytes per row of each plane \
-                         (expected: {} vs actual: {}); currently not supported.",
-            expected_bytes_per_row, bytes_per_row
-        );
-        bytes_per_row
-    }
-    pub fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize {
-        CVPixelBufferGetHeightOfPlane(&self.cv_image_buffer, pixel_component_type.plane_index())
-    }
-    pub fn resolution(&self) -> (usize, usize) {
-        let width = CVPixelBufferGetWidth(&self.cv_image_buffer);
-        let height = CVPixelBufferGetHeight(&self.cv_image_buffer);
-        (width, height)
-    }
-
-    pub fn dump_file(&self, prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
-        use std::fs;
-        use std::slice;
-        use std::sync::atomic;
-
-        unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
-
-            let y_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Y.plane_index(),
-            ) as *const u8;
-            let y_bytes_per_row = self.plane_row_len(PixelComponentType::Y);
-            let y_height = self.plane_height(PixelComponentType::Y);
-            let y_bytes: &[u8] = slice::from_raw_parts(y_ptr, y_bytes_per_row * y_height);
-
-            let cbcr_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Cb.plane_index(),
-            ) as *const u8;
-            let cbcr_bytes_per_row = self.plane_row_len(PixelComponentType::Cb);
-            let cbcr_height = self.plane_height(PixelComponentType::Cb);
-            let cbcr_bytes: &[u8] =
-                slice::from_raw_parts(cbcr_ptr, cbcr_bytes_per_row * cbcr_height);
-
-            static Y_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
-            static CBCR_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
-
-            let y_path = format!(
-                "/tmp/{}_Y_{:04}.out",
-                prefix,
-                Y_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
-            );
-            let cbcr_path = format!(
-                "/tmp/{}_CbCr_{:04}.out",
-                prefix,
-                CBCR_COUNTER.fetch_add(1, atomic::Ordering::Relaxed)
-            );
-
-            fs::write(y_path, y_bytes)?;
-            fs::write(cbcr_path, cbcr_bytes)?;
-
-            CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
-        }
-
-        Ok(())
-    }
+    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard + 'a>;
+    fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a>;
+}
+pub trait PixelBufferAccessGuard {} // shared borrow can be used to get_ptr
+pub trait PixelBufferAccessGuardMut<PB: PixelBuffer>: PixelBufferAccessGuard {
+    fn pixel_buffer_mut(&mut self) -> &mut PB; // exclusive borrow
 }
 
-impl PartialEq for PixelBuffer {
-    // A deep comparison. Useful for testing. Bad idea? Should I hide?
-    fn eq(&self, other: &Self) -> bool {
-        // cheap comparisons first
-        if self.cv_image_buffer == other.cv_image_buffer {
-            return true;
-        }
-
-        let l_cv_y_pixel_buffer_len =
-            self.plane_row_len(PixelComponentType::Y) * self.plane_height(PixelComponentType::Y);
-        let r_cv_y_pixel_buffer_len =
-            other.plane_row_len(PixelComponentType::Y) * other.plane_height(PixelComponentType::Y);
-        if l_cv_y_pixel_buffer_len != r_cv_y_pixel_buffer_len {
-            return false;
-        }
-
-        let l_cv_cbcr_pixel_buffer_len =
-            self.plane_row_len(PixelComponentType::Cb) * self.plane_height(PixelComponentType::Cb);
-        let r_cv_cbcr_pixel_buffer_len = other.plane_row_len(PixelComponentType::Cb)
-            * other.plane_height(PixelComponentType::Cb);
-        if l_cv_cbcr_pixel_buffer_len != r_cv_cbcr_pixel_buffer_len {
-            return false;
-        }
-        unsafe {
-            let flags = CVPixelBufferLockFlags::ReadOnly;
-            CVPixelBufferLockBaseAddress(&self.cv_image_buffer, flags);
-            CVPixelBufferLockBaseAddress(&other.cv_image_buffer, flags);
-
-            // TODO: factor into a shared fn.
-
-            let l_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Y.plane_index(),
-            ) as *const u8;
-            let r_cv_y_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &other.cv_image_buffer,
-                PixelComponentType::Y.plane_index(),
-            ) as *const u8;
-            let l_cv_cbcr_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &self.cv_image_buffer,
-                PixelComponentType::Cb.plane_index(),
-            ) as *const u8;
-            let r_cv_cbcr_pixel_buffer_ptr = CVPixelBufferGetBaseAddressOfPlane(
-                &other.cv_image_buffer,
-                PixelComponentType::Cb.plane_index(),
-            ) as *const u8;
-
-            let l_y_slice =
-                std::slice::from_raw_parts(l_cv_y_pixel_buffer_ptr, l_cv_y_pixel_buffer_len);
-            let r_y_slice =
-                std::slice::from_raw_parts(r_cv_y_pixel_buffer_ptr, r_cv_y_pixel_buffer_len);
-            let l_cbcr_slice =
-                std::slice::from_raw_parts(l_cv_cbcr_pixel_buffer_ptr, l_cv_cbcr_pixel_buffer_len);
-            let r_cbcr_slice =
-                std::slice::from_raw_parts(r_cv_cbcr_pixel_buffer_ptr, r_cv_cbcr_pixel_buffer_len);
-
-            if l_y_slice.cmp(r_y_slice) != std::cmp::Ordering::Equal {
-                CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
-                CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
-                return false;
-            }
-            if l_cbcr_slice.cmp(r_cbcr_slice) != std::cmp::Ordering::Equal {
-                CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
-                CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
-                return false;
-            }
-
-            CVPixelBufferUnlockBaseAddress(&other.cv_image_buffer, flags);
-            CVPixelBufferUnlockBaseAddress(&self.cv_image_buffer, flags);
-            true
-        }
-    }
-}
-
-pub struct MacroBlock3DIterator<I: Iterator<Item = PixelBuffer>> {
+pub struct MacroBlock3DIterator<I: Iterator<Item = PB>, PB: PixelBuffer> {
     pixel_buffer_iter: I,
     gop_len: usize,
+    _marker: std::marker::PhantomData<PB>,
 }
-impl<I: Iterator<Item = PixelBuffer>> MacroBlock3DIterator<I> {
+impl<I: Iterator<Item = PB>, PB: PixelBuffer> MacroBlock3DIterator<I, PB> {
     pub fn new(pixel_buffer_iter: I, gop_len: usize) -> Self {
         MacroBlock3DIterator {
             pixel_buffer_iter,
             gop_len,
+            _marker: std::marker::PhantomData,
         }
     }
-    pub fn pixel_buffer_iter(self) -> PixelBufferIterator<Self> {
+    pub fn pixel_buffer_iter(self) -> PixelBufferIterator<Self, PB> {
         PixelBufferIterator::from(self)
     }
 }
-impl<I: Iterator<Item = PixelBuffer>> GOPLen for MacroBlock3DIterator<I> {
+impl<I: Iterator<Item = PB>, PB: PixelBuffer> GOPLen for MacroBlock3DIterator<I, PB> {
     fn gop_len(&self) -> usize {
         self.gop_len
     }
 }
-impl<I: Iterator<Item = PixelBuffer>> Iterator for MacroBlock3DIterator<I> {
+impl<I: Iterator<Item = PB>, PB: PixelBuffer> Iterator for MacroBlock3DIterator<I, PB> {
     // Output all three TransformBlocks at once to linearly process frames
     type Item = MacroBlock3D;
 
@@ -469,7 +180,7 @@ impl<I: Iterator<Item = PixelBuffer>> Iterator for MacroBlock3DIterator<I> {
 
         let mut pixel_buffer_iterator_is_empty = true;
         for pixel_buffer in self.pixel_buffer_iter.by_ref().take(self.gop_len) {
-            pixel_buffer.lock_base_address(true);
+            let _access_guard = pixel_buffer.access_guard();
 
             y_block
                 .populate_next_frame(&pixel_buffer)
@@ -481,7 +192,6 @@ impl<I: Iterator<Item = PixelBuffer>> Iterator for MacroBlock3DIterator<I> {
                 .populate_next_frame(&pixel_buffer)
                 .expect("Populating Cr block failed.");
 
-            pixel_buffer.unlock_base_address(true);
             pixel_buffer_iterator_is_empty = false;
         }
         if pixel_buffer_iterator_is_empty {
@@ -495,6 +205,77 @@ impl<I: Iterator<Item = PixelBuffer>> Iterator for MacroBlock3DIterator<I> {
             gop_len: self.gop_len,
         })
     }
+}
+
+pub fn copy_frame<SrcType, DstType>(
+    src_ptr: *const SrcType,
+    dst_ptr: *mut DstType,
+    dst_len: usize,
+    interleave_src: bool,
+    interleave_offset: usize,
+    interleave_step: usize,
+) where
+    DstType: Copy,
+    SrcType: DomainShiftedAs<DstType>,
+{
+    unsafe {
+        let mut src_ptr = src_ptr;
+        let mut dst_ptr = dst_ptr;
+
+        if interleave_src {
+            src_ptr = src_ptr.add(interleave_offset);
+        } else {
+            dst_ptr = dst_ptr.add(interleave_offset);
+        }
+
+        let dst_ptr_end = dst_ptr.add(dst_len);
+        while dst_ptr < dst_ptr_end {
+            *dst_ptr = (*src_ptr).domain_shifted_as_();
+
+            if interleave_src {
+                src_ptr = src_ptr.add(interleave_step);
+                dst_ptr = dst_ptr.add(1);
+            } else {
+                src_ptr = src_ptr.add(1);
+                dst_ptr = dst_ptr.add(interleave_step);
+            }
+        }
+    }
+}
+pub fn assign_values<
+    PixelType: HasPixelComponentType,
+    PB: PixelBuffer,
+    Guard: PixelBufferAccessGuardMut<PB>,
+>(
+    src: &FrameComponentView<PixelType>,
+    dst_guard: &mut Guard,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let src_ptr = src
+        .values
+        .get_ptr([0, 0])
+        .ok_or("Could not get TransformBlock ptr.")?;
+    let src_len = src.values.len();
+
+    let pixel_type = PixelType::TYPE;
+    let interleave_step = pixel_type.interleave_step();
+    let interleave_offset = pixel_type.interleave_offset();
+    let plane_index = pixel_type.plane_index();
+
+    let dst = dst_guard.pixel_buffer_mut();
+    let dst_len = dst.plane_row_len(pixel_type) * dst.plane_height(pixel_type);
+    assert_eq!(src_len * interleave_step, dst_len);
+
+    let dst_ptr = dst.get_ptr_mut(plane_index);
+
+    copy_frame(
+        src_ptr,
+        dst_ptr,
+        dst_len,
+        false,
+        interleave_offset,
+        interleave_step,
+    );
+    Ok(())
 }
 
 pub mod transform_block_3d {
@@ -549,9 +330,9 @@ pub mod transform_block_3d {
                 .expect("Values not initialized. Must call populate_next_frame first.")
         }
 
-        pub(super) fn populate_next_frame(
+        pub(super) fn populate_next_frame<PB: PixelBuffer>(
             &mut self,
-            pixel_buffer: &PixelBuffer,
+            pixel_buffer: &PB,
         ) -> Result<(), Box<dyn std::error::Error>> {
             let frame_idx = self.populated_frames_len;
             self.populated_frames_len += 1;
@@ -574,18 +355,14 @@ pub mod transform_block_3d {
             let (dst_height, dst_width) = values_2d.dim();
             let dst_len = dst_width * dst_height;
 
-            pixel_buffer.lock_base_address(true);
-
             let plane_index = pixel_type.plane_index();
-
-            let src_ptr =
-                CVPixelBufferGetBaseAddressOfPlane(&pixel_buffer.cv_image_buffer, plane_index)
-                    as *const u8;
+            let _access_guard = pixel_buffer.access_guard();
+            let src_ptr = pixel_buffer.get_ptr(plane_index);
 
             let dst_ptr = values_2d
                 .get_mut_ptr([0, 0])
                 .ok_or("Failed to get mut_ptr.")?;
-            PixelBuffer::copy_frame(
+            copy_frame(
                 src_ptr,
                 dst_ptr,
                 dst_len,
@@ -593,8 +370,6 @@ pub mod transform_block_3d {
                 pixel_type.interleave_offset(),
                 pixel_type.interleave_step(),
             );
-
-            pixel_buffer.unlock_base_address(true);
 
             Ok(())
         }
@@ -649,26 +424,28 @@ pub mod transform_block_3d {
         }
     }
 
-    pub struct PixelBufferIterator<I: Iterator<Item = MacroBlock3D>> {
+    pub struct PixelBufferIterator<I: Iterator<Item = MacroBlock3D>, PB: PixelBuffer> {
         macro_block_3d_iterator: I,
         current_macro_block: Option<MacroBlock3D>,
         frame_index: usize,
         gop_length: usize,
+        _marker: std::marker::PhantomData<PB>,
     }
 
-    impl<I: Iterator<Item = MacroBlock3D>> PixelBufferIterator<I> {
+    impl<I: Iterator<Item = MacroBlock3D>, PB: PixelBuffer> PixelBufferIterator<I, PB> {
         pub fn new(macro_block_3d_iterator: I, gop_length: usize) -> Self {
             Self {
                 macro_block_3d_iterator,
                 current_macro_block: None,
                 frame_index: 0,
                 gop_length,
+                _marker: std::marker::PhantomData,
             }
         }
     }
 
-    impl<I: Iterator<Item = MacroBlock3D>> Iterator for PixelBufferIterator<I> {
-        type Item = PixelBuffer;
+    impl<I: Iterator<Item = MacroBlock3D>, PB: PixelBuffer> Iterator for PixelBufferIterator<I, PB> {
+        type Item = PB;
         fn next(&mut self) -> Option<Self::Item> {
             let macro_block_3d = match self.current_macro_block {
                 Some(ref macro_block_3d) => macro_block_3d,
@@ -696,9 +473,8 @@ pub mod transform_block_3d {
                 .frame_view(self.frame_index)
                 .expect("Failed to get Cr components.");
 
-            let pixel_buffer =
-                PixelBuffer::from_frame_view(&y_components, &cb_components, &cr_components)
-                    .expect("Failed to create pixel buffer.");
+            let pixel_buffer = PB::from_frame_view(&y_components, &cb_components, &cr_components)
+                .expect("Failed to create pixel buffer.");
 
             self.frame_index += 1;
             if self.frame_index == self.gop_length {
@@ -710,13 +486,17 @@ pub mod transform_block_3d {
         }
     }
 
-    impl<I: Iterator<Item = MacroBlock3D> + GOPLen> From<I> for PixelBufferIterator<I> {
+    impl<I: Iterator<Item = MacroBlock3D> + GOPLen, PB: PixelBuffer> From<I>
+        for PixelBufferIterator<I, PB>
+    {
         fn from(macro_block_iter: I) -> Self {
             let gop_len = macro_block_iter.gop_len();
             Self::new(macro_block_iter, gop_len)
         }
     }
-    impl From<MacroBlock3D> for PixelBufferIterator<std::array::IntoIter<MacroBlock3D, 1>> {
+    impl<PB: PixelBuffer> From<MacroBlock3D>
+        for PixelBufferIterator<std::array::IntoIter<MacroBlock3D, 1>, PB>
+    {
         fn from(macro_block_3d: MacroBlock3D) -> Self {
             let gop_len = macro_block_3d.gop_len();
             let macro_block_iter = [macro_block_3d].into_iter();
@@ -724,8 +504,8 @@ pub mod transform_block_3d {
         }
     }
 
-    pub(super) struct FrameComponentView<'a, PixelType: HasPixelComponentType> {
-        pub(super) values: ndarray::ArrayView2<'a, f32>,
+    pub struct FrameComponentView<'a, PixelType: HasPixelComponentType> {
+        pub values: ndarray::ArrayView2<'a, f32>,
         _marker: std::marker::PhantomData<PixelType>,
     }
     impl<'a, PixelType: HasPixelComponentType> FrameComponentView<'a, PixelType> {

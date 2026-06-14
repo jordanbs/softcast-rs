@@ -824,7 +824,7 @@ mod tests {
             let mut reader = AssetReader::new(path.into());
 
             const LENGTH: usize = 30;
-            let mut macro_block_3d_iterator: MacroBlock3DIterator<_> =
+            let mut macro_block_3d_iterator: MacroBlock3DIterator<_, _> =
                 reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
             let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");

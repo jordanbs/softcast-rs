@@ -1372,7 +1372,7 @@ mod tests {
         let asset_height: usize = asset_height.try_into().unwrap();
 
         const LENGTH: usize = 4;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<_> =
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<_, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");

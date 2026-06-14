@@ -41,7 +41,7 @@ pub trait Complex32Consumer {
 }
 
 pub struct FileReaderEncoder {
-    macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator>,
+    macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator, CVPixelBufferWrapper>,
     compression_ratio: f64,
     noise_power: f32,
     pub y_chunk_dimensions: (usize, usize, usize),

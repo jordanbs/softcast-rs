@@ -765,7 +765,7 @@ mod tests {
         let frame_resolution = (frame_resolution.0 as usize, frame_resolution.1 as usize);
 
         const LENGTH: usize = 2;
-        let mut macro_block_3d_iterator: MacroBlock3DIterator<_> =
+        let mut macro_block_3d_iterator: MacroBlock3DIterator<_, _> =
             reader.pixel_buffer_iter().macro_block_3d_iterator(LENGTH);
 
         let macro_block = macro_block_3d_iterator.next().expect("No macro blocks");

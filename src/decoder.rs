@@ -132,7 +132,7 @@ impl FileWriterDecoder {
                 cr_components: cr_dct_out.into(),
                 gop_len: self.gop_len,
             };
-            let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_> =
+            let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_, _> =
                 new_macro_block_3d.into();
 
             for pixel_buffer in pixel_buffer_iter {

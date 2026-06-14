@@ -71,7 +71,7 @@ pub mod asset_reader {
         #[allow(deprecated)] // blocking i/o is expected here
         pub(super) fn get_next_pixel_buffer(
             &mut self,
-        ) -> Result<Option<PixelBuffer>, Box<dyn error::Error>> {
+        ) -> Result<Option<CVPixelBufferWrapper>, Box<dyn error::Error>> {
             let av_reader = self.av_asset_reader()?;
             let av_output = self.av_asset_output()?;
 
@@ -82,7 +82,7 @@ pub mod asset_reader {
                         .image_buffer()
                         .ok_or("Failed to get CVPixelBuffer.")?;
 
-                    let pixel_buffer = PixelBuffer::new(cv_pixel_buffer);
+                    let pixel_buffer = CVPixelBufferWrapper::new(cv_pixel_buffer);
                     return Ok(Some(pixel_buffer));
                 }
                 // No sample buffer, see if we've reached the end of file.
@@ -188,13 +188,16 @@ pub mod asset_reader {
         fn new(asset_reader: &'a mut AssetReader) -> Self {
             PixelBufferIterator { asset_reader }
         }
-        pub fn macro_block_3d_iterator(self, gop_len: usize) -> MacroBlock3DIterator<Self> {
+        pub fn macro_block_3d_iterator(
+            self,
+            gop_len: usize,
+        ) -> MacroBlock3DIterator<Self, CVPixelBufferWrapper> {
             MacroBlock3DIterator::new(self, gop_len)
         }
     }
 
     impl Iterator for PixelBufferIterator<'_> {
-        type Item = PixelBuffer;
+        type Item = CVPixelBufferWrapper;
         fn next(&mut self) -> Option<Self::Item> {
             self.asset_reader
                 .get_next_pixel_buffer()
@@ -211,12 +214,15 @@ pub mod asset_reader {
         }
     }
     impl IntoPixelBufferIterator {
-        pub fn into_macro_block_3d_iter(self, gop_len: usize) -> MacroBlock3DIterator<Self> {
+        pub fn into_macro_block_3d_iter(
+            self,
+            gop_len: usize,
+        ) -> MacroBlock3DIterator<Self, CVPixelBufferWrapper> {
             MacroBlock3DIterator::new(self, gop_len)
         }
     }
     impl Iterator for IntoPixelBufferIterator {
-        type Item = PixelBuffer;
+        type Item = CVPixelBufferWrapper;
         fn next(&mut self) -> Option<Self::Item> {
             self.asset_reader
                 .get_next_pixel_buffer()
@@ -381,7 +387,7 @@ pub mod asset_writer {
 
         pub fn append_pixel_buffer(
             &mut self,
-            pixel_buffer: PixelBuffer,
+            pixel_buffer: CVPixelBufferWrapper,
         ) -> Result<(), Box<dyn error::Error>> {
             unsafe {
                 self.ensure_started_writing()?;
