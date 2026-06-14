@@ -797,6 +797,7 @@ impl Drop for RtlSdrReceiveDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framing::FFTW_PLANNER_LOCK;
     use liquid_sys::*;
     use rand::Rng;
     use std::f32::consts::PI;
@@ -804,6 +805,10 @@ mod tests {
     #[test]
     fn test_flexframegen() {
         unsafe {
+            let _guard = FFTW_PLANNER_LOCK
+                .lock()
+                .expect("Failed to grab fftw planner lock.");
+
             let mut props = flexframegenprops_s {
                 check: 0,
                 fec0: 0,
@@ -877,7 +882,6 @@ mod tests {
 
     #[test]
     fn test_cfo_flexframegen() {
-        use crate::framing::FFTW_PLANNER_LOCK;
         unsafe {
             let _guard = FFTW_PLANNER_LOCK
                 .lock()
@@ -985,6 +989,10 @@ mod tests {
     #[test]
     #[cfg(false)] // needs hardware to run
     fn test_sdr_loopback_flexframegen() {
+        let _guard = FFTW_PLANNER_LOCK
+            .lock()
+            .expect("Failed to grab fftw planner lock.");
+
         use crate::decoder::OFDMSymbolReader;
         let original_payload = [0x9bu8; 60];
         let iq_symbols = unsafe {
@@ -1140,6 +1148,10 @@ mod tests {
     #[test]
     #[cfg(false)] // needs hardware to run
     fn test_limesuite_sdr_loopback_flexframegen_lo() {
+        let _guard = FFTW_PLANNER_LOCK
+            .lock()
+            .expect("Failed to grab fftw planner lock.");
+
         use crate::decoder::Complex32Reader;
 
         let original_payload = [0xbau8; 0x80];
@@ -1260,6 +1272,10 @@ mod tests {
     #[test]
     #[cfg(false)] // needs hardware to run
     fn test_limesuite_sdr_loopback_flexframegen_hi() {
+        let _guard = FFTW_PLANNER_LOCK
+            .lock()
+            .expect("Failed to grab fftw planner lock.");
+
         use crate::decoder::Complex32Reader;
 
         let original_payload = [0xbau8; 0x80];
