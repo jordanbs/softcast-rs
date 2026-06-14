@@ -566,10 +566,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(false)] // too slow to run regularly
+    #[ignore = "too slow to run regularly"]
     fn test_reader_to_transform_block_3d_dct_to_writer() {
-        use asset_writer::*;
-
+        use crate::asset_reader_writer::asset_writer::*;
+        use crate::asset_reader_writer::*;
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
 
@@ -604,7 +604,7 @@ mod tests {
                 cr_components,
                 gop_len: LENGTH,
             };
-            let pixel_buffer_iterator: transform_block_3d::PixelBufferIterator<_> =
+            let pixel_buffer_iterator: transform_block_3d::PixelBufferIterator<_, _> =
                 new_macro_block.into();
 
             for pixel_buffer in pixel_buffer_iterator {
@@ -668,9 +668,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg(false)] // too slow to run regularly
+    #[ignore = "too slow to run regularly"]
     fn test_reader_to_chunks_to_writer() {
-        use asset_writer::*;
+        use crate::asset_reader_writer::asset_writer::*;
+        use crate::asset_reader_writer::*;
         use std::path;
 
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
@@ -734,7 +735,7 @@ mod tests {
                 gop_len: LENGTH,
             };
 
-            let pixel_buffer_iterator: transform_block_3d::PixelBufferIterator<_> =
+            let pixel_buffer_iterator: transform_block_3d::PixelBufferIterator<_, _> =
                 new_macro_block.into();
 
             for pixel_buffer in pixel_buffer_iterator {
