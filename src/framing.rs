@@ -52,13 +52,14 @@ pub struct OFDMFrame {
 
 fn reset_len(pixel_type: PixelComponentType) -> usize {
     let config = Config::get();
-    match pixel_type {
+    let frame_len = match pixel_type {
         PixelComponentType::Y => config.y.frame_length,
         PixelComponentType::Cb | PixelComponentType::Cr => config.cbcr.frame_length,
-    }
+    };
+    frame_len * data_symbols_per_ofdm_symbol()
 }
 
-pub fn data_symbols_per_frame() -> usize {
+pub fn data_symbols_per_ofdm_symbol() -> usize {
     static DATA_SYMBOLS_PER_FRAME: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
     *DATA_SYMBOLS_PER_FRAME.get_or_init(|| {
@@ -78,7 +79,7 @@ pub fn data_symbols_per_frame() -> usize {
     })
 }
 pub fn ofdm_symbols_per_frame(pixel_type: PixelComponentType) -> usize {
-    reset_len(pixel_type) / data_symbols_per_frame()
+    reset_len(pixel_type) / data_symbols_per_ofdm_symbol()
 }
 
 pub trait AsBoxComplex32Slice {

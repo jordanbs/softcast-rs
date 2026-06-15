@@ -87,8 +87,8 @@ impl FileWriterDecoder {
 
         let mut gops_received = 0;
 
+        let mut snr = f64::INFINITY;
         loop {
-            let snr = frame_synchronizer.signal_to_noise_ratio(); // TODO: will be 0.0 first iteration
             frame_synchronizer.set_pixel_type(PixelComponentType::Y);
             let y_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
@@ -97,12 +97,12 @@ impl FileWriterDecoder {
                 self.y_chunk_dim,
                 snr, // a bit stale
             )?;
+            snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.reset();
 
             gops_received += 1;
             eprintln!("Y GOPS Received: {}", gops_received);
 
-            let snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.set_pixel_type(PixelComponentType::Cb);
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
@@ -111,10 +111,10 @@ impl FileWriterDecoder {
                 self.cb_chunk_dim,
                 snr,
             )?;
+            snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.reset();
             eprintln!("Cb GOPS Received: {}", gops_received);
 
-            let snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.set_pixel_type(PixelComponentType::Cr);
             let cr_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
@@ -123,6 +123,7 @@ impl FileWriterDecoder {
                 self.cr_chunk_dim,
                 snr,
             )?;
+            snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.reset();
             eprintln!("Cr GOPS Received: {}", gops_received);
 
@@ -188,7 +189,7 @@ fn into_transform_block_3d_dct<
     let de_whitener = Whitener::new(
         synchronizer,
         ofdm_symbols_per_frame(PixelType::TYPE),
-        data_symbols_per_frame(),
+        data_symbols_per_ofdm_symbol(),
         true,
     );
 

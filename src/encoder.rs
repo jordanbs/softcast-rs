@@ -134,7 +134,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     let whitener = Whitener::new(
         frequency_domain_signal,
         ofdm_symbols_per_frame(PixelType::TYPE),
-        data_symbols_per_frame(),
+        data_symbols_per_ofdm_symbol(),
         false,
     );
 

@@ -15,8 +15,8 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub const DEFAULT_Y_FRAME_LEN: usize = 44 * 0x400;
-pub const DEFAULT_CBCR_FRAME_LEN: usize = 44 * 0x100;
+pub const DEFAULT_Y_FRAME_LEN: usize = 0x400; // ofdm symbols per frame
+pub const DEFAULT_CBCR_FRAME_LEN: usize = 0x100; // ofdm symbols per frame
 
 #[derive(Clone, Debug)]
 pub struct Config {

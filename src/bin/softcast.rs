@@ -16,6 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::{Parser, Subcommand};
+use parse_int;
 use softcast_rs::config::*;
 use softcast_rs::decoder::*;
 use softcast_rs::encoder::*;
@@ -65,10 +66,10 @@ enum Commands {
         c_chunk_dimensions: (usize, usize, usize),
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_length: usize,
+        y_frame_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_length: usize,
+        cbcr_frame_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -118,10 +119,10 @@ enum Commands {
         c_chunk_dimensions: (usize, usize, usize),
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_length: usize,
+        y_frame_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_length: usize,
+        cbcr_frame_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -170,10 +171,10 @@ enum Commands {
         c_chunk_dimensions: (usize, usize, usize),
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_length: usize,
+        y_frame_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_length: usize,
+        cbcr_frame_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -234,10 +235,10 @@ enum Commands {
         c_chunk_dimensions: (usize, usize, usize),
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_length: usize,
+        y_frame_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_length: usize,
+        cbcr_frame_len: usize,
     },
 }
 
@@ -274,7 +275,7 @@ fn parse_dimensions_3d(s: &str) -> Result<(usize, usize, usize), String> {
 }
 
 fn parse_power_of_two(s: &str) -> Result<usize, String> {
-    let u: usize = s.parse().map_err(|_| "{s} is not an int")?;
+    let u: usize = parse_int::parse(s).map_err(|_| "{s} is not an int")?;
 
     if u.is_power_of_two() {
         Ok(u)
@@ -310,8 +311,8 @@ fn loopback(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_length: usize,
-    cbcr_frame_length: usize,
+    y_frame_len: usize,
+    cbcr_frame_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -326,10 +327,10 @@ fn loopback(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         y: PerPixelTypeConfig {
-            frame_length: y_frame_length,
+            frame_length: y_frame_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_length,
+            frame_length: cbcr_frame_len,
         },
     };
     Config::set(config);
@@ -419,15 +420,15 @@ fn simulate(
     noise: f32,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_length: usize,
-    cbcr_frame_length: usize,
+    y_frame_len: usize,
+    cbcr_frame_len: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         y: PerPixelTypeConfig {
-            frame_length: y_frame_length,
+            frame_length: y_frame_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_length,
+            frame_length: cbcr_frame_len,
         },
     };
     Config::set(config);
@@ -463,8 +464,8 @@ fn transmit(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_length: usize,
-    cbcr_frame_length: usize,
+    y_frame_len: usize,
+    cbcr_frame_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -477,10 +478,10 @@ fn transmit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         y: PerPixelTypeConfig {
-            frame_length: y_frame_length,
+            frame_length: y_frame_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_length,
+            frame_length: cbcr_frame_len,
         },
     };
     Config::set(config);
@@ -529,8 +530,8 @@ fn receive(
     gop_len: usize,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_length: usize,
-    cbcr_frame_length: usize,
+    y_frame_len: usize,
+    cbcr_frame_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -542,10 +543,10 @@ fn receive(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         y: PerPixelTypeConfig {
-            frame_length: y_frame_length,
+            frame_length: y_frame_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_length,
+            frame_length: cbcr_frame_len,
         },
     };
     Config::set(config);
@@ -625,8 +626,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -642,8 +643,8 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -661,8 +662,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -678,8 +679,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -696,8 +697,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -716,8 +717,8 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -738,8 +739,8 @@ fn main() -> Result<(), String> {
             noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
         } => simulate(
             infile,
             outfile,
@@ -748,8 +749,8 @@ fn main() -> Result<(), String> {
             noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_length,
-            cbcr_frame_length,
+            y_frame_len,
+            cbcr_frame_len,
         ),
     }
     .map_err(|e| e.to_string())?;
