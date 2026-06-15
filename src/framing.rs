@@ -465,6 +465,8 @@ impl CallbackContext {
         self.signal_vector_magnitude / self.error_vector_magnitude
     }
     fn reset(&mut self) {
+        self.signal_vector_magnitude = 0.0;
+        self.error_vector_magnitude = 0.0;
         unsafe {
             liquid_sys::msequence_destroy(self.ms_pilot);
             self.ms_pilot = liquid_sys::msequence_create_default(8);
