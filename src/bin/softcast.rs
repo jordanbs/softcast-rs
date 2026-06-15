@@ -16,6 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::{Parser, Subcommand};
+use softcast_rs::config::*;
 use softcast_rs::decoder::*;
 use softcast_rs::encoder::*;
 use softcast_rs::radio::*;
@@ -62,6 +63,12 @@ enum Commands {
 
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        y_frame_length: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        cbcr_frame_length: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -110,6 +117,12 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        y_frame_length: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        cbcr_frame_length: usize,
+
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
 
@@ -155,6 +168,12 @@ enum Commands {
 
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        y_frame_length: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        cbcr_frame_length: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -213,6 +232,12 @@ enum Commands {
 
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        y_frame_length: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        cbcr_frame_length: usize,
     },
 }
 
@@ -248,6 +273,17 @@ fn parse_dimensions_3d(s: &str) -> Result<(usize, usize, usize), String> {
     Ok((x, y, z))
 }
 
+fn parse_power_of_two(s: &str) -> Result<usize, String> {
+    let u: usize = s.parse().map_err(|_| "{s} is not an int")?;
+
+    if u.is_power_of_two() {
+        Ok(u)
+    } else {
+        let error_string = format!("{u} is not a power of 2. Try {}", u.next_power_of_two());
+        Err(error_string)
+    }
+}
+
 fn validate_file_exists(path: &str) -> Result<std::path::PathBuf, String> {
     let path: std::path::PathBuf = path.into();
     if !path.try_exists().map_err(|e| e.to_string())? {
@@ -274,6 +310,8 @@ fn loopback(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
+    y_frame_length: usize,
+    cbcr_frame_length: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -286,6 +324,16 @@ fn loopback(
     rx_gain: f64,
     driver: Driver,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config {
+        y: PerPixelTypeConfig {
+            frame_length: y_frame_length,
+        },
+        cbcr: PerPixelTypeConfig {
+            frame_length: cbcr_frame_length,
+        },
+    };
+    Config::set(config);
+
     let mut tx_params = RadioParams::default();
     tx_params.frequency = frequency;
     tx_params.sample_rate = sample_rate;
@@ -371,7 +419,19 @@ fn simulate(
     noise: f32,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
+    y_frame_length: usize,
+    cbcr_frame_length: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config {
+        y: PerPixelTypeConfig {
+            frame_length: y_frame_length,
+        },
+        cbcr: PerPixelTypeConfig {
+            frame_length: cbcr_frame_length,
+        },
+    };
+    Config::set(config);
+
     let encoder = FileReaderEncoder::try_new(
         infile,
         gop_len,
@@ -403,6 +463,8 @@ fn transmit(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
+    y_frame_length: usize,
+    cbcr_frame_length: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -413,6 +475,16 @@ fn transmit(
     driver: Driver,
     skip_cal: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config {
+        y: PerPixelTypeConfig {
+            frame_length: y_frame_length,
+        },
+        cbcr: PerPixelTypeConfig {
+            frame_length: cbcr_frame_length,
+        },
+    };
+    Config::set(config);
+
     let mut tx_params = RadioParams::default();
     tx_params.frequency = frequency;
     tx_params.sample_rate = sample_rate;
@@ -457,6 +529,8 @@ fn receive(
     gop_len: usize,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
+    y_frame_length: usize,
+    cbcr_frame_length: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -466,6 +540,16 @@ fn receive(
     gain: f64,
     driver: Driver,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config {
+        y: PerPixelTypeConfig {
+            frame_length: y_frame_length,
+        },
+        cbcr: PerPixelTypeConfig {
+            frame_length: cbcr_frame_length,
+        },
+    };
+    Config::set(config);
+
     let mut rx_params = RadioParams::default();
     rx_params.frequency = frequency;
     rx_params.sample_rate = sample_rate;
@@ -541,6 +625,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
             frequency,
             sample_rate,
             bandwidth,
@@ -556,6 +642,8 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
             frequency,
             sample_rate,
             bandwidth,
@@ -573,6 +661,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
             frequency,
             sample_rate,
             bandwidth,
@@ -588,6 +678,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
             frequency,
             sample_rate,
             bandwidth,
@@ -604,6 +696,8 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
             frequency,
             sample_rate,
             bandwidth,
@@ -622,6 +716,8 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
             frequency,
             sample_rate,
             bandwidth,
@@ -642,6 +738,8 @@ fn main() -> Result<(), String> {
             noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
         } => simulate(
             infile,
             outfile,
@@ -650,6 +748,8 @@ fn main() -> Result<(), String> {
             noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
+            y_frame_length,
+            cbcr_frame_length,
         ),
     }
     .map_err(|e| e.to_string())?;

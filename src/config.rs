@@ -15,24 +15,37 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::asset_reader_writer::*;
+pub const DEFAULT_Y_FRAME_LEN: usize = 44 * 0x400;
+pub const DEFAULT_CBCR_FRAME_LEN: usize = 44 * 0x100;
 
+#[derive(Clone, Debug)]
 pub struct Config {
-    chunk_dimensions: (usize, usize, usize),
-    asset_resolution: (usize, usize),
-    gop_length: usize,
+    pub y: PerPixelTypeConfig,
+    pub cbcr: PerPixelTypeConfig,
 }
-
-impl Config {
-    pub fn chunks_per_gop(&self, pixel_type: PixelComponentType) -> usize {
-        self.gop_length
-            * self.chunk_dimensions.0
-            * self.chunk_dimensions.1
-            * self.chunk_dimensions.2
-            / (pixel_type.interleave_step() * pixel_type.vertical_subsampling())
+#[derive(Clone, Debug)]
+pub struct PerPixelTypeConfig {
+    pub frame_length: usize,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            y: PerPixelTypeConfig {
+                frame_length: DEFAULT_Y_FRAME_LEN,
+            },
+            cbcr: PerPixelTypeConfig {
+                frame_length: DEFAULT_CBCR_FRAME_LEN,
+            },
+        }
     }
 }
 
-pub trait ConfigProvider {
-    fn config(&self) -> Config;
+static ONCE: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+impl Config {
+    pub fn set(config: Config) {
+        ONCE.set(config).expect("config already set");
+    }
+    pub fn get() -> Config {
+        ONCE.get_or_init(|| Config::default()).clone()
+    }
 }

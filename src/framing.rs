@@ -15,7 +15,9 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::config::*;
 use crate::modulation::*;
+use crate::pixel_buffer::{HasPixelComponentType, PixelComponentType};
 use crate::sync::AbortToken;
 use fwht;
 use liquid_sys;
@@ -27,8 +29,6 @@ pub const NUM_SUBCARRIERS: usize = 64;
 const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
 pub const OFDM_SYMBOL_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
-
-const RESET_LEN: usize = 44 * 0x100; // must be a power of 2. 44 is the number of data subcarriers from 64 total.
 
 pub static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -50,6 +50,14 @@ pub struct OFDMFrame {
     symbols: Vec<OFDMSymbol>,
 }
 
+fn reset_len(pixel_type: PixelComponentType) -> usize {
+    let config = Config::get();
+    match pixel_type {
+        PixelComponentType::Y => config.y.frame_length,
+        PixelComponentType::Cb | PixelComponentType::Cr => config.cbcr.frame_length,
+    }
+}
+
 pub fn data_symbols_per_frame() -> usize {
     static DATA_SYMBOLS_PER_FRAME: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
@@ -69,8 +77,8 @@ pub fn data_symbols_per_frame() -> usize {
             .count()
     })
 }
-pub fn ofdm_symbols_per_frame() -> usize {
-    RESET_LEN / data_symbols_per_frame()
+pub fn ofdm_symbols_per_frame(pixel_type: PixelComponentType) -> usize {
+    reset_len(pixel_type) / data_symbols_per_frame()
 }
 
 pub trait AsBoxComplex32Slice {
@@ -113,7 +121,10 @@ impl OFDMFrame {
     }
 }
 
-pub struct OFDMFrameGenerator<I: Iterator<Item = QuadratureSymbol>> {
+pub struct OFDMFrameGenerator<
+    I: Iterator<Item = QuadratureSymbol>,
+    PixelType: HasPixelComponentType,
+> {
     quadrature_symbol_iter: std::iter::Peekable<I>,
     ofdm_framegen: liquid_sys::ofdmframegen,
     state: OFDMFrameGeneratorState,
@@ -123,6 +134,8 @@ pub struct OFDMFrameGenerator<I: Iterator<Item = QuadratureSymbol>> {
     average_power: f64,
     peak_power: f64,
     count_time_domain_symbols: i64,
+    reset_len: usize,
+    _marker: std::marker::PhantomData<PixelType>,
 }
 
 enum OFDMFrameGeneratorState {
@@ -133,7 +146,9 @@ enum OFDMFrameGeneratorState {
     Complete,
 }
 
-impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
+impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> From<I>
+    for OFDMFrameGenerator<I, PixelType>
+{
     fn from(quadrature_symbol_iter: I) -> Self {
         let mut subcarrier_allocation = Box::new([0u8; NUM_SUBCARRIERS]);
         let status = unsafe {
@@ -167,11 +182,15 @@ impl<I: Iterator<Item = QuadratureSymbol>> From<I> for OFDMFrameGenerator<I> {
             average_power: 0.0,
             peak_power: 0.0,
             count_time_domain_symbols: 0,
+            reset_len: reset_len(PixelType::TYPE),
+            _marker: std::marker::PhantomData,
         }
     }
 }
 
-impl<I: Iterator<Item = QuadratureSymbol>> OFDMFrameGenerator<I> {
+impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType>
+    OFDMFrameGenerator<I, PixelType>
+{
     fn update_statistics(&mut self, frame: &OFDMFrame) {
         for iq_symbol in frame
             .symbols
@@ -196,12 +215,14 @@ impl<I: Iterator<Item = QuadratureSymbol>> OFDMFrameGenerator<I> {
     }
 }
 
-impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
+impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> Iterator
+    for OFDMFrameGenerator<I, PixelType>
+{
     type Item = OFDMFrame;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut frame = OFDMFrame {
-            symbols: Vec::with_capacity(RESET_LEN + 4), // S0a, S0b, S1, tail, + Data
+            symbols: Vec::with_capacity(self.reset_len + 4), // S0a, S0b, S1, tail, + Data
         };
 
         loop {
@@ -287,7 +308,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
                         self.data_symbols_sent_since_reset += 1;
-                        self.is_resetting = RESET_LEN == self.data_symbols_sent_since_reset;
+                        self.is_resetting = self.reset_len == self.data_symbols_sent_since_reset;
                     }
                 }
                 OFDMFrameGeneratorState::Complete => {
@@ -308,7 +329,9 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
     }
 }
 
-impl<I: Iterator<Item = QuadratureSymbol>> Drop for OFDMFrameGenerator<I> {
+impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> Drop
+    for OFDMFrameGenerator<I, PixelType>
+{
     fn drop(&mut self) {
         let status = unsafe { liquid_sys::ofdmframegen_destroy(self.ofdm_framegen) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
@@ -344,6 +367,8 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     symbols_received_since_reset: usize,
     pub abort_token: Option<AbortToken>,
     stats: OFDMFrameSynchronizerStats,
+    reset_len: usize,
+    pixel_type: PixelComponentType,
 }
 
 #[allow(non_snake_case)]
@@ -464,6 +489,10 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
 
         self.callback_context.reset();
     }
+    pub fn set_pixel_type(&mut self, pixel_type: PixelComponentType) {
+        self.reset_len = reset_len(pixel_type);
+        self.pixel_type = pixel_type;
+    }
     pub fn signal_to_noise_ratio(&self) -> f64 {
         self.callback_context.signal_to_noise_ratio()
     }
@@ -491,6 +520,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
         };
         assert_ne!(std::ptr::null_mut(), ofdm_framesync);
 
+        let default_pixel_type = PixelComponentType::Y;
         Self {
             iq_buf_iter,
             ofdm_framesync,
@@ -501,6 +531,8 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             symbols_received_since_reset: 0,
             abort_token: None,
             stats: OFDMFrameSynchronizerStats::new(),
+            reset_len: reset_len(default_pixel_type),
+            pixel_type: default_pixel_type,
         }
     }
 }
@@ -519,7 +551,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
                 return None;
             }
 
-            if self.symbols_received_since_reset == RESET_LEN {
+            if self.symbols_received_since_reset == self.reset_len {
                 self.reset();
             }
 
@@ -729,6 +761,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for Whitener<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pixel_buffer::YPixelComponentType;
 
     #[test]
     fn test_ofdm_basic() {
@@ -745,7 +778,8 @@ mod tests {
         let quadrature_symbols_clone: std::collections::VecDeque<_> =
             quadrature_symbols.clone().into();
 
-        let ofdm_frame_generator: OFDMFrameGenerator<_> = quadrature_symbols.into_iter().into();
+        let ofdm_frame_generator: OFDMFrameGenerator<_, YPixelComponentType> =
+            quadrature_symbols.into_iter().into();
         let ofdm_symbols: Vec<OFDMSymbol> = ofdm_frame_generator
             .map(|frame| frame.symbols)
             .flatten()
@@ -790,7 +824,7 @@ mod tests {
             quadrature_symbols.clone().into();
 
         for _frame_idx in 0..2 {
-            let ofdm_frame_generator: OFDMFrameGenerator<_> =
+            let ofdm_frame_generator: OFDMFrameGenerator<_, YPixelComponentType> =
                 quadrature_symbols.clone().into_iter().into();
             ofdm_symbols.extend(ofdm_frame_generator.map(|frame| frame.symbols).flatten());
         }
@@ -920,7 +954,7 @@ mod tests {
             chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
-        let framer: OFDMFrameGenerator<_> =
+        let framer: OFDMFrameGenerator<_, YPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> =
@@ -1098,7 +1132,8 @@ mod tests {
         let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
         let packetizer: Packetizer = compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
-        let ofdm_generator: OFDMFrameGenerator<_> = metadata_modulator.flatten().into();
+        let ofdm_generator: OFDMFrameGenerator<_, YPixelComponentType> =
+            metadata_modulator.flatten().into();
 
         let ofdm_synchronizer: OFDMFrameSynchronizer<_> = ofdm_generator
             .map(|frame| frame.into_box_complex32_slice())
@@ -1307,7 +1342,7 @@ mod tests {
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
-        let framer: OFDMFrameGenerator<_> =
+        let framer: OFDMFrameGenerator<_, YPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> =
@@ -1463,7 +1498,7 @@ mod tests {
         let cb_slices_iter = cb_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = cb_slices_iter.into();
-        let framer: OFDMFrameGenerator<_> =
+        let framer: OFDMFrameGenerator<_, CbPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> =

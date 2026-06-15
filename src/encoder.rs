@@ -133,13 +133,13 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
     let whitener = Whitener::new(
         frequency_domain_signal,
-        ofdm_symbols_per_frame(),
+        ofdm_symbols_per_frame(PixelType::TYPE),
         data_symbols_per_frame(),
         false,
     );
 
     // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_> = whitener.into(); // TODO: interleave
+    let ofdm_framer: OFDMFrameGenerator<_, PixelType> = whitener.into(); // TODO: interleave
     ofdm_framer
 }
 

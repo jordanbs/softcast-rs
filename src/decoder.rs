@@ -89,7 +89,7 @@ impl FileWriterDecoder {
 
         loop {
             let snr = frame_synchronizer.signal_to_noise_ratio(); // TODO: will be 0.0 first iteration
-
+            frame_synchronizer.set_pixel_type(PixelComponentType::Y);
             let y_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
@@ -103,7 +103,7 @@ impl FileWriterDecoder {
             eprintln!("Y GOPS Received: {}", gops_received);
 
             let snr = frame_synchronizer.signal_to_noise_ratio();
-
+            frame_synchronizer.set_pixel_type(PixelComponentType::Cb);
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
@@ -115,7 +115,7 @@ impl FileWriterDecoder {
             eprintln!("Cb GOPS Received: {}", gops_received);
 
             let snr = frame_synchronizer.signal_to_noise_ratio();
-
+            frame_synchronizer.set_pixel_type(PixelComponentType::Cr);
             let cr_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
@@ -187,7 +187,7 @@ fn into_transform_block_3d_dct<
 
     let de_whitener = Whitener::new(
         synchronizer,
-        ofdm_symbols_per_frame(),
+        ofdm_symbols_per_frame(PixelType::TYPE),
         data_symbols_per_frame(),
         true,
     );
