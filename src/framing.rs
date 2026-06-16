@@ -51,12 +51,13 @@ pub struct OFDMFrame {
 }
 
 fn reset_len(pixel_type: PixelComponentType) -> usize {
+    // in units of OFDM symbols
     let config = Config::get();
     let frame_len = match pixel_type {
         PixelComponentType::Y => config.y.frame_length,
         PixelComponentType::Cb | PixelComponentType::Cr => config.cbcr.frame_length,
     };
-    frame_len * data_symbols_per_ofdm_symbol()
+    frame_len
 }
 
 pub fn data_symbols_per_ofdm_symbol() -> usize {
@@ -77,9 +78,6 @@ pub fn data_symbols_per_ofdm_symbol() -> usize {
             .filter(|&subcarrier_type| liquid_sys::OFDMFRAME_SCTYPE_DATA == *subcarrier_type as u32)
             .count()
     })
-}
-pub fn ofdm_symbols_per_frame(pixel_type: PixelComponentType) -> usize {
-    reset_len(pixel_type) / data_symbols_per_ofdm_symbol()
 }
 
 pub trait AsBoxComplex32Slice {
@@ -724,7 +722,7 @@ pub struct Whitener<I: Iterator<Item = QuadratureSymbol>> {
 }
 impl<I: Iterator<Item = QuadratureSymbol>> Whitener<I> {
     pub fn new(inner: I, rows: usize, cols: usize, reverse: bool) -> Self {
-        assert!(rows.is_power_of_two(), "{rows}");
+        assert!(rows.is_power_of_two(), "{rows} rows not a power of two");
         assert_eq!(0, cols % 2, "{cols}");
         Self {
             inner: inner.peekable(),

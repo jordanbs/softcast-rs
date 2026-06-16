@@ -18,6 +18,7 @@
 use crate::asset_reader_writer::asset_reader::*;
 use crate::channel_coding::slice::*;
 use crate::compressor::*;
+use crate::config::*;
 use crate::framing::*;
 use crate::metadata_coding::packetizer::*;
 use crate::metadata_coding::*;
@@ -133,13 +134,13 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
     let whitener = Whitener::new(
         frequency_domain_signal,
-        ofdm_symbols_per_frame(PixelType::TYPE),
+        Config::get().per_pixel_type::<PixelType>().whiten_length,
         data_symbols_per_ofdm_symbol(),
         false,
     );
 
     // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_, PixelType> = whitener.into(); // TODO: interleave
+    let ofdm_framer: OFDMFrameGenerator<_, PixelType> = whitener.into();
     ofdm_framer
 }
 

@@ -18,6 +18,7 @@
 use crate::asset_reader_writer::asset_writer::*;
 use crate::asset_reader_writer::*;
 use crate::channel_coding::slice::*;
+use crate::config::*;
 use crate::framing::*;
 use crate::metadata_coding::packetizer::*;
 use crate::metadata_coding::*;
@@ -188,7 +189,7 @@ fn into_transform_block_3d_dct<
 
     let de_whitener = Whitener::new(
         synchronizer,
-        ofdm_symbols_per_frame(PixelType::TYPE),
+        Config::get().per_pixel_type::<PixelType>().whiten_length,
         data_symbols_per_ofdm_symbol(),
         true,
     );

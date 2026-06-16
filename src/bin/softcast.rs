@@ -65,11 +65,17 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
         y_frame_len: usize,
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
         cbcr_frame_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+        y_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+        cbcr_whiten_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -118,11 +124,17 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
         y_frame_len: usize,
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
         cbcr_frame_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+        y_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+        cbcr_whiten_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -170,11 +182,17 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
         y_frame_len: usize,
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
         cbcr_frame_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+        y_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+        cbcr_whiten_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -208,6 +226,9 @@ enum Commands {
 
         #[arg(long, value_enum, default_value_t = Driver::Lime)]
         driver: Driver,
+
+        #[arg(long, default_value_t = false)]
+        skip_cal: bool,
     },
     Simulate {
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -234,11 +255,17 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
         y_frame_len: usize,
 
-        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
         cbcr_frame_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+        y_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+        cbcr_whiten_len: usize,
     },
 }
 
@@ -313,6 +340,8 @@ fn loopback(
     c_chunk_dimensions: (usize, usize, usize),
     y_frame_len: usize,
     cbcr_frame_len: usize,
+    y_whiten_len: usize,
+    cbcr_whiten_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -324,13 +353,16 @@ fn loopback(
     tx_gain: f64,
     rx_gain: f64,
     driver: Driver,
+    skip_cal: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         y: PerPixelTypeConfig {
             frame_length: y_frame_len,
+            whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
             frame_length: cbcr_frame_len,
+            whiten_length: cbcr_whiten_len,
         },
     };
     Config::set(config);
@@ -352,8 +384,9 @@ fn loopback(
     let (mut tx_radio, mut rx_radio): (Box<dyn TransmitDevice>, Box<dyn ReceiveDevice>) =
         match driver {
             Driver::Lime => {
-                let tx_radio = LimeTransmitDevice::try_new(tx_params, false, false)?;
-                let rx_radio = LimeReceiveDevice::try_new(rx_params, tx_radio.device, false)?;
+                let tx_radio = LimeTransmitDevice::try_new(tx_params, skip_cal, false)?;
+                let rx_radio =
+                    LimeReceiveDevice::try_new(rx_params, tx_radio.device, skip_cal, false)?;
                 (Box::new(tx_radio), Box::new(rx_radio))
             }
             Driver::Soapy => {
@@ -422,13 +455,17 @@ fn simulate(
     c_chunk_dimensions: (usize, usize, usize),
     y_frame_len: usize,
     cbcr_frame_len: usize,
+    y_whiten_len: usize,
+    cbcr_whiten_len: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         y: PerPixelTypeConfig {
             frame_length: y_frame_len,
+            whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
             frame_length: cbcr_frame_len,
+            whiten_length: cbcr_whiten_len,
         },
     };
     Config::set(config);
@@ -466,6 +503,8 @@ fn transmit(
     c_chunk_dimensions: (usize, usize, usize),
     y_frame_len: usize,
     cbcr_frame_len: usize,
+    y_whiten_len: usize,
+    cbcr_whiten_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -479,9 +518,11 @@ fn transmit(
     let config = Config {
         y: PerPixelTypeConfig {
             frame_length: y_frame_len,
+            whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
             frame_length: cbcr_frame_len,
+            whiten_length: cbcr_whiten_len,
         },
     };
     Config::set(config);
@@ -532,6 +573,8 @@ fn receive(
     c_chunk_dimensions: (usize, usize, usize),
     y_frame_len: usize,
     cbcr_frame_len: usize,
+    y_whiten_len: usize,
+    cbcr_whiten_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -544,9 +587,11 @@ fn receive(
     let config = Config {
         y: PerPixelTypeConfig {
             frame_length: y_frame_len,
+            whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
             frame_length: cbcr_frame_len,
+            whiten_length: cbcr_whiten_len,
         },
     };
     Config::set(config);
@@ -562,7 +607,7 @@ fn receive(
 
     let mut rx_radio: Box<dyn ReceiveDevice> = match driver {
         Driver::Lime => {
-            let rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, true)?;
+            let rx_radio = LimeReceiveDevice::try_new(rx_params, new_lime_device()?, false, false)?;
             Box::new(rx_radio)
         }
         Driver::Soapy => {
@@ -628,6 +673,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -645,6 +692,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -664,6 +713,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -681,6 +732,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -699,6 +752,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -710,6 +765,7 @@ fn main() -> Result<(), String> {
             tx_gain,
             rx_gain,
             driver,
+            skip_cal,
         } => loopback(
             infile,
             outfile,
@@ -719,6 +775,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -730,6 +788,7 @@ fn main() -> Result<(), String> {
             tx_gain,
             rx_gain,
             driver,
+            skip_cal,
         ),
         Commands::Simulate {
             infile,
@@ -741,6 +800,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
         } => simulate(
             infile,
             outfile,
@@ -751,6 +812,8 @@ fn main() -> Result<(), String> {
             c_chunk_dimensions,
             y_frame_len,
             cbcr_frame_len,
+            y_whiten_len,
+            cbcr_whiten_len,
         ),
     }
     .map_err(|e| e.to_string())?;

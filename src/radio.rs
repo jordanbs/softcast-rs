@@ -438,6 +438,7 @@ impl LimeReceiveDevice {
     pub fn try_new(
         params: RadioParams,
         device: *mut limesuite_sys::lms_device_t,
+        skip_cal: bool,
         dump_file: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         unsafe {
@@ -473,22 +474,24 @@ impl LimeReceiveDevice {
             ) {
                 return Err("Failed to set LimeSDR antenna.".into());
             }
-            if 0 != limesuite_sys::LMS_SetNormalizedGain(
-                device,
-                limesuite_sys::LMS_CH_RX,
-                params.channel,
-                1.0, // calibrate at full gain
-            ) {
-                return Err("Failed to set LimeSDR gain.".into());
-            }
-            if 0 != limesuite_sys::LMS_Calibrate(
-                device,
-                limesuite_sys::LMS_CH_RX,
-                params.channel,
-                params.bandwidth,
-                0, // flags
-            ) {
-                return Err("Failed to calibrate LimeSDR.".into());
+            if !skip_cal {
+                if 0 != limesuite_sys::LMS_SetNormalizedGain(
+                    device,
+                    limesuite_sys::LMS_CH_RX,
+                    params.channel,
+                    1.0, // calibrate at full gain
+                ) {
+                    return Err("Failed to set LimeSDR gain.".into());
+                }
+                if 0 != limesuite_sys::LMS_Calibrate(
+                    device,
+                    limesuite_sys::LMS_CH_RX,
+                    params.channel,
+                    params.bandwidth,
+                    0, // flags
+                ) {
+                    return Err("Failed to calibrate LimeSDR.".into());
+                }
             }
             if 0 != limesuite_sys::LMS_SetNormalizedGain(
                 device,
