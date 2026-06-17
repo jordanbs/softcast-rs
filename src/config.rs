@@ -15,11 +15,11 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub const DEFAULT_Y_FRAME_LEN: usize = 0x400; // ofdm symbols per frame
-pub const DEFAULT_CBCR_FRAME_LEN: usize = 0x100; // ofdm symbols per frame
+pub const DEFAULT_Y_FRAME_LEN: usize = 0x10000; // ofdm symbols per frame
+pub const DEFAULT_CBCR_FRAME_LEN: usize = 0x2000; // ofdm symbols per frame
 
-pub const DEFAULT_Y_WHITEN_LEN: usize = 0x400; // TODO: whiten crashes when a frame is missed
-pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x100;
+pub const DEFAULT_Y_WHITEN_LEN: usize = 0x10000; // TODO: whiten crashes when a frame is missed
+pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x2000;
 
 use crate::pixel_buffer::{HasPixelComponentType, PixelComponentType};
 
