@@ -15,11 +15,11 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub const DEFAULT_Y_FRAME_LEN: usize = 0x10000; // ofdm symbols per frame
-pub const DEFAULT_CBCR_FRAME_LEN: usize = 0x2000; // ofdm symbols per frame
+pub const DEFAULT_Y_FRAME_LEN: usize = 0x400; // ofdm symbols per frame
+pub const DEFAULT_CBCR_FRAME_LEN: usize = 0x400; // ofdm symbols per frame
 
-pub const DEFAULT_Y_WHITEN_LEN: usize = 0x10000; // TODO: whiten crashes when a frame is missed
-pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x2000;
+pub const DEFAULT_Y_WHITEN_LEN: usize = 0x8000; // TODO: whiten crashes when a frame is missed
+pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x4000;
 
 use crate::pixel_buffer::{HasPixelComponentType, PixelComponentType};
 
@@ -48,13 +48,27 @@ impl Default for Config {
     }
 }
 
-static ONCE: std::sync::OnceLock<Config> = std::sync::OnceLock::new();
+static ONCE: std::sync::Mutex<Option<Config>> = std::sync::Mutex::new(None);
 impl Config {
     pub fn set(config: Config) {
-        ONCE.set(config).expect("config already set");
+        let mut guard = ONCE.lock().expect("failed to grab config");
+        assert!(guard.is_none(), "config is already set");
+        let _ = guard.insert(config);
     }
     pub fn get() -> Config {
-        ONCE.get_or_init(|| Config::default()).clone()
+        let guard = ONCE.lock().expect("failed to grab config");
+        guard.clone().unwrap_or_default()
+    }
+    #[cfg(test)]
+    pub fn set_for_test(config: Config) -> ConfigGuard {
+        let prev_config = Self::get();
+        let mut guard = ONCE.lock().expect("failed to grab config");
+        let _ = guard.insert(config);
+        ConfigGuard { prev_config }
+    }
+    #[cfg(test)]
+    pub fn lock() -> std::sync::MutexGuard<'static, ()> {
+        CONFIG_LOCK.lock().expect("failed to grab config lock")
     }
     pub fn per_pixel_type<PixelType: HasPixelComponentType>(&self) -> PerPixelTypeConfig {
         match PixelType::TYPE {
@@ -62,5 +76,19 @@ impl Config {
             PixelComponentType::Cb | PixelComponentType::Cr => &self.cbcr,
         }
         .clone()
+    }
+}
+
+#[cfg(test)]
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(test)]
+pub struct ConfigGuard {
+    prev_config: Config,
+}
+#[cfg(test)]
+impl Drop for ConfigGuard {
+    fn drop(&mut self) {
+        let mut guard = ONCE.lock().expect("failed to grab config");
+        let _ = guard.insert(self.prev_config.clone());
     }
 }

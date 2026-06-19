@@ -97,9 +97,14 @@ impl FileWriterDecoder {
                 self.asset_resolution,
                 self.y_chunk_dim,
                 snr, // a bit stale
-            )?;
+            )
+            .inspect_err(|_err| {
+                println!("Fatal SNR: {:.2}", frame_synchronizer.signal_to_noise_db())
+            })?;
+
             snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.reset();
+            frame_synchronizer.reset_seeking_frame_index();
 
             gops_received += 1;
             eprintln!("Y GOPS Received: {}", gops_received);
@@ -111,9 +116,13 @@ impl FileWriterDecoder {
                 self.asset_resolution,
                 self.cb_chunk_dim,
                 snr,
-            )?;
+            )
+            .inspect_err(|_err| {
+                println!("Fatal SNR: {:.2}", frame_synchronizer.signal_to_noise_db())
+            })?;
             snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.reset();
+            frame_synchronizer.reset_seeking_frame_index();
             eprintln!("Cb GOPS Received: {}", gops_received);
 
             frame_synchronizer.set_pixel_type(PixelComponentType::Cr);
@@ -123,9 +132,13 @@ impl FileWriterDecoder {
                 self.asset_resolution,
                 self.cr_chunk_dim,
                 snr,
-            )?;
+            )
+            .inspect_err(|_err| {
+                println!("Fatal SNR: {:.2}", frame_synchronizer.signal_to_noise_db())
+            })?;
             snr = frame_synchronizer.signal_to_noise_ratio();
             frame_synchronizer.reset();
+            frame_synchronizer.reset_seeking_frame_index();
             eprintln!("Cr GOPS Received: {}", gops_received);
 
             let new_macro_block_3d = MacroBlock3D {

@@ -50,6 +50,15 @@ pub struct OFDMFrame {
     symbols: Vec<OFDMSymbol>,
 }
 
+impl OFDMFrame {
+    fn new(frame_len: usize) -> Self {
+        // frame_len is number of data symbols
+        Self {
+            symbols: Vec::with_capacity(frame_len + 4), // S0a, S0b, S1, tail, + Data
+        }
+    }
+}
+
 fn reset_len(pixel_type: PixelComponentType) -> usize {
     // in units of OFDM symbols
     let config = Config::get();
@@ -134,6 +143,8 @@ pub struct OFDMFrameGenerator<
     peak_power: f64,
     count_time_domain_symbols: i64,
     reset_len: usize,
+    frame_index: u16,
+    metadata_modem: U16QPacketModem,
     _marker: std::marker::PhantomData<PixelType>,
 }
 
@@ -182,6 +193,8 @@ impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> Fro
             peak_power: 0.0,
             count_time_domain_symbols: 0,
             reset_len: reset_len(PixelType::TYPE),
+            frame_index: 0,
+            metadata_modem: U16QPacketModem::new(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -220,9 +233,17 @@ impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> Ite
     type Item = OFDMFrame;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut frame = OFDMFrame {
-            symbols: Vec::with_capacity(self.reset_len + 4), // S0a, S0b, S1, tail, + Data
-        };
+        if self.quadrature_symbol_iter.peek().is_none() {
+            return None;
+        }
+
+        let mut frame = OFDMFrame::new(self.reset_len);
+        let mut modulated_header_iter = self
+            .metadata_modem
+            .encode(self.frame_index)
+            .into_iter()
+            .peekable();
+        self.frame_index = self.frame_index.wrapping_add(1); // allow overflow
 
         loop {
             frame.symbols.push(OFDMSymbol::default());
@@ -290,9 +311,10 @@ impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> Ite
                             // Insert placeholders for null and pilot subcarriers.
                             .map(|subcarrier_type| match *subcarrier_type as u32 {
                                 // Pad frame with zero values; don't drop data.
-                                liquid_sys::OFDMFRAME_SCTYPE_DATA => {
-                                    self.quadrature_symbol_iter.next().unwrap_or_default()
-                                }
+                                liquid_sys::OFDMFRAME_SCTYPE_DATA => modulated_header_iter
+                                    .next()
+                                    .or_else(|| self.quadrature_symbol_iter.next())
+                                    .unwrap_or_default(),
                                 _ => QuadratureSymbol::default(),
                             })
                             .collect();
@@ -368,6 +390,9 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     stats: OFDMFrameSynchronizerStats,
     reset_len: usize,
     pixel_type: PixelComponentType,
+    seeking_frame_index: u16,
+    header_modem: U16QPacketModem,
+    frame_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
 }
 
 #[allow(non_snake_case)]
@@ -490,58 +515,21 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
 
         self.callback_context.reset();
     }
+    pub fn reset_seeking_frame_index(&mut self) {
+        self.frame_symbols_iter = vec![].into_iter().peekable();
+        self.seeking_frame_index = 0;
+    }
     pub fn set_pixel_type(&mut self, pixel_type: PixelComponentType) {
         self.reset_len = reset_len(pixel_type);
         self.pixel_type = pixel_type;
     }
+    pub fn signal_to_noise_db(&self) -> f64 {
+        self.callback_context.signal_to_noise_db()
+    }
     pub fn signal_to_noise_ratio(&self) -> f64 {
         self.callback_context.signal_to_noise_ratio()
     }
-}
-
-impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> {
-    fn from(iq_buf_iter: I) -> Self {
-        let mut callback_context_box = Box::new(CallbackContext::default());
-        let callback_context_ptr: *mut CallbackContext = callback_context_box.as_mut();
-        let callback_context_ptr = callback_context_ptr as *mut core::ffi::c_void;
-
-        let ofdm_framesync = {
-            // ofdmframesync calls FFTW_PLANNER, which is not thread safe.
-            let _guard = FFTW_PLANNER_LOCK.lock().unwrap(); // drops at end of scope
-            unsafe {
-                liquid_sys::ofdmframesync_create(
-                    NUM_SUBCARRIERS as u32,
-                    CP_LEN as u32,
-                    TAPER_LEN as u32,
-                    std::ptr::null_mut(),
-                    Some(ofdm_framesync_callback),
-                    callback_context_ptr,
-                )
-            }
-        };
-        assert_ne!(std::ptr::null_mut(), ofdm_framesync);
-
-        let default_pixel_type = PixelComponentType::Y;
-        Self {
-            iq_buf_iter,
-            ofdm_framesync,
-            callback_context: callback_context_box,
-            working_iq_buf: None,
-            working_iq_symbols_consumed: 0,
-            freq_domain_symbols_iter: vec![].into_iter().peekable(),
-            symbols_received_since_reset: 0,
-            abort_token: None,
-            stats: OFDMFrameSynchronizerStats::new(),
-            reset_len: reset_len(default_pixel_type),
-            pixel_type: default_pixel_type,
-        }
-    }
-}
-
-impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I> {
-    type Item = QuadratureSymbol;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next_raw_iq_symbol(&mut self) -> Option<QuadratureSymbol> {
         while self.freq_domain_symbols_iter.peek().is_none() {
             // break out if aborted
             if self
@@ -598,6 +586,105 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
             .freq_domain_symbols_iter
             .next()
             .expect("freq_domain_symbols_iter unexepectly empty.");
+        Some(q_symbol)
+    }
+    fn raw_iq_iter(&mut self) -> impl Iterator<Item = QuadratureSymbol> {
+        std::iter::from_fn(|| self.next_raw_iq_symbol())
+    }
+}
+
+impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> {
+    fn from(iq_buf_iter: I) -> Self {
+        let mut callback_context_box = Box::new(CallbackContext::default());
+        let callback_context_ptr: *mut CallbackContext = callback_context_box.as_mut();
+        let callback_context_ptr = callback_context_ptr as *mut core::ffi::c_void;
+
+        let ofdm_framesync = {
+            // ofdmframesync calls FFTW_PLANNER, which is not thread safe.
+            let _guard = FFTW_PLANNER_LOCK.lock().unwrap(); // drops at end of scope
+            unsafe {
+                liquid_sys::ofdmframesync_create(
+                    NUM_SUBCARRIERS as u32,
+                    CP_LEN as u32,
+                    TAPER_LEN as u32,
+                    std::ptr::null_mut(),
+                    Some(ofdm_framesync_callback),
+                    callback_context_ptr,
+                )
+            }
+        };
+        assert_ne!(std::ptr::null_mut(), ofdm_framesync);
+
+        let default_pixel_type = PixelComponentType::Y;
+        Self {
+            iq_buf_iter,
+            ofdm_framesync,
+            callback_context: callback_context_box,
+            working_iq_buf: None,
+            working_iq_symbols_consumed: 0,
+            freq_domain_symbols_iter: vec![].into_iter().peekable(),
+            symbols_received_since_reset: 0,
+            abort_token: None,
+            stats: OFDMFrameSynchronizerStats::new(),
+            reset_len: reset_len(default_pixel_type),
+            pixel_type: default_pixel_type,
+            seeking_frame_index: 0,
+            header_modem: U16QPacketModem::new(),
+            frame_symbols_iter: vec![].into_iter().peekable(),
+        }
+    }
+}
+
+impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I> {
+    type Item = QuadratureSymbol;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.frame_symbols_iter.peek().is_none() {
+            // find header
+            let header_len = U16QPacketModem::ENCODED_FRAME_LEN;
+            let mut header_iq: Box<[QuadratureSymbol]> =
+                self.raw_iq_iter().take(header_len).collect();
+            if header_len != header_iq.len() {
+                return None; // break iteration
+            }
+            let frame_len_iq = self.reset_len * data_symbols_per_ofdm_symbol(); // in iq_symbols
+            assert!(frame_len_iq > header_len);
+
+            if let Ok(found_frame_index) = self.header_modem.decode(&mut header_iq) {
+                let iq_symbols_to_produce_per_frame = frame_len_iq - header_len;
+                //                 eprintln!("f: iq_symbols_to_produce_per_frame: {iq_symbols_to_produce_per_frame}");
+                let dropped_frames =
+                    found_frame_index.wrapping_sub(self.seeking_frame_index) as usize;
+                let num_frames = 1 + dropped_frames; // 1 for found frame
+                let mut frame = Vec::with_capacity(iq_symbols_to_produce_per_frame * num_frames);
+                if dropped_frames > 0 {
+                    eprintln!(
+                        "WARNING: DROPPED {} FRAMES ({}-{})",
+                        dropped_frames,
+                        self.seeking_frame_index,
+                        found_frame_index.wrapping_sub(1),
+                    );
+                    let empty_iq_symbols = iq_symbols_to_produce_per_frame
+                        .checked_mul(dropped_frames)
+                        .expect("overflow");
+                    frame.resize(empty_iq_symbols, QuadratureSymbol::default());
+                    self.seeking_frame_index = found_frame_index;
+                }
+                // expected frame
+                frame.extend(self.raw_iq_iter().take(iq_symbols_to_produce_per_frame));
+
+                self.seeking_frame_index += 1;
+                self.frame_symbols_iter = frame.into_iter().peekable();
+            }
+            // else discard this OFDM symbol, keep looking
+            else {
+                self.symbols_received_since_reset = self.reset_len; // trigger frame reset
+            }
+        }
+        let q_symbol = self
+            .frame_symbols_iter
+            .next()
+            .expect("frame_symbols_iter unexepectly empty.");
         Some(q_symbol)
     }
 }
@@ -745,7 +832,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for Whitener<I> {
                 return None;
             }
             // collect from inner iter with any necessary padding
-            let mut signal = vec![Complex32::default(); self.rows * self.cols];
+            let mut signal = vec![Complex32::ZERO; self.rows * self.cols];
             for (dst, src) in signal.iter_mut().zip(self.inner.by_ref()) {
                 *dst = unsafe { std::mem::transmute(src) };
             }
@@ -763,6 +850,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for Whitener<I> {
 mod tests {
     use super::*;
     use crate::pixel_buffer::YPixelComponentType;
+    use serial_test::serial;
 
     #[test]
     fn test_ofdm_basic() {
@@ -808,18 +896,24 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_ofdm_multiple_frames() {
-        const FRAME_LEN: usize = 600;
+        const FRAME_LEN: usize = 1;
+        let frame_len_in_iq = FRAME_LEN * data_symbols_per_ofdm_symbol();
+        let mut config = Config::default();
+        config.y.frame_length = FRAME_LEN * 3; // leave room for header
+        let _config_guard = Config::set_for_test(config);
         let mut ofdm_symbols = vec![];
         let mut quadrature_symbols = vec![
             QuadratureSymbol {
                 value: Complex32::default()
             };
-            FRAME_LEN
+            frame_len_in_iq
         ];
+
         for (idx, symbol) in quadrature_symbols.iter_mut().enumerate() {
-            symbol.value.re = 0.01 * idx as f32 / FRAME_LEN as f32;
-            symbol.value.im = 0.01 * -(idx as f32 / FRAME_LEN as f32);
+            symbol.value.re = 0.01 * idx as f32;
+            symbol.value.im = -0.01 * idx as f32;
         }
         let quadrature_symbols_clone: std::collections::VecDeque<_> =
             quadrature_symbols.clone().into();
@@ -834,26 +928,38 @@ mod tests {
             .map(|ofdm_symbol| Box::new(ofdm_symbol.time_domain_symbols) as Box<[Complex32]>)
             .into();
 
-        let new_quadrature_symbols_0: Vec<_> =
-            ofdm_frame_synchronizer.by_ref().take(FRAME_LEN).collect();
+        let new_quadrature_symbols_0: Vec<_> = ofdm_frame_synchronizer
+            .by_ref()
+            .take(frame_len_in_iq)
+            .collect();
         ofdm_frame_synchronizer.reset();
-        let new_quadrature_symbols_1: Vec<_> = ofdm_frame_synchronizer.take(FRAME_LEN).collect();
+        ofdm_frame_synchronizer.reset_seeking_frame_index();
+        //         eprintln!("reset");
+        let new_quadrature_symbols_1: Vec<_> =
+            ofdm_frame_synchronizer.take(frame_len_in_iq).collect();
 
         // orig may be shorter than new, because of frame padding.
-        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols_0.len());
-        assert!(quadrature_symbols_clone.len() <= new_quadrature_symbols_1.len());
+        assert_eq!(
+            quadrature_symbols_clone.len(),
+            new_quadrature_symbols_0.len()
+        );
+        assert_eq!(
+            quadrature_symbols_clone.len(),
+            new_quadrature_symbols_1.len()
+        );
 
-        for (orig, new) in quadrature_symbols_clone
+        for (idx, (orig, new)) in quadrature_symbols_clone
             .iter()
             .zip(new_quadrature_symbols_0.iter())
+            .enumerate()
         {
             assert!(
                 (orig.value.re - new.value.re).abs() < 0.0001,
-                "{} -> {}",
+                "{idx}: {} -> {}",
                 orig.value,
                 new.value
             );
-            assert!((orig.value.im - new.value.im).abs() < 0.0001);
+            assert!((orig.value.im - new.value.im).abs() < 0.001);
         }
         for (orig, new) in quadrature_symbols_clone
             .iter()
@@ -861,11 +967,16 @@ mod tests {
         {
             assert!(
                 (orig.value.re - new.value.re).abs() < 0.0001,
-                "orig:{}, new:{}",
-                orig.value,
-                new.value
+                "orig:{:?}\nnew:{:?}",
+                quadrature_symbols_clone,
+                new_quadrature_symbols_1
             );
-            assert!((orig.value.im - new.value.im).abs() < 0.0001);
+            assert!(
+                (orig.value.im - new.value.im).abs() < 0.0001,
+                "orig: {:?}\nnew: {:?}",
+                quadrature_symbols_clone,
+                new_quadrature_symbols_1
+            );
         }
     }
 
@@ -909,7 +1020,7 @@ mod tests {
 
         let metadata_modulator: MetadataModulator<_> = orig_packets.clone().into_iter().into();
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
-        let framer: OFDMFrameGenerator<_> =
+        let framer: OFDMFrameGenerator<_, YPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> =
@@ -1042,7 +1153,7 @@ mod tests {
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
-        let framer: OFDMFrameGenerator<_> =
+        let framer: OFDMFrameGenerator<_, YPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> =
@@ -1205,7 +1316,7 @@ mod tests {
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
-        let framer: OFDMFrameGenerator<_> =
+        let framer: OFDMFrameGenerator<_, YPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
         let synchronizer: OFDMFrameSynchronizer<_> =
@@ -1502,8 +1613,9 @@ mod tests {
         let framer: OFDMFrameGenerator<_, CbPixelComponentType> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
+        let mut synchronizer: OFDMFrameSynchronizer<_> =
             framer.map(|frame| frame.into_box_complex32_slice()).into();
+        synchronizer.pixel_type = PixelComponentType::Cb;
 
         let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
         let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
