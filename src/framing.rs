@@ -143,8 +143,8 @@ pub struct OFDMFrameGenerator<
     peak_power: f64,
     count_time_domain_symbols: i64,
     reset_len: usize,
-    frame_index: u16,
-    metadata_modem: U16QPacketModem,
+    frame_index: u8,
+    metadata_modem: U8QPacketModem,
     _marker: std::marker::PhantomData<PixelType>,
 }
 
@@ -194,7 +194,7 @@ impl<I: Iterator<Item = QuadratureSymbol>, PixelType: HasPixelComponentType> Fro
             count_time_domain_symbols: 0,
             reset_len: reset_len(PixelType::TYPE),
             frame_index: 0,
-            metadata_modem: U16QPacketModem::new(),
+            metadata_modem: U8QPacketModem::new(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -390,8 +390,8 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     stats: OFDMFrameSynchronizerStats,
     reset_len: usize,
     pixel_type: PixelComponentType,
-    seeking_frame_index: u16,
-    header_modem: U16QPacketModem,
+    seeking_frame_index: u8,
+    header_modem: U8QPacketModem,
     frame_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
 }
 
@@ -629,7 +629,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             reset_len: reset_len(default_pixel_type),
             pixel_type: default_pixel_type,
             seeking_frame_index: 0,
-            header_modem: U16QPacketModem::new(),
+            header_modem: U8QPacketModem::new(),
             frame_symbols_iter: vec![].into_iter().peekable(),
         }
     }
@@ -641,7 +641,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
     fn next(&mut self) -> Option<Self::Item> {
         while self.frame_symbols_iter.peek().is_none() {
             // find header
-            let header_len = U16QPacketModem::ENCODED_FRAME_LEN;
+            let header_len = U8QPacketModem::ENCODED_FRAME_LEN;
             let mut header_iq: Box<[QuadratureSymbol]> =
                 self.raw_iq_iter().take(header_len).collect();
             if header_len != header_iq.len() {

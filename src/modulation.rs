@@ -55,42 +55,22 @@ impl FromByte for BPSKModulatedByte {
         quadrature_symbols
     }
 }
-
-pub type BPSKModulatedU12 = [QuadratureSymbol; 12];
-impl FromU16 for BPSKModulatedU12 {
-    fn from_u16(u: u16, modem: liquid_sys::modemcf) -> Self {
-        let u = u & 0x0fff;
-        let mut quadrature_symbols = BPSKModulatedU12::default();
-
-        for (bitpos, q_symbol) in quadrature_symbols.iter_mut().rev().enumerate() {
-            // MSB-first
-            let bitval = 0 != (u & (1 << bitpos));
-            let symbol_ptr: *mut Complex32 = &mut q_symbol.value; // Complex32 is bincompat with C float complex
-            let status =
-                unsafe { liquid_sys::modemcf_modulate(modem, bitval.into(), symbol_ptr) } as u32;
-            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-        }
-
-        quadrature_symbols
-    }
-}
-
-pub struct U16QPacketModem {
+pub struct U8QPacketModem {
     ptr: liquid_sys::qpacketmodem,
 }
-impl U16QPacketModem {
-    pub const ENCODED_FRAME_LEN: usize = 96;
+impl U8QPacketModem {
+    pub const ENCODED_FRAME_LEN: usize = 36;
 
     pub fn new() -> Self {
         unsafe {
             let qpacket_modem = liquid_sys::qpacketmodem_create();
             let status = liquid_sys::qpacketmodem_configure(
                 qpacket_modem,
-                size_of::<u16>() as u32,
+                size_of::<u8>() as u32,
                 liquid_sys::crc_scheme_LIQUID_CRC_24,
                 liquid_sys::fec_scheme_LIQUID_FEC_GOLAY2412,
                 liquid_sys::fec_scheme_LIQUID_FEC_NONE,
-                liquid_sys::modulation_scheme_LIQUID_MODEM_BPSK as i32,
+                liquid_sys::modulation_scheme_LIQUID_MODEM_QPSK as i32,
             ) as u32;
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
@@ -100,7 +80,7 @@ impl U16QPacketModem {
             Self { ptr: qpacket_modem }
         }
     }
-    pub fn encode(&mut self, u: u16) -> Box<[QuadratureSymbol]> {
+    pub fn encode(&mut self, u: u8) -> Box<[QuadratureSymbol]> {
         unsafe {
             let mut frame: Box<[Complex32]> = vec![Complex32::ZERO; Self::ENCODED_FRAME_LEN].into();
             let payload = u.to_be_bytes();
@@ -112,25 +92,25 @@ impl U16QPacketModem {
             std::mem::transmute(frame)
         }
     }
-    pub fn decode(&mut self, payload: &mut [QuadratureSymbol]) -> Result<u16, std::string::String> {
+    pub fn decode(&mut self, payload: &mut [QuadratureSymbol]) -> Result<u8, std::string::String> {
         assert_eq!(Self::ENCODED_FRAME_LEN, payload.len());
 
-        let mut u16_be_bytes = [0u8; size_of::<u16>()];
+        let mut u8_be_bytes = [0u8; size_of::<u8>()];
         unsafe {
             let payload: &mut [Complex32] = std::mem::transmute(payload);
             let success = liquid_sys::qpacketmodem_decode(
                 self.ptr,
                 payload.as_mut_ptr(),
-                u16_be_bytes.as_mut_ptr(),
+                u8_be_bytes.as_mut_ptr(),
             );
             if 1 != success {
                 return Err("frame header decode failed".to_string());
             }
         }
-        Ok(u16::from_be_bytes(u16_be_bytes))
+        Ok(u8::from_be_bytes(u8_be_bytes))
     }
 }
-impl Drop for U16QPacketModem {
+impl Drop for U8QPacketModem {
     fn drop(&mut self) {
         let status = unsafe { liquid_sys::qpacketmodem_destroy(self.ptr) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);

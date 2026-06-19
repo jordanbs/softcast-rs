@@ -1,0 +1,55 @@
+[ TESTING STARTED ]
+->Start time: Sun Jun 14 19:58:01 2026
+->LimeSuite version: 23.11.0-release
+
+->Device: LimeSDR-USB, media=USB 3.0, module=FX3, addr=1d50:6108, serial=0009083401863321, HW=4, GW=2.23
+  Serial Number: 0009083401863321
+ Chip temperature: 50 C
+
+[ Clock Network Test ]
+->FX3 GPIF clock test
+  Test results: 29225; 32981; 36737 - PASSED
+->Si5351C test
+  CLK0: 17554 / 17554 - PASSED
+  CLK1: 17554 / 17554 - PASSED
+  CLK2: 17554 / 17554 - PASSED
+  CLK3: 17554 / 17554 - PASSED
+  CLK4: 17554 / 17554 - PASSED
+  CLK5: 17554 / 17554 - PASSED
+  CLK6: 17554 / 17554 - PASSED
+->ADF4002 Test
+  Result: 10 - PASSED
+->VCTCXO test
+  Results : 5112982 (min); 5113123 (max) - PASSED
+->Clock Network Test PASSED
+
+[ FPGA EEPROM Test ]
+->Read EEPROM
+->Read data: 19 01 15 19 01 15 02
+->FPGA EEPROM Test PASSED
+
+[ LMS7002M Test ]
+->Perform Registers Test
+->External Reset line test
+  Reg 0x20: Write value 0xFFFD, Read value 0xFFFD
+  Reg 0x20: value after reset 0x0FFFF
+->LMS7002M Test PASSED
+
+[ RF Loopback Test ]
+Note: The test should be run without anything connected to RF ports
+->Configure LMS
+->Run Tests (TX_2-> LNA_L):
+  CH0 (SXR=800.0MHz, SXT=805.0MHz): Result:(-15.6 dBFS, 5.00 MHz) - PASSED
+  CH1 (SXR=800.0MHz, SXT=805.0MHz): Result:(-17.6 dBFS, 5.00 MHz) - PASSED
+->Run Tests (TX_1 -> LNA_W):
+  CH0 (SXR=1800.0MHz, SXT=1805.0MHz): Result:(-19.8 dBFS, 5.00 MHz) - PASSED
+  CH1 (SXR=1800.0MHz, SXT=1805.0MHz): Result:(-18.8 dBFS, 5.00 MHz) - PASSED
+->Run Tests (TX_2-> LNA_H):
+  CH0 (SXR=2500.0MHz, SXT=2505.0MHz): Result:(-19.1 dBFS, 5.00 MHz) - PASSED
+  CH1 (SXR=2500.0MHz, SXT=2505.0MHz): Result:(-17.0 dBFS, 5.00 MHz) - PASSED
+->RF Loopback Test PASSED
+
+=> Board tests PASSED <=
+
+Elapsed time: 1.57 seconds
+
