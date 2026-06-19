@@ -140,7 +140,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     );
 
     // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_, PixelType> = whitener.into();
+    let ofdm_framer: OFDMFrameGenerator<_> = whitener.into();
     ofdm_framer
 }
 

@@ -90,7 +90,6 @@ impl FileWriterDecoder {
 
         let mut snr = f64::INFINITY;
         loop {
-            frame_synchronizer.set_pixel_type(PixelComponentType::Y);
             let y_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
@@ -109,7 +108,6 @@ impl FileWriterDecoder {
             gops_received += 1;
             eprintln!("Y GOPS Received: {}", gops_received);
 
-            frame_synchronizer.set_pixel_type(PixelComponentType::Cb);
             let cb_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,
@@ -125,7 +123,6 @@ impl FileWriterDecoder {
             frame_synchronizer.reset_seeking_frame_index();
             eprintln!("Cb GOPS Received: {}", gops_received);
 
-            frame_synchronizer.set_pixel_type(PixelComponentType::Cr);
             let cr_dct_out = into_transform_block_3d_dct(
                 &mut frame_synchronizer,
                 self.gop_len,

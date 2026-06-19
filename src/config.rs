@@ -15,8 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-pub const DEFAULT_Y_FRAME_LEN: usize = 0x400; // ofdm symbols per frame
-pub const DEFAULT_CBCR_FRAME_LEN: usize = 0x400; // ofdm symbols per frame
+pub const FRAME_LEN: usize = 0x400; // ofdm symbols per frame
 
 pub const DEFAULT_Y_WHITEN_LEN: usize = 0x8000; // TODO: whiten crashes when a frame is missed
 pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x4000;
@@ -25,23 +24,22 @@ use crate::pixel_buffer::{HasPixelComponentType, PixelComponentType};
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub frame_length: usize,
     pub y: PerPixelTypeConfig,
     pub cbcr: PerPixelTypeConfig,
 }
 #[derive(Clone, Debug)]
 pub struct PerPixelTypeConfig {
-    pub frame_length: usize,
     pub whiten_length: usize, // ofdm frames to whiten; must be a power of 2
 }
 impl Default for Config {
     fn default() -> Self {
         Self {
+            frame_length: FRAME_LEN,
             y: PerPixelTypeConfig {
-                frame_length: DEFAULT_Y_FRAME_LEN,
                 whiten_length: DEFAULT_Y_WHITEN_LEN,
             },
             cbcr: PerPixelTypeConfig {
-                frame_length: DEFAULT_CBCR_FRAME_LEN,
                 whiten_length: DEFAULT_CBCR_WHITEN_LEN,
             },
         }

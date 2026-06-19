@@ -65,17 +65,14 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_len: usize,
-
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_len: usize,
-
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
         y_whiten_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
         cbcr_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
+        frame_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -124,17 +121,14 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_len: usize,
-
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_len: usize,
-
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
         y_whiten_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
         cbcr_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
+        frame_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -182,17 +176,14 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_len: usize,
-
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_len: usize,
-
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
         y_whiten_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
         cbcr_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
+        frame_len: usize,
 
         #[arg(short, default_value_t = DEFAULT_FREQ)]
         frequency: f64,
@@ -255,17 +246,14 @@ enum Commands {
         #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
         c_chunk_dimensions: (usize, usize, usize),
 
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_FRAME_LEN)]
-        y_frame_len: usize,
-
-        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_FRAME_LEN)]
-        cbcr_frame_len: usize,
-
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
         y_whiten_len: usize,
 
         #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
         cbcr_whiten_len: usize,
+
+        #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
+        frame_len: usize,
     },
 }
 
@@ -338,10 +326,9 @@ fn loopback(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_len: usize,
-    cbcr_frame_len: usize,
     y_whiten_len: usize,
     cbcr_whiten_len: usize,
+    frame_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -356,12 +343,11 @@ fn loopback(
     skip_cal: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
+        frame_length: frame_len,
         y: PerPixelTypeConfig {
-            frame_length: y_frame_len,
             whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_len,
             whiten_length: cbcr_whiten_len,
         },
     };
@@ -453,18 +439,16 @@ fn simulate(
     noise: f32,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_len: usize,
-    cbcr_frame_len: usize,
     y_whiten_len: usize,
     cbcr_whiten_len: usize,
+    frame_len: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
+        frame_length: frame_len,
         y: PerPixelTypeConfig {
-            frame_length: y_frame_len,
             whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_len,
             whiten_length: cbcr_whiten_len,
         },
     };
@@ -501,10 +485,9 @@ fn transmit(
     compression_ratio: f64,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_len: usize,
-    cbcr_frame_len: usize,
     y_whiten_len: usize,
     cbcr_whiten_len: usize,
+    frame_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -516,12 +499,11 @@ fn transmit(
     skip_cal: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
+        frame_length: frame_len,
         y: PerPixelTypeConfig {
-            frame_length: y_frame_len,
             whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_len,
             whiten_length: cbcr_whiten_len,
         },
     };
@@ -571,10 +553,9 @@ fn receive(
     gop_len: usize,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
-    y_frame_len: usize,
-    cbcr_frame_len: usize,
     y_whiten_len: usize,
     cbcr_whiten_len: usize,
+    frame_len: usize,
     frequency: f64,
     sample_rate: f64,
     bandwidth: f64,
@@ -585,12 +566,11 @@ fn receive(
     driver: Driver,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
+        frame_length: frame_len,
         y: PerPixelTypeConfig {
-            frame_length: y_frame_len,
             whiten_length: y_whiten_len,
         },
         cbcr: PerPixelTypeConfig {
-            frame_length: cbcr_frame_len,
             whiten_length: cbcr_whiten_len,
         },
     };
@@ -671,10 +651,9 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -690,10 +669,9 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -711,10 +689,9 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -730,10 +707,9 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -750,10 +726,9 @@ fn main() -> Result<(), String> {
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -773,10 +748,9 @@ fn main() -> Result<(), String> {
             compression_ratio,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
             frequency,
             sample_rate,
             bandwidth,
@@ -798,10 +772,9 @@ fn main() -> Result<(), String> {
             noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
         } => simulate(
             infile,
             outfile,
@@ -810,10 +783,9 @@ fn main() -> Result<(), String> {
             noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
-            y_frame_len,
-            cbcr_frame_len,
             y_whiten_len,
             cbcr_whiten_len,
+            frame_len,
         ),
     }
     .map_err(|e| e.to_string())?;
