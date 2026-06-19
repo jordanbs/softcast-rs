@@ -374,6 +374,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     seeking_frame_index: u8,
     header_modem: U8QPacketModem,
     frame_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
+    long_term_stats: SignalStats,
 }
 
 #[allow(non_snake_case)]
@@ -396,18 +397,31 @@ extern "C" fn ofdm_framesync_callback(
     liquid_sys::liquid_error_code_LIQUID_OK as i32 // always ok
 }
 
-struct CallbackContext {
-    freq_domain_symbols: Option<Vec<QuadratureSymbol>>,
+#[derive(Default)]
+struct SignalStats {
     error_vector_magnitude: f64,
     signal_vector_magnitude: f64,
+}
+
+impl SignalStats {
+    pub fn signal_to_noise_db(&self) -> f64 {
+        -10.0 * (self.error_vector_magnitude / self.signal_vector_magnitude).log10()
+    }
+    pub fn signal_to_noise_ratio(&self) -> f64 {
+        self.signal_vector_magnitude / self.error_vector_magnitude
+    }
+}
+
+struct CallbackContext {
+    freq_domain_symbols: Option<Vec<QuadratureSymbol>>,
+    stats: SignalStats,
     ms_pilot: liquid_sys::msequence,
 }
 impl Default for CallbackContext {
     fn default() -> Self {
         Self {
             freq_domain_symbols: Option::default(),
-            error_vector_magnitude: f64::default(),
-            signal_vector_magnitude: f64::default(),
+            stats: SignalStats::default(),
             ms_pilot: unsafe { liquid_sys::msequence_create_default(8) },
         }
     }
@@ -460,18 +474,18 @@ impl CallbackContext {
 
         let signal_power = pilot_count as f32;
 
-        self.error_vector_magnitude += error_power as f64;
-        self.signal_vector_magnitude += signal_power as f64;
+        self.stats.error_vector_magnitude += error_power as f64;
+        self.stats.signal_vector_magnitude += signal_power as f64;
     }
     pub fn signal_to_noise_db(&self) -> f64 {
-        -10.0 * (self.error_vector_magnitude / self.signal_vector_magnitude).log10()
+        self.stats.signal_to_noise_db()
     }
+    #[allow(dead_code)]
     pub fn signal_to_noise_ratio(&self) -> f64 {
-        self.signal_vector_magnitude / self.error_vector_magnitude
+        self.stats.signal_to_noise_ratio()
     }
     fn reset(&mut self) {
-        self.signal_vector_magnitude = 0.0;
-        self.error_vector_magnitude = 0.0;
+        self.stats = SignalStats::default();
         unsafe {
             liquid_sys::msequence_destroy(self.ms_pilot);
             self.ms_pilot = liquid_sys::msequence_create_default(8);
@@ -494,17 +508,24 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
         self.freq_domain_symbols_iter = vec![].into_iter().peekable();
         self.symbols_received_since_reset = 0;
 
+        // accumulate signal stats
+        self.long_term_stats.error_vector_magnitude +=
+            self.callback_context.stats.error_vector_magnitude;
+        self.long_term_stats.signal_vector_magnitude +=
+            self.callback_context.stats.signal_vector_magnitude;
+
         self.callback_context.reset();
     }
     pub fn reset_seeking_frame_index(&mut self) {
         self.frame_symbols_iter = vec![].into_iter().peekable();
         self.seeking_frame_index = 0;
+        self.long_term_stats = SignalStats::default();
     }
     pub fn signal_to_noise_db(&self) -> f64 {
-        self.callback_context.signal_to_noise_db()
+        self.long_term_stats.signal_to_noise_db()
     }
     pub fn signal_to_noise_ratio(&self) -> f64 {
-        self.callback_context.signal_to_noise_ratio()
+        self.long_term_stats.signal_to_noise_ratio()
     }
     fn next_raw_iq_symbol(&mut self) -> Option<QuadratureSymbol> {
         while self.freq_domain_symbols_iter.peek().is_none() {
@@ -606,6 +627,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             seeking_frame_index: 0,
             header_modem: U8QPacketModem::new(),
             frame_symbols_iter: vec![].into_iter().peekable(),
+            long_term_stats: SignalStats::default(),
         }
     }
 }
@@ -648,7 +670,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
                 // expected frame
                 frame.extend(self.raw_iq_iter().take(iq_symbols_to_produce_per_frame));
 
-                self.seeking_frame_index += 1;
+                self.seeking_frame_index = self.seeking_frame_index.wrapping_add(1);
                 self.frame_symbols_iter = frame.into_iter().peekable();
             }
             // else discard this OFDM symbol, keep looking
