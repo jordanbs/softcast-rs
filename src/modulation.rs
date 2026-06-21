@@ -20,6 +20,10 @@ use crate::metadata_coding::packetizer::*;
 use liquid_sys;
 use num_complex::Complex32;
 
+// Observation: peak slice amplitude is ~3.0.
+// Scale down to prevent metadata from being attenuated.
+const SCALE_SLICE_VALUES_BY: f32 = 4.0;
+
 // TODO: Interleave metadata and slice symbols.
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -59,7 +63,7 @@ pub struct U8QPacketModem {
     ptr: liquid_sys::qpacketmodem,
 }
 impl U8QPacketModem {
-    pub const ENCODED_FRAME_LEN: usize = 36;
+    pub const ENCODED_FRAME_LEN: usize = 40;
 
     pub fn new() -> Self {
         unsafe {
@@ -68,7 +72,7 @@ impl U8QPacketModem {
                 qpacket_modem,
                 size_of::<u8>() as u32,
                 liquid_sys::crc_scheme_LIQUID_CRC_24,
-                liquid_sys::fec_scheme_LIQUID_FEC_GOLAY2412,
+                liquid_sys::fec_scheme_LIQUID_FEC_CONV_V29,
                 liquid_sys::fec_scheme_LIQUID_FEC_NONE,
                 liquid_sys::modulation_scheme_LIQUID_MODEM_QPSK as i32,
             ) as u32;
@@ -98,7 +102,7 @@ impl U8QPacketModem {
         let mut u8_be_bytes = [0u8; size_of::<u8>()];
         unsafe {
             let payload: &mut [Complex32] = std::mem::transmute(payload);
-            let success = liquid_sys::qpacketmodem_decode(
+            let success = liquid_sys::qpacketmodem_decode_soft(
                 self.ptr,
                 payload.as_mut_ptr(),
                 u8_be_bytes.as_mut_ptr(),
@@ -300,7 +304,7 @@ pub mod slices {
 
             let values_len = working_slice.values_len();
 
-            let real_value = working_slice.value_at(self.working_idx);
+            let real_value = working_slice.value_at(self.working_idx) / SCALE_SLICE_VALUES_BY;
             self.working_idx += 1;
             self.working_idx %= values_len; // working_idx is indexed into a single slice.
             if 0 == self.working_idx {
@@ -375,7 +379,8 @@ pub mod slices {
             let mut iq_iter = self
                 .quadrature_symbol_iter
                 .by_ref()
-                .flat_map(|symbol| [symbol.value.re, symbol.value.im]);
+                .flat_map(|symbol| [symbol.value.re, symbol.value.im])
+                .map(|real_value| real_value * SCALE_SLICE_VALUES_BY);
 
             for dst in &mut slice.values_mut() {
                 *dst = iq_iter // TODO: use mapv_inplace
