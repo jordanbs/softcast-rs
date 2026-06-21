@@ -15,6 +15,8 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+#![cfg(target_vendor = "apple")]
+
 use crate::asset_reader_writer::asset_reader::*;
 use crate::channel_coding::slice::*;
 use crate::compressor::*;
@@ -28,19 +30,10 @@ use crate::pixel_buffer::transform_block_3d::*;
 use crate::pixel_buffer::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
-use crate::sync::AbortToken;
+use crate::sync::*;
 use num_complex::Complex32;
 use rand::SeedableRng;
 use rand_xoshiro;
-
-pub trait Complex32Consumer {
-    // consumes buf, so it can be sent without copies
-    fn consume(
-        &mut self,
-        buf: Box<[Complex32]>,
-        flush: bool,
-    ) -> Result<(), Box<dyn std::error::Error>>;
-}
 
 pub struct FileReaderEncoder {
     macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator, CVPixelBufferWrapper>,

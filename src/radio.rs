@@ -15,7 +15,6 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::encoder::Complex32Consumer;
 use crate::rtlsdr_iq;
 use crate::sync::*;
 use limesuite_sys;

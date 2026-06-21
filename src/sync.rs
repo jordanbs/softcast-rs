@@ -15,10 +15,21 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::decoder::Complex32Reader;
-use crate::encoder::Complex32Consumer;
 use num_complex::Complex32;
 use std::sync::*;
+
+pub trait Complex32Reader {
+    fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>>;
+}
+
+pub trait Complex32Consumer {
+    // consumes buf, so it can be sent without copies
+    fn consume(
+        &mut self,
+        buf: Box<[Complex32]>,
+        flush: bool,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+}
 
 pub struct MPSCWriter {
     pub sender: std::sync::mpsc::SyncSender<Box<[Complex32]>>,

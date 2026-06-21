@@ -15,6 +15,8 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+#![cfg(target_vendor = "apple")]
+
 use crate::asset_reader_writer::asset_writer::*;
 use crate::asset_reader_writer::*;
 use crate::channel_coding::slice::*;
@@ -31,11 +33,6 @@ use crate::source_coding::chunk::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::*;
-use num_complex::Complex32;
-
-pub trait Complex32Reader {
-    fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>>;
-}
 
 pub struct FileWriterDecoder {
     asset_writer: AssetWriter,
