@@ -30,7 +30,8 @@ use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::AbortToken;
 use num_complex::Complex32;
-use rand::Rng;
+use rand::SeedableRng;
+use rand_xoshiro;
 
 pub trait Complex32Consumer {
     // consumes buf, so it can be sent without copies
@@ -182,14 +183,11 @@ impl FileReaderEncoder {
                 let mut frame = frame.into_box_complex32_slice();
                 // TODO: Factor this out
                 if 0.0 < self.noise_power {
-                    let noise_power = self.noise_power;
-                    let mut rng = rand::rng();
-                    for iq in frame.iter_mut() {
-                        let i_distortion = rng.random_range(-noise_power..noise_power);
-                        let q_distortion = rng.random_range(-noise_power..noise_power);
-                        iq.re += i_distortion;
-                        iq.im += q_distortion;
-                    }
+                    let mut rng = rand_xoshiro::Xoshiro128PlusPlus::seed_from_u64(0); // deterministic
+                    let noise_stddev = (self.noise_power / 2.0).sqrt();
+                    frame
+                        .iter_mut()
+                        .for_each(|iq| iq.add_random_noise(noise_stddev, &mut rng));
                 }
 
                 ofdm_symbol_writer.consume(frame, true)?;
@@ -200,6 +198,20 @@ impl FileReaderEncoder {
             }
         }
         Ok(())
+    }
+}
+
+trait AddRandomNoise {
+    fn add_random_noise<R: rand::Rng>(&mut self, noise_stddev: f32, rng: &mut R);
+}
+impl AddRandomNoise for Complex32 {
+    fn add_random_noise<R: rand::Rng>(&mut self, noise_stddev: f32, rng: &mut R) {
+        let u1: f32 = rng.random_range(f32::EPSILON..1.0);
+        let u2: f32 = rng.random_range(0.0..1.0);
+        let r = (-2.0 * u1.ln()).sqrt() * noise_stddev;
+        let theta = 2.0 * std::f32::consts::PI * u2;
+        self.re += r * theta.cos();
+        self.im += r * theta.sin();
     }
 }
 

@@ -166,6 +166,9 @@ enum Commands {
         #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
         compression_ratio: f64,
 
+        #[arg(long, default_value_t = DEFAULT_NOISE)]
+        noise: f32,
+
         #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
         gop_len: usize,
 
@@ -324,6 +327,7 @@ fn loopback(
     outfile: std::path::PathBuf,
     gop_len: usize,
     compression_ratio: f64,
+    noise: f32,
     y_chunk_dimensions: (usize, usize, usize),
     c_chunk_dimensions: (usize, usize, usize),
     y_whiten_len: usize,
@@ -390,7 +394,7 @@ fn loopback(
         infile,
         gop_len,
         compression_ratio,
-        0.0,
+        noise,
         y_chunk_dimensions,
         c_chunk_dimensions,
         c_chunk_dimensions,
@@ -723,6 +727,7 @@ fn main() -> Result<(), String> {
             infile,
             outfile,
             compression_ratio,
+            noise,
             gop_len,
             y_chunk_dimensions,
             c_chunk_dimensions,
@@ -746,6 +751,7 @@ fn main() -> Result<(), String> {
             outfile,
             gop_len,
             compression_ratio,
+            noise,
             y_chunk_dimensions,
             c_chunk_dimensions,
             y_whiten_len,
