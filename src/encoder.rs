@@ -15,8 +15,7 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
-#![cfg(target_vendor = "apple")]
-
+#[cfg(target_vendor = "apple")]
 use crate::asset_reader_writer::asset_reader::*;
 use crate::channel_coding::slice::*;
 use crate::compressor::*;
@@ -35,8 +34,11 @@ use num_complex::Complex32;
 use rand::SeedableRng;
 use rand_xoshiro;
 
-pub struct FileReaderEncoder {
-    macro_block_3d_iter: MacroBlock3DIterator<IntoPixelBufferIterator, CVPixelBufferWrapper>,
+#[cfg(target_vendor = "apple")]
+pub type FileReaderEncoder = Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>;
+
+pub struct Encoder<I: Iterator<Item = PB>, PB: PixelBuffer> {
+    macro_block_3d_iter: MacroBlock3DIterator<I, PB>,
     compression_ratio: f64,
     noise_power: f32,
     pub y_chunk_dimensions: (usize, usize, usize),
@@ -46,8 +48,9 @@ pub struct FileReaderEncoder {
     frame_rate: f64,
 }
 
-impl FileReaderEncoder {
-    pub fn try_new(
+impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
+    #[cfg(target_vendor = "apple")]
+    pub fn with_file(
         in_path: std::path::PathBuf,
         gop_len: usize,
         compression_ratio: f64,
@@ -55,7 +58,8 @@ impl FileReaderEncoder {
         y_chunk_dimensions: (usize, usize, usize),
         cb_chunk_dimensions: (usize, usize, usize),
         cr_chunk_dimensions: (usize, usize, usize),
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>, Box<dyn std::error::Error>>
+    {
         let mut reader = AssetReader::new(in_path);
         let frame_rate = reader.frame_rate()?;
         let asset_resolution = reader.resolution()?;
@@ -83,8 +87,9 @@ impl FileReaderEncoder {
             PixelComponentType::Cr,
         );
 
-        Ok(Self {
-            macro_block_3d_iter: pb_iter.into_macro_block_3d_iter(gop_len),
+        Ok(Encoder::new(
+            pb_iter,
+            gop_len,
             compression_ratio,
             noise_power,
             y_chunk_dimensions,
@@ -92,7 +97,30 @@ impl FileReaderEncoder {
             cr_chunk_dimensions,
             asset_resolution,
             frame_rate,
-        })
+        ))
+    }
+
+    pub fn new(
+        pb_iter: I,
+        gop_len: usize,
+        compression_ratio: f64,
+        noise_power: f32,
+        y_chunk_dimensions: (usize, usize, usize),
+        cb_chunk_dimensions: (usize, usize, usize),
+        cr_chunk_dimensions: (usize, usize, usize),
+        asset_resolution: (usize, usize),
+        frame_rate: f64,
+    ) -> Self {
+        Self {
+            macro_block_3d_iter: MacroBlock3DIterator::new(pb_iter, gop_len),
+            compression_ratio,
+            noise_power,
+            y_chunk_dimensions,
+            cb_chunk_dimensions,
+            cr_chunk_dimensions,
+            asset_resolution,
+            frame_rate,
+        }
     }
 
     pub fn asset_resolution(&self) -> (usize, usize) {
@@ -101,44 +129,6 @@ impl FileReaderEncoder {
     pub fn frame_rate(&self) -> f64 {
         self.frame_rate
     }
-}
-
-fn ofdm_framer<PixelType: HasPixelComponentType>(
-    dct_components: &mut TransformBlock3DDCT<PixelType>,
-    compression_ratio: f64,
-    chunk_dimensions: (usize, usize, usize),
-) -> impl Iterator<Item = OFDMFrame> {
-    let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
-
-    // metadata
-    let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
-    let chunk_metadata_iter = chunks.iter().map(|chunk| &chunk.metadata);
-    let compressed_metadata = CompressedMetadata::new(&metadata_bitmap, chunk_metadata_iter);
-    let packetizer: Packetizer = compressed_metadata.into();
-    let metadata_modulator: MetadataModulator<_> = packetizer.into();
-
-    // slices
-    let num_included_chunks = metadata_bitmap.values.count_ones();
-    let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
-    let slice_modulator: SliceModulator<'_, _, _> = PowerScaler::new(compressor)
-        .into_slice_iter(num_included_chunks)
-        .map(|slice_and_chunk_metadata| slice_and_chunk_metadata.slice)
-        .into();
-
-    let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
-    let whitener = Whitener::new(
-        frequency_domain_signal,
-        Config::get().per_pixel_type::<PixelType>().whiten_length,
-        data_symbols_per_ofdm_symbol(),
-        false,
-    );
-
-    // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_> = whitener.into();
-    ofdm_framer
-}
-
-impl FileReaderEncoder {
     pub fn run(
         &mut self,
         ofdm_symbol_writer: &mut dyn Complex32Consumer,
@@ -192,6 +182,41 @@ impl FileReaderEncoder {
         }
         Ok(())
     }
+}
+
+fn ofdm_framer<PixelType: HasPixelComponentType>(
+    dct_components: &mut TransformBlock3DDCT<PixelType>,
+    compression_ratio: f64,
+    chunk_dimensions: (usize, usize, usize),
+) -> impl Iterator<Item = OFDMFrame> {
+    let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
+
+    // metadata
+    let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
+    let chunk_metadata_iter = chunks.iter().map(|chunk| &chunk.metadata);
+    let compressed_metadata = CompressedMetadata::new(&metadata_bitmap, chunk_metadata_iter);
+    let packetizer: Packetizer = compressed_metadata.into();
+    let metadata_modulator: MetadataModulator<_> = packetizer.into();
+
+    // slices
+    let num_included_chunks = metadata_bitmap.values.count_ones();
+    let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
+    let slice_modulator: SliceModulator<'_, _, _> = PowerScaler::new(compressor)
+        .into_slice_iter(num_included_chunks)
+        .map(|slice_and_chunk_metadata| slice_and_chunk_metadata.slice)
+        .into();
+
+    let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
+    let whitener = Whitener::new(
+        frequency_domain_signal,
+        Config::get().per_pixel_type::<PixelType>().whiten_length,
+        data_symbols_per_ofdm_symbol(),
+        false,
+    );
+
+    // ofdm
+    let ofdm_framer: OFDMFrameGenerator<_> = whitener.into();
+    ofdm_framer
 }
 
 trait AddRandomNoise {

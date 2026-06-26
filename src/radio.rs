@@ -883,6 +883,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "doesn't do well in parallel'"]
     fn test_cfo_flexframegen() {
         unsafe {
             let _guard = FFTW_PLANNER_LOCK

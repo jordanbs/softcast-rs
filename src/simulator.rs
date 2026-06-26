@@ -60,7 +60,7 @@ mod tests {
         let noise_power = 0.0;
         let y_chunk_dimensions = (48, 30, 1);
         let c_chunk_dimensions = (40, 30, 1);
-        let encoder = FileReaderEncoder::try_new(
+        let encoder = FileReaderEncoder::with_file(
             infile.into(),
             gop_len,
             compression_ratio,
