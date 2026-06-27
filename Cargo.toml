@@ -24,6 +24,7 @@ rand_xoshiro = "0.7"
 fwht = "0.1.0"
 rtl-sdr = "0.1.5"
 parse_int = "0.9.0"
+drm-fourcc = "2.2.0"
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2 = "0.6.3"
@@ -32,6 +33,9 @@ objc2-core-foundation = "0.3.2"
 objc2-core-media = "0.3.2"
 objc2-core-video = { version = "0.3.2", features = ["CVImageBuffer"] }
 objc2-foundation = { version = "0.3.2", features = ["NSObject"] }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+libcamera = "0.7.0"
 
 [profile.bench]
 debug = 1
