@@ -15,9 +15,18 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::camera::FrameRequest;
 use crate::pixel_buffer::*;
 
-pub struct NV12PixelBuffer {}
+#[derive(Debug)]
+pub struct NV12PixelBuffer {
+    request: FrameRequest,
+}
+impl From<FrameRequest> for NV12PixelBuffer {
+    fn from(request: FrameRequest) -> Self {
+        Self { request }
+    }
+}
 
 impl PixelBuffer for NV12PixelBuffer {
     fn plane_row_len(&self, _pixel_component_type: PixelComponentType) -> usize {
@@ -34,9 +43,35 @@ impl PixelBuffer for NV12PixelBuffer {
         todo!();
     }
     fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a> {
-        todo!();
+        let guard = NV12PixelBufferAccessGuard::from(self);
+        Box::new(guard)
     }
     fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a> {
         todo!();
+    }
+}
+
+struct NV12PixelBufferAccessGuard<'a> {
+    pixel_buffer: &'a NV12PixelBuffer,
+}
+impl<'a> From<&'a NV12PixelBuffer> for NV12PixelBufferAccessGuard<'a> {
+    fn from(pixel_buffer: &'a NV12PixelBuffer) -> Self {
+        Self { pixel_buffer }
+    }
+}
+impl<'a> PixelBufferAccessGuard<NV12PixelBuffer> for NV12PixelBufferAccessGuard<'a> {
+    fn pixel_buffer(&self) -> &NV12PixelBuffer {
+        &self.pixel_buffer
+    }
+    fn get_ptr(&self, plane_index: usize) -> *const u8 {
+        let frame_request = &self.pixel_buffer.request;
+        let frame_buffer: &libcamera::framebuffer_map::MemoryMappedFrameBuffer<
+            libcamera::framebuffer_allocator::FrameBuffer,
+        > = frame_request
+            .request
+            .buffer(&frame_request.stream)
+            .expect("no frame buffer");
+        let planes = frame_buffer.data();
+        planes.get(plane_index).expect("No plane at index").as_ptr()
     }
 }

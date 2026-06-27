@@ -74,19 +74,6 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
 
         let asset_resolution = (asset_resolution.0 as usize, asset_resolution.1 as usize);
 
-        let y_chunk_dimensions =
-            chunk_dimensions_sizer(y_chunk_dimensions, asset_resolution, PixelComponentType::Y);
-        let cb_chunk_dimensions = chunk_dimensions_sizer(
-            cb_chunk_dimensions,
-            asset_resolution,
-            PixelComponentType::Cb,
-        );
-        let cr_chunk_dimensions = chunk_dimensions_sizer(
-            cr_chunk_dimensions,
-            asset_resolution,
-            PixelComponentType::Cr,
-        );
-
         Ok(Encoder::new(
             pb_iter,
             gop_len,
@@ -111,6 +98,19 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         asset_resolution: (usize, usize),
         frame_rate: f64,
     ) -> Self {
+        let y_chunk_dimensions =
+            chunk_dimensions_sizer(y_chunk_dimensions, asset_resolution, PixelComponentType::Y);
+        let cb_chunk_dimensions = chunk_dimensions_sizer(
+            cb_chunk_dimensions,
+            asset_resolution,
+            PixelComponentType::Cb,
+        );
+        let cr_chunk_dimensions = chunk_dimensions_sizer(
+            cr_chunk_dimensions,
+            asset_resolution,
+            PixelComponentType::Cr,
+        );
+
         Self {
             macro_block_3d_iter: MacroBlock3DIterator::new(pb_iter, gop_len),
             compression_ratio,

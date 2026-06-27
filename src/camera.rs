@@ -22,13 +22,8 @@ use libcamera;
 
 use crate::pixel_buffer::*;
 
-pub struct Camera {}
-
-impl Iterator for Camera {
-    type Item = NV12PixelBuffer;
-    fn next(&mut self) -> Option<Self::Item> {
-        None
-    }
+pub struct Camera {
+    frame_request_rx: Option<std::sync::mpsc::Receiver<NV12PixelBuffer>>,
 }
 
 const PIXEL_FORMAT_NV12: libcamera::pixel_format::PixelFormat =
@@ -39,10 +34,19 @@ const RESOLUTION: (u32, u32) = (1280, 720);
 
 impl Camera {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            frame_request_rx: None,
+        }
     }
 
-    pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn resolution(&self) -> (usize, usize) {
+        (RESOLUTION.0 as usize, RESOLUTION.1 as usize)
+    }
+    pub fn frame_rate(&self) -> f64 {
+        FRAME_RATE
+    }
+
+    pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let manager = libcamera::camera_manager::CameraManager::new()?;
         let cameras = manager.cameras();
         let camera = cameras.iter().next().ok_or("No cameras found.")?;
@@ -118,8 +122,12 @@ impl Camera {
             .collect();
 
         let (tx, rx) = std::sync::mpsc::channel();
+        let stream_clone = stream.clone();
         camera.on_request_completed(move |request| {
-            tx.send(request).expect("Failed to send request");
+            println!("Camera request {:?} completed!", request);
+            let frame_request = FrameRequest::new(request, stream_clone);
+            let pixel_buffer: NV12PixelBuffer = frame_request.into();
+            tx.send(pixel_buffer).expect("Failed to send request");
         });
 
         camera.start(Some(&controls))?;
@@ -130,15 +138,26 @@ impl Camera {
             camera.queue_request(request).map_err(|(_, e)| e).unwrap();
         }
 
-        loop {
-            let mut request = rx.recv_timeout(std::time::Duration::from_secs(5))?;
+        self.frame_request_rx = Some(rx);
 
-            println!("Camera request {request:?} completed!");
-            println!("Metadata: {:#?}", request.metadata());
+        Ok(())
+    }
+    pub fn pixel_buffer_iter(&mut self) -> impl Iterator<Item = NV12PixelBuffer> {
+        let frame_request_rx = self.frame_request_rx.take().expect("No frame_request_rx.");
+        frame_request_rx
+            .into_iter()
+            .inspect(|x| println!("next: {:?}", x))
+    }
+}
 
-            request.reuse(libcamera::request::ReuseFlag::REUSE_BUFFERS);
-            camera.queue_request(request).map_err(|(_, e)| e)?;
-        }
+#[derive(Debug)]
+pub struct FrameRequest {
+    pub request: libcamera::request::Request,
+    pub stream: libcamera::stream::Stream,
+}
+impl FrameRequest {
+    pub fn new(request: libcamera::request::Request, stream: libcamera::stream::Stream) -> Self {
+        Self { request, stream }
     }
 }
 
@@ -149,6 +168,6 @@ mod tests {
     #[test]
     fn test_camera_connected() {
         let mut camera = Camera::new();
-        camera.run().expect("Camera ran with no error.");
+        camera.start().expect("Camera ran with no error.");
     }
 }

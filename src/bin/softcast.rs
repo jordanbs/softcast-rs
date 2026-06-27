@@ -807,6 +807,7 @@ mod apple {
 #[cfg(not(target_vendor = "apple"))]
 mod linux {
     use super::*;
+    use softcast_rs::camera::*;
 
     #[derive(Parser)]
     struct Args {
@@ -867,7 +868,7 @@ mod linux {
         },
     }
 
-    fn transmit(
+    fn transmit_camera(
         gop_len: usize,
         compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
@@ -885,7 +886,63 @@ mod linux {
         driver: Driver,
         skip_cal: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        todo!()
+        let config = Config {
+            frame_length: frame_len,
+            y: PerPixelTypeConfig {
+                whiten_length: y_whiten_len,
+            },
+            cbcr: PerPixelTypeConfig {
+                whiten_length: cbcr_whiten_len,
+            },
+        };
+        Config::set(config);
+
+        let mut tx_params = RadioParams::default();
+        tx_params.frequency = frequency;
+        tx_params.sample_rate = sample_rate;
+        tx_params.bandwidth = bandwidth;
+        tx_params.device_idx = device_idx;
+        tx_params.channel = channel;
+        tx_params.antenna = antenna.to_string();
+        tx_params.gain = gain;
+
+        let mut tx_radio: Box<dyn TransmitDevice> = match driver {
+            Driver::Lime => {
+                let tx_radio = LimeTransmitDevice::try_new(tx_params, skip_cal, false)?;
+                Box::new(tx_radio)
+            }
+            Driver::Soapy => {
+                let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
+                Box::new(tx_radio)
+            }
+            _ => return Err("Driver does not support transmit.".into()),
+        };
+
+        let mut camera = Camera::new();
+        camera.start()?;
+
+        let resolution = camera.resolution();
+        let frame_rate = camera.frame_rate();
+
+        let pb_iter = camera.pixel_buffer_iter();
+
+        let mut encoder = Encoder::new(
+            pb_iter,
+            gop_len,
+            compression_ratio,
+            0.0,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            c_chunk_dimensions,
+            resolution,
+            frame_rate,
+        );
+
+        tx_radio.activate()?;
+
+        encoder.run(tx_radio.as_mut(), AbortToken::new())?;
+
+        Ok(())
     }
 
     pub fn main() -> Result<(), String> {
@@ -911,7 +968,7 @@ mod linux {
                 gain,
                 driver,
                 skip_cal,
-            } => transmit(
+            } => transmit_camera(
                 gop_len,
                 compression_ratio,
                 y_chunk_dimensions,
