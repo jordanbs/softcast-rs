@@ -33,6 +33,9 @@ impl Iterator for Camera {
 
 const PIXEL_FORMAT_NV12: libcamera::pixel_format::PixelFormat =
     libcamera::pixel_format::PixelFormat::new(drm_fourcc::DrmFourcc::Nv12 as u32, 0);
+const FRAME_RATE: f64 = 30.0;
+const FRAME_DURATION_US: i64 = (FRAME_RATE / 1_000_000.0).round() as i64;
+const RESOLUTION: (u32, u32) = (1280, 720);
 
 impl Camera {
     pub fn new() -> Self {
@@ -59,6 +62,7 @@ impl Camera {
 
         let mut stream_config = camera_config.get_mut(0).ok_or("No camera configuration")?;
         stream_config.set_pixel_format(PIXEL_FORMAT_NV12);
+        stream_config.set_size(libcamera::geometry::Size::new(RESOLUTION.0, RESOLUTION.1));
 
         match camera_config.validate() {
             libcamera::camera::CameraConfigurationStatus::Valid => {
@@ -77,6 +81,12 @@ impl Camera {
         if PIXEL_FORMAT_NV12 != stream_config.get_pixel_format() {
             return Err("NV12 is not supported by the camera".into());
         };
+
+        let mut controls = libcamera::control::ControlList::new();
+        controls.set(libcamera::controls::FrameDurationLimits([
+            FRAME_DURATION_US,
+            FRAME_DURATION_US,
+        ]))?;
 
         camera.configure(&mut camera_config)?;
         let stream_config = camera_config.get(0).ok_or("No camera configuration.")?;
@@ -112,7 +122,7 @@ impl Camera {
             tx.send(request).expect("Failed to send request");
         });
 
-        camera.start(None)?;
+        camera.start(Some(&controls))?;
 
         // Enqueue all requests to the camera
         for request in frame_requests {
