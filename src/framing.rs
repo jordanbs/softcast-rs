@@ -975,6 +975,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_vendor = "apple")]
     use crate::asset_reader_writer::asset_reader::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
     use crate::compressor::*;
@@ -986,6 +987,7 @@ mod tests {
 
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_frame_inverse_to_packets_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -1028,6 +1030,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_frame_inverse_num_slices() {
         use crate::pixel_buffer::*;
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
@@ -1098,6 +1101,7 @@ mod tests {
 
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_frame_inverse_equality() {
         use crate::channel_coding::slice::*;
         use crate::pixel_buffer::transform_block_3d::*;
@@ -1259,6 +1263,7 @@ mod tests {
 
     #[test]
     #[cfg(not(debug_assertions))] // too slow on debug
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_frame_inverse_mean_squared_error() {
         use crate::channel_coding::slice::*;
         use crate::pixel_buffer::transform_block_3d::*;
@@ -1392,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_frame_inverse_compression_mean_squared_error_y() {
         use crate::channel_coding::slice::*;
         use crate::compressor::*;
@@ -1533,6 +1539,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_frame_inverse_compression_mean_squared_error_cb() {
         use crate::channel_coding::slice::*;
         use crate::compressor::*;

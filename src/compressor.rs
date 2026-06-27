@@ -1,5 +1,4 @@
 // Copyright 2026 Jordan Schneider
-//
 // This file is part of softcast-rs.
 //
 // softcast-rs is free software: you can redistribute it and/or modify it under
@@ -357,6 +356,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_metadata_bitmap_basic() {
         use crate::asset_reader_writer::asset_reader::*;
         use crate::source_coding::transform_block_3d_dct::*;
@@ -388,6 +388,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     //     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_metadata_bitmap_zstd() {
         use crate::asset_reader_writer::asset_reader::*;
@@ -451,6 +452,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_compressor_basic() {
         use crate::asset_reader_writer::asset_reader::*;
         use crate::source_coding::transform_block_3d_dct::*;

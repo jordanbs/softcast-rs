@@ -592,11 +592,13 @@ pub mod packetizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_vendor = "apple")]
     use crate::asset_reader_writer::asset_reader::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
     use packetizer::*;
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_slice_metadata_inverse_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -768,6 +770,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_packet_inverse_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -809,6 +812,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_packet_inverse_equality_reader() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);

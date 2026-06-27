@@ -752,6 +752,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_slice_inverse_equality() {
         use crate::asset_reader_writer::asset_reader::*;
         use crate::channel_coding::slice::{ChunkIterIntoExt, SliceIterExt};

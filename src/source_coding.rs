@@ -521,12 +521,14 @@ pub mod chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_vendor = "apple")]
     use crate::asset_reader_writer::asset_reader::*;
     use chunk::*;
     use std::fs;
     use transform_block_3d_dct::*;
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_print_3d_dct() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -543,6 +545,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_print_chunk_means() {
         let path = "sample-media/sample-5s.mp4".into();
@@ -566,6 +569,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     #[ignore = "too slow to run regularly"]
     fn test_reader_to_transform_block_3d_dct_to_writer() {
         use crate::asset_reader_writer::asset_writer::*;
@@ -623,6 +627,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_dct2_inverse_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -668,6 +673,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     #[ignore = "too slow to run regularly"]
     fn test_reader_to_chunks_to_writer() {
         use crate::asset_reader_writer::asset_writer::*;
@@ -754,6 +760,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     fn test_reader_to_chunked_dct_inverse_equality() {
         let path = "sample-media/bipbop-1920x1080-5s.mp4".into();
         let mut reader = AssetReader::new(path);
@@ -814,6 +821,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_vendor = "apple")]
     #[cfg(not(debug_assertions))] // too slow on debug
     fn test_count_zero_valued_chunk() {
         use crate::pixel_buffer::*;
