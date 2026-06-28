@@ -18,7 +18,6 @@
 use crate::camera::FrameRequest;
 use crate::pixel_buffer::*;
 
-#[derive(Debug)]
 pub struct NV12PixelBuffer {
     request: FrameRequest,
 }
@@ -69,6 +68,8 @@ impl<'a> PixelBufferAccessGuard<NV12PixelBuffer> for NV12PixelBufferAccessGuard<
             libcamera::framebuffer_allocator::FrameBuffer,
         > = frame_request
             .request
+            .as_ref()
+            .expect("No request")
             .buffer(&frame_request.stream)
             .expect("no frame buffer");
         let planes = frame_buffer.data();

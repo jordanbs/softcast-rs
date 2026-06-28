@@ -23,6 +23,9 @@ use libcamera;
 use crate::pixel_buffer::*;
 
 pub struct Camera {
+    camera: ActiveCameraWrapper,
+    manager: libcamera::camera_manager::CameraManager,
+
     frame_request_rx: Option<std::sync::mpsc::Receiver<NV12PixelBuffer>>,
 }
 
@@ -34,7 +37,18 @@ const RESOLUTION: (u32, u32) = (1280, 720);
 
 impl Camera {
     pub fn new() -> Self {
+        let manager = libcamera::camera_manager::CameraManager::new()
+            .expect("Failed to create camera manager.");
+        let cameras: libcamera::camera_manager::CameraList = manager.cameras();
+        let camera = cameras
+            .get(0)
+            .ok_or("No cameras found.")
+            .expect("Failed to get camera.");
+
+        let camera = camera.acquire().expect("Failed to acquire camera.");
         Self {
+            camera: camera.into(),
+            manager,
             frame_request_rx: None,
         }
     }
@@ -47,20 +61,18 @@ impl Camera {
     }
 
     pub fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let manager = libcamera::camera_manager::CameraManager::new()?;
-        let cameras = manager.cameras();
-        let camera = cameras.iter().next().ok_or("No cameras found.")?;
-
         println!(
             "Using camera: {:?}",
-            camera
+            self.camera
+                .as_ref()
                 .properties()
                 .get::<libcamera::properties::Model>()
                 .unwrap()
         );
 
-        let mut camera = camera.acquire()?;
-        let mut camera_config = camera
+        let mut camera_config = self
+            .camera
+            .as_ref()
             .generate_configuration(&[libcamera::stream::StreamRole::VideoRecording])
             .ok_or("Failed to generate video recording configuration")?;
 
@@ -92,11 +104,11 @@ impl Camera {
             FRAME_DURATION_US,
         ]))?;
 
-        camera.configure(&mut camera_config)?;
+        self.camera.as_mut().configure(&mut camera_config)?;
         let stream_config = camera_config.get(0).ok_or("No camera configuration.")?;
 
         let mut framebuffer_allocator =
-            libcamera::framebuffer_allocator::FrameBufferAllocator::new(&camera);
+            libcamera::framebuffer_allocator::FrameBufferAllocator::new(self.camera.as_ref());
 
         // Allocate frame buffers for the stream
         let stream = stream_config.stream().ok_or("No camera stream.")?;
@@ -111,7 +123,9 @@ impl Camera {
             })
             .enumerate()
             .map(|(idx, mmap_frame_buffer)| {
-                let mut request = camera
+                let mut request = self
+                    .camera
+                    .as_mut()
                     .create_request(Some(idx as u64))
                     .expect("Failed to make request");
                 request
@@ -123,19 +137,24 @@ impl Camera {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let stream_clone = stream.clone();
-        camera.on_request_completed(move |request| {
+        let camera: ActiveCameraWrapper = self.camera.clone();
+        self.camera.as_mut().on_request_completed(move |request| {
             println!("Camera request {:?} completed!", request);
-            let frame_request = FrameRequest::new(request, stream_clone);
+            let frame_request = FrameRequest::new(request, stream_clone, camera.clone());
             let pixel_buffer: NV12PixelBuffer = frame_request.into();
             tx.send(pixel_buffer).expect("Failed to send request");
         });
 
-        camera.start(Some(&controls))?;
+        self.camera.as_mut().start(Some(&controls))?;
 
         // Enqueue all requests to the camera
         for request in frame_requests {
             println!("Request queued for execution: {request:#?}");
-            camera.queue_request(request).map_err(|(_, e)| e).unwrap();
+            self.camera
+                .as_ref()
+                .queue_request(request)
+                .map_err(|(_, e)| e)
+                .unwrap();
         }
 
         self.frame_request_rx = Some(rx);
@@ -144,20 +163,64 @@ impl Camera {
     }
     pub fn pixel_buffer_iter(&mut self) -> impl Iterator<Item = NV12PixelBuffer> {
         let frame_request_rx = self.frame_request_rx.take().expect("No frame_request_rx.");
-        frame_request_rx
-            .into_iter()
-            .inspect(|x| println!("next: {:?}", x))
+        frame_request_rx.into_iter()
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
+struct ActiveCameraWrapper {
+    camera: std::sync::Arc<std::cell::UnsafeCell<libcamera::camera::ActiveCamera<'static>>>,
+}
+impl From<libcamera::camera::ActiveCamera<'static>> for ActiveCameraWrapper {
+    fn from(camera: libcamera::camera::ActiveCamera<'static>) -> Self {
+        Self {
+            camera: std::sync::Arc::new(std::cell::UnsafeCell::new(camera)),
+        }
+    }
+}
+unsafe impl Send for ActiveCameraWrapper {}
+unsafe impl Sync for ActiveCameraWrapper {}
+impl AsRef<libcamera::camera::ActiveCamera<'static>> for ActiveCameraWrapper {
+    fn as_ref(&self) -> &libcamera::camera::ActiveCamera<'static> {
+        unsafe { &*self.camera.get() }
+    }
+}
+impl AsMut<libcamera::camera::ActiveCamera<'static>> for ActiveCameraWrapper {
+    fn as_mut(&mut self) -> &mut libcamera::camera::ActiveCamera<'static> {
+        // camera is thread safe, trust me rust
+        unsafe { &mut *self.camera.get() }
+    }
+}
+
+unsafe impl Send for Camera {}
+unsafe impl Sync for Camera {}
+
 pub struct FrameRequest {
-    pub request: libcamera::request::Request,
+    pub request: Option<libcamera::request::Request>,
     pub stream: libcamera::stream::Stream,
+    camera: ActiveCameraWrapper,
 }
 impl FrameRequest {
-    pub fn new(request: libcamera::request::Request, stream: libcamera::stream::Stream) -> Self {
-        Self { request, stream }
+    fn new(
+        request: libcamera::request::Request,
+        stream: libcamera::stream::Stream,
+        camera: ActiveCameraWrapper,
+    ) -> Self {
+        Self {
+            request: Some(request),
+            stream,
+            camera,
+        }
+    }
+}
+impl Drop for FrameRequest {
+    fn drop(&mut self) {
+        let mut request = self.request.take().expect("No request.");
+        request.reuse(libcamera::request::ReuseFlag::REUSE_BUFFERS);
+        self.camera
+            .as_ref()
+            .queue_request(request)
+            .expect("Buffer failed to requeue.");
     }
 }
 
