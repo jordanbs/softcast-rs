@@ -676,6 +676,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> Iterator for OFDMFrameSynchronizer<I>
             // else discard this OFDM symbol, keep looking
             else {
                 self.symbols_received_since_reset = self.reset_len; // trigger frame reset
+                self.freq_domain_symbols_iter = vec![].into_iter().peekable();
             }
         }
         let q_symbol = self
