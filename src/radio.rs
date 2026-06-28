@@ -463,6 +463,9 @@ impl LimeReceiveDevice {
             ) {
                 return Err("Failed to enable LimeSDR channel.".into());
             }
+            if 0 != limesuite_sys::LMS_SetSampleRate(device, params.sample_rate, 0) {
+                return Err("Failed to set LimeSDR sample rate.".into());
+            }
             if 0 != limesuite_sys::LMS_SetLOFrequency(
                 device,
                 limesuite_sys::LMS_CH_RX,
