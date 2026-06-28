@@ -32,7 +32,7 @@ pub struct Camera {
 const PIXEL_FORMAT_NV12: libcamera::pixel_format::PixelFormat =
     libcamera::pixel_format::PixelFormat::new(drm_fourcc::DrmFourcc::Nv12 as u32, 0);
 const FRAME_RATE: f64 = 30.0;
-const FRAME_DURATION_US: i64 = (FRAME_RATE / 1_000_000.0).round() as i64;
+const FRAME_DURATION_US: i64 = (1_000_000.0 / FRAME_RATE).round() as i64;
 const RESOLUTION: (u32, u32) = (1280, 720);
 
 impl Camera {
@@ -106,6 +106,8 @@ impl Camera {
 
         self.camera.as_mut().configure(&mut camera_config)?;
         let stream_config = camera_config.get(0).ok_or("No camera configuration.")?;
+        let stride_len = stream_config.get_stride();
+        let frame_height = stream_config.get_size().height;
 
         let mut framebuffer_allocator =
             libcamera::framebuffer_allocator::FrameBufferAllocator::new(self.camera.as_ref());
@@ -140,7 +142,13 @@ impl Camera {
         let camera: ActiveCameraWrapper = self.camera.clone();
         self.camera.as_mut().on_request_completed(move |request| {
             println!("Camera request {:?} completed!", request);
-            let frame_request = FrameRequest::new(request, stream_clone, camera.clone());
+            let frame_request = FrameRequest::new(
+                request,
+                stream_clone,
+                camera.clone(),
+                stride_len,
+                frame_height,
+            );
             let pixel_buffer: NV12PixelBuffer = frame_request.into();
             tx.send(pixel_buffer).expect("Failed to send request");
         });
@@ -199,17 +207,23 @@ pub struct FrameRequest {
     pub request: Option<libcamera::request::Request>,
     pub stream: libcamera::stream::Stream,
     camera: ActiveCameraWrapper,
+    pub stride: u32,
+    pub frame_height: u32,
 }
 impl FrameRequest {
     fn new(
         request: libcamera::request::Request,
         stream: libcamera::stream::Stream,
         camera: ActiveCameraWrapper,
+        stride: u32,
+        frame_height: u32,
     ) -> Self {
         Self {
             request: Some(request),
             stream,
             camera,
+            stride,
+            frame_height,
         }
     }
 }

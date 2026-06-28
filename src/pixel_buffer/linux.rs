@@ -29,10 +29,10 @@ impl From<FrameRequest> for NV12PixelBuffer {
 
 impl PixelBuffer for NV12PixelBuffer {
     fn plane_row_len(&self, _pixel_component_type: PixelComponentType) -> usize {
-        todo!();
+        self.request.stride as usize
     }
-    fn plane_height(&self, _pixel_component_type: PixelComponentType) -> usize {
-        todo!();
+    fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize {
+        self.request.frame_height as usize / pixel_component_type.vertical_subsampling()
     }
     fn from_frame_view(
         _y_components: &transform_block_3d::FrameComponentView<YPixelComponentType>,
