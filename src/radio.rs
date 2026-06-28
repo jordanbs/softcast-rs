@@ -208,14 +208,28 @@ impl ReceiveDevice for SoapyReceiveDevice {
     }
 }
 
-pub fn new_lime_device() -> Result<*mut limesuite_sys::lms_device_t, &'static str> {
+pub fn new_lime_device(
+    device_idx: usize,
+) -> Result<*mut limesuite_sys::lms_device_t, &'static str> {
     unsafe {
-        let num_devices = limesuite_sys::LMS_GetDeviceList(std::ptr::null_mut());
+        let mut device_list: [limesuite_sys::lms_info_str_t; 0x10] = std::mem::zeroed();
+        // the lack of a len check in LMS_GetDeviceList is wild.
+        let num_devices = limesuite_sys::LMS_GetDeviceList(device_list.as_mut_ptr());
+        let success = -1 != num_devices;
+        if !success {
+            return Err("LMS_GetDeviceList failed.");
+        }
         if 0 == num_devices {
             return Err("No LimeSDR devices found.");
         }
+        if device_idx as i32 >= num_devices {
+            return Err("Device-idx too high.");
+        }
+        let device_info_str = device_list[device_idx];
+
         let mut device: *mut limesuite_sys::lms_device_t = std::ptr::null_mut();
-        if 0 != limesuite_sys::LMS_Open(&mut device, std::ptr::null_mut(), std::ptr::null_mut()) {
+        if 0 != limesuite_sys::LMS_Open(&mut device, device_info_str.as_ptr(), std::ptr::null_mut())
+        {
             return Err("Failed to open LimeSDR device.");
         }
         if 0 != limesuite_sys::LMS_Init(device) {
@@ -238,7 +252,7 @@ impl LimeTransmitDevice {
         dump_file: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         unsafe {
-            let device = new_lime_device()?;
+            let device = new_lime_device(params.device_idx)?;
 
             if 0 != limesuite_sys::LMS_EnableChannel(
                 device,

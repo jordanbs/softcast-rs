@@ -595,8 +595,12 @@ mod apple {
 
         let mut rx_radio: Box<dyn ReceiveDevice> = match driver {
             Driver::Lime => {
-                let rx_radio =
-                    LimeReceiveDevice::try_new(rx_params, new_lime_device()?, false, false)?;
+                let rx_radio = LimeReceiveDevice::try_new(
+                    rx_params,
+                    new_lime_device(device_idx)?,
+                    false,
+                    false,
+                )?;
                 Box::new(rx_radio)
             }
             Driver::Soapy => {
