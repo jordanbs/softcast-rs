@@ -18,6 +18,7 @@
 use clap::{Parser, Subcommand};
 use parse_int;
 use softcast_rs::config::*;
+use softcast_rs::digital_modem::*;
 use softcast_rs::encoder::*;
 use softcast_rs::radio::*;
 use softcast_rs::sync::AbortToken;
@@ -292,6 +293,9 @@ mod apple {
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
+
+            #[arg(long, default_value_t = false)]
+            digital: bool,
         },
     }
 
@@ -450,40 +454,49 @@ mod apple {
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
         frame_len: usize,
+        digital: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let config = Config {
-            frame_length: frame_len,
-            y: PerPixelTypeConfig {
-                whiten_length: y_whiten_len,
-            },
-            cbcr: PerPixelTypeConfig {
-                whiten_length: cbcr_whiten_len,
-            },
-        };
-        Config::set(config);
+        if digital {
+            let infile = std::fs::File::open(infile)?;
+            let reader = std::io::BufReader::new(infile);
+            let encoder: DigitalEncoder<_> = reader.into();
+            let mut decoder: DigitalDecoder<_> = encoder.into();
+            let mut outfile = std::fs::File::create_new(outfile)?;
+            std::io::copy(&mut decoder, &mut outfile)?;
+        } else {
+            let config = Config {
+                frame_length: frame_len,
+                y: PerPixelTypeConfig {
+                    whiten_length: y_whiten_len,
+                },
+                cbcr: PerPixelTypeConfig {
+                    whiten_length: cbcr_whiten_len,
+                },
+            };
+            Config::set(config);
 
-        let encoder = FileReaderEncoder::with_file(
-            infile,
-            gop_len,
-            compression_ratio,
-            noise,
-            y_chunk_dimensions,
-            c_chunk_dimensions,
-            c_chunk_dimensions,
-        )?;
-        let asset_resolution = encoder.asset_resolution();
-        let frame_rate = encoder.frame_rate();
-        let decoder = FileWriterDecoder::try_new(
-            outfile,
-            asset_resolution,
-            frame_rate,
-            gop_len,
-            encoder.y_chunk_dimensions,
-            encoder.cb_chunk_dimensions,
-            encoder.cr_chunk_dimensions,
-        )?;
-        run_simulation(encoder, decoder)?;
-
+            let encoder = FileReaderEncoder::with_file(
+                infile,
+                gop_len,
+                compression_ratio,
+                noise,
+                y_chunk_dimensions,
+                c_chunk_dimensions,
+                c_chunk_dimensions,
+            )?;
+            let asset_resolution = encoder.asset_resolution();
+            let frame_rate = encoder.frame_rate();
+            let decoder = FileWriterDecoder::try_new(
+                outfile,
+                asset_resolution,
+                frame_rate,
+                gop_len,
+                encoder.y_chunk_dimensions,
+                encoder.cb_chunk_dimensions,
+                encoder.cr_chunk_dimensions,
+            )?;
+            run_simulation(encoder, decoder)?;
+        }
         Ok(())
     }
 
@@ -790,6 +803,7 @@ mod apple {
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
+                digital,
             } => simulate(
                 infile,
                 outfile,
@@ -801,6 +815,7 @@ mod apple {
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
+                digital,
             ),
         }
         .map_err(|e| e.to_string())?;

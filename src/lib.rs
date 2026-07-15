@@ -21,6 +21,7 @@ pub mod channel_coding;
 pub mod compressor;
 pub mod config;
 pub mod decoder;
+pub mod digital_modem; // TODO: remove
 pub mod encoder;
 pub mod framing;
 pub mod metadata_coding;
