@@ -20,6 +20,7 @@ use parse_int;
 use softcast_rs::config::*;
 use softcast_rs::digital_modem::*;
 use softcast_rs::encoder::*;
+use softcast_rs::noise::*;
 use softcast_rs::radio::*;
 use softcast_rs::sync::AbortToken;
 
@@ -460,7 +461,8 @@ mod apple {
             let infile = std::fs::File::open(infile)?;
             let reader = std::io::BufReader::new(infile);
             let encoder: DigitalEncoder<_> = reader.into();
-            let mut decoder: DigitalDecoder<_> = encoder.into();
+            let noisy_encoder = AdditiveWhiteGaussianNoise::new(encoder, noise);
+            let mut decoder: DigitalDecoder<_> = noisy_encoder.into();
             let mut outfile = std::fs::File::create_new(outfile)?;
             std::io::copy(&mut decoder, &mut outfile)?;
         } else {

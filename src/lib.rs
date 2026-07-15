@@ -26,6 +26,7 @@ pub mod encoder;
 pub mod framing;
 pub mod metadata_coding;
 pub mod modulation;
+pub mod noise;
 pub mod pixel_buffer;
 pub mod radio;
 #[path = "../vendor/rtlsdr_iq/lib.rs"]

@@ -25,14 +25,13 @@ use crate::metadata_coding::packetizer::*;
 use crate::metadata_coding::*;
 use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
+use crate::noise::*;
 use crate::pixel_buffer::transform_block_3d::*;
 use crate::pixel_buffer::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::*;
 use num_complex::Complex32;
-use rand::SeedableRng;
-use rand_xoshiro;
 
 #[cfg(target_vendor = "apple")]
 pub type FileReaderEncoder = Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>;
@@ -160,19 +159,20 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 self.cr_chunk_dimensions,
             );
 
-            let mut encoder = y_framer.chain(cb_framer).chain(cr_framer);
+            let encoder = y_framer
+                .chain(cb_framer)
+                .chain(cr_framer)
+                .map(|ofdmframe| ofdmframe.into_box_complex32_slice());
 
-            while let Some(frame) = encoder.next() {
-                let mut frame = frame.into_box_complex32_slice();
-                // TODO: Factor this out
-                if 0.0 < self.noise_power {
-                    let mut rng = rand_xoshiro::Xoshiro128PlusPlus::seed_from_u64(0); // deterministic
-                    let noise_stddev = (self.noise_power / 2.0).sqrt();
-                    frame
-                        .iter_mut()
-                        .for_each(|iq| iq.add_random_noise(noise_stddev, &mut rng));
-                }
+            let mut dyn_encoder: Box<dyn Iterator<Item = Box<[Complex32]>>> =
+                if self.noise_power == 0.0 {
+                    Box::new(encoder)
+                } else {
+                    let noise_encoder = AdditiveWhiteGaussianNoise::new(encoder, self.noise_power);
+                    Box::new(noise_encoder)
+                };
 
+            while let Some(frame) = dyn_encoder.next() {
                 ofdm_symbol_writer.consume(frame, true)?;
 
                 if abort_token.is_aborted() {
@@ -217,20 +217,6 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     // ofdm
     let ofdm_framer: OFDMFrameGenerator<_> = whitener.into();
     ofdm_framer
-}
-
-trait AddRandomNoise {
-    fn add_random_noise<R: rand::Rng>(&mut self, noise_stddev: f32, rng: &mut R);
-}
-impl AddRandomNoise for Complex32 {
-    fn add_random_noise<R: rand::Rng>(&mut self, noise_stddev: f32, rng: &mut R) {
-        let u1: f32 = rng.random_range(f32::EPSILON..1.0);
-        let u2: f32 = rng.random_range(0.0..1.0);
-        let r = (-2.0 * u1.ln()).sqrt() * noise_stddev;
-        let theta = 2.0 * std::f32::consts::PI * u2;
-        self.re += r * theta.cos();
-        self.im += r * theta.sin();
-    }
 }
 
 fn max_factor_at_or_below(limit: usize, value: usize) -> usize {
