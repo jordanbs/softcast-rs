@@ -297,6 +297,14 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                                     .unwrap_or_default(),
                                 _ => QuadratureSymbol::default(),
                             })
+                            .map(|iq| {
+                                // hard limit analog values at a power of 1.0
+                                let norm_sqr = iq.value.norm_sqr();
+                                if 1.0 < norm_sqr {
+                                    return iq.value / norm_sqr.sqrt();
+                                }
+                                iq.value
+                            })
                             .collect();
                         let time_domain = &mut symbol.time_domain_symbols;
                         let status = unsafe {
