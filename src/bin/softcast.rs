@@ -190,6 +190,9 @@ mod apple {
 
             #[arg(long, value_enum, default_value_t = Driver::Lime)]
             driver: Driver,
+
+            #[arg(long, default_value_t = false)]
+            dump: bool,
         },
         Loopback {
             #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -260,6 +263,9 @@ mod apple {
 
             #[arg(long, default_value_t = false)]
             skip_cal: bool,
+
+            #[arg(long, default_value_t = false)]
+            rx_dump: bool,
         },
         Simulate {
             #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -354,6 +360,7 @@ mod apple {
         rx_gain: f64,
         driver: Driver,
         skip_cal: bool,
+        rx_dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config = Config {
             frame_length: frame_len,
@@ -385,12 +392,12 @@ mod apple {
                 Driver::Lime => {
                     let tx_radio = LimeTransmitDevice::try_new(tx_params, skip_cal, false)?;
                     let rx_radio =
-                        LimeReceiveDevice::try_new(rx_params, tx_radio.device, skip_cal, false)?;
+                        LimeReceiveDevice::try_new(rx_params, tx_radio.device, skip_cal, rx_dump)?;
                     (Box::new(tx_radio), Box::new(rx_radio))
                 }
                 Driver::Soapy => {
                     let tx_radio = SoapyTransmitDevice::try_new(tx_params, false)?;
-                    let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, false)?;
+                    let rx_radio = SoapyReceiveDevice::try_new(rx_params, &tx_radio.sdr, rx_dump)?;
                     (Box::new(tx_radio), Box::new(rx_radio))
                 }
                 _ => return Err("Driver does not support transmit.".into()),
@@ -592,6 +599,7 @@ mod apple {
         channel: usize,
         gain: f64,
         driver: Driver,
+        dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config = Config {
             frame_length: frame_len,
@@ -619,17 +627,17 @@ mod apple {
                     rx_params,
                     new_lime_device(device_idx)?,
                     false,
-                    false,
+                    dump,
                 )?;
                 Box::new(rx_radio)
             }
             Driver::Soapy => {
                 let device = &new_soapy_device(&rx_params)?;
-                let rx_radio = SoapyReceiveDevice::try_new(rx_params, device, true)?;
+                let rx_radio = SoapyReceiveDevice::try_new(rx_params, device, dump)?;
                 Box::new(rx_radio)
             }
             Driver::RtlSdr => {
-                let device = RtlSdrReceiveDevice::try_new(rx_params, false)?;
+                let device = RtlSdrReceiveDevice::try_new(rx_params, dump)?;
                 Box::new(device)
             }
         };
@@ -733,6 +741,7 @@ mod apple {
                 channel,
                 gain,
                 driver,
+                dump,
             } => receive(
                 outfile,
                 asset_resolution,
@@ -751,6 +760,7 @@ mod apple {
                 channel,
                 gain,
                 driver,
+                dump,
             ),
             Commands::Loopback {
                 infile,
@@ -775,6 +785,7 @@ mod apple {
                 rx_gain,
                 driver,
                 skip_cal,
+                rx_dump,
             } => loopback(
                 infile,
                 outfile,
@@ -798,6 +809,7 @@ mod apple {
                 rx_gain,
                 driver,
                 skip_cal,
+                rx_dump,
             ),
             Commands::Simulate {
                 infile,
