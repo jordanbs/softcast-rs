@@ -211,6 +211,11 @@ fn into_transform_block_3d_dct<
     }
     if chunks_per_gop != chunk_metadatas.len() {
         // EOF
+        let count_chunk_metadatas = chunk_metadatas.len();
+        let pixel_type = PixelType::TYPE;
+        eprintln!(
+            "Number of chunk metadatas for {pixel_type} {count_chunk_metadatas} does not match chunks per GOP {chunks_per_gop}.",
+        );
         return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
     }
 
