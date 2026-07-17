@@ -331,7 +331,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
         } else {
             frame.normalize();
             self.update_statistics(&frame);
-            // println!("PAPR:AVG {:.0}:{:.5}", self.papr(), self.average_power);
+            // println!("PAPR:AVG {:.1}:{:.5}", self.papr(), self.average_power);
             self.reset_statistics();
             Some(frame)
         }
@@ -499,12 +499,17 @@ impl CallbackContext {
 
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     pub fn reset(&mut self) {
-        println!(
-            "SNR: {:.2} dB\tRSSI: {:.2} dB\tReading: {:.0} kS/s",
-            self.callback_context.signal_to_noise_db(),
-            unsafe { liquid_sys::ofdmframesync_get_rssi(self.ofdm_framesync) },
-            (self.stats.samples_read_per_second() / 1000.0).round()
-        );
+        // print frame stats
+        {
+            let snr_db = self.callback_context.signal_to_noise_db();
+            let rssi = unsafe { liquid_sys::ofdmframesync_get_rssi(self.ofdm_framesync) };
+            let samples_read_per_second = (self.stats.samples_read_per_second() / 1000.0).round();
+            let cfo = unsafe { liquid_sys::ofdmframesync_get_cfo(self.ofdm_framesync) }
+                / std::f32::consts::PI;
+            println!(
+                "SNR: {snr_db:.2} dB\tRSSI: {rssi:.2} dB\tReading: {samples_read_per_second:.0} kS/s\tCFO: {cfo:6.3}π"
+            );
+        }
 
         let status = unsafe { liquid_sys::ofdmframesync_reset(self.ofdm_framesync) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
