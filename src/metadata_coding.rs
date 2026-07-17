@@ -279,10 +279,10 @@ pub mod packetizer {
     }
 
     const DECODED_MESSAGE_LENGTH: usize = 2056; // liquid uses {255, 127}-rs
-    pub const ENCODED_MESSAGE_LENGTH: usize = 25511;
+    pub const ENCODED_MESSAGE_LENGTH: usize = 4250;
     const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
     const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8_50;
-    const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_CONV_V615;
+    const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
 
     pub struct Packetizer {
         packetizer: *mut liquid_sys::packetizer_s,
