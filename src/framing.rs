@@ -264,12 +264,8 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
                     assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
                 },
                 OFDMFrameGeneratorState::Data => {
-                    if self.quadrature_symbol_iter.peek().is_none() || self.is_resetting {
-                        self.state = if self.is_resetting {
-                            OFDMFrameGeneratorState::S0a
-                        } else {
-                            OFDMFrameGeneratorState::Complete
-                        };
+                    if self.is_resetting {
+                        self.state = OFDMFrameGeneratorState::S0a;
                         // write tail
                         let status = unsafe {
                             liquid_sys::ofdmframegen_writetail(
