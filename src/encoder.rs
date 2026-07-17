@@ -133,6 +133,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         ofdm_symbol_writer: &mut dyn Complex32Consumer,
         abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let count_symbols_arc = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
         for macro_block in self.macro_block_3d_iter.by_ref() {
             // encoder
             let MacroBlock3D {
@@ -159,10 +160,15 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 self.cr_chunk_dimensions,
             );
 
+            let count_symbols_arc_clone = count_symbols_arc.clone();
             let encoder = y_framer
                 .chain(cb_framer)
                 .chain(cr_framer)
-                .map(|ofdmframe| ofdmframe.into_box_complex32_slice());
+                .map(|ofdmframe| ofdmframe.into_box_complex32_slice())
+                .inspect(|iqs| {
+                    count_symbols_arc_clone
+                        .fetch_add(iqs.len() as i64, std::sync::atomic::Ordering::Relaxed);
+                });
 
             let mut dyn_encoder: Box<dyn Iterator<Item = Box<[Complex32]>>> =
                 if self.noise_power == 0.0 {
@@ -174,11 +180,14 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
 
             while let Some(frame) = dyn_encoder.next() {
                 ofdm_symbol_writer.consume(frame, true)?;
-
                 if abort_token.is_aborted() {
                     return Err("Encoder aborted.".into());
                 }
             }
+            eprintln!(
+                "Cumulative Symbols Transmitted: {}",
+                count_symbols_arc.load(std::sync::atomic::Ordering::Relaxed)
+            );
         }
         Ok(())
     }

@@ -461,10 +461,15 @@ mod apple {
             let infile = std::fs::File::open(infile)?;
             let reader = std::io::BufReader::new(infile);
             let encoder: DigitalEncoder<_> = reader.into();
-            let noisy_encoder = AdditiveWhiteGaussianNoise::new(encoder, noise);
+            let mut count_symbols = 0u64;
+            let noisy_encoder = AdditiveWhiteGaussianNoise::new(encoder, noise).inspect(|iqs| {
+                count_symbols += iqs.len() as u64;
+            });
             let mut decoder: DigitalDecoder<_> = noisy_encoder.into();
             let mut outfile = std::fs::File::create_new(outfile)?;
             std::io::copy(&mut decoder, &mut outfile)?;
+            drop(decoder);
+            eprintln!("Symbols Transmitted: {count_symbols}");
         } else {
             let config = Config {
                 frame_length: frame_len,
