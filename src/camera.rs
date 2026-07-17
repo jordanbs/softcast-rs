@@ -31,7 +31,7 @@ pub struct Camera {
 
 const PIXEL_FORMAT_NV12: libcamera::pixel_format::PixelFormat =
     libcamera::pixel_format::PixelFormat::new(drm_fourcc::DrmFourcc::Nv12 as u32, 0);
-const FRAME_RATE: f64 = 30.0;
+const FRAME_RATE: f64 = 24.0;
 const FRAME_DURATION_US: i64 = (1_000_000.0 / FRAME_RATE).round() as i64;
 const RESOLUTION: (u32, u32) = (1280, 720);
 
