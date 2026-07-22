@@ -91,11 +91,14 @@ mod apple {
             #[arg(value_parser = validate_file_exists)]
             infile: std::path::PathBuf,
 
-            #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
-            compression_ratio: f64,
-
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
+
+            #[arg(long="y_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            y_compression_ratio: f64,
+
+            #[arg(long="c_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            c_compression_ratio: f64,
 
             // defaults set for 1080p
             #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
@@ -205,14 +208,17 @@ mod apple {
             #[arg(value_parser = validate_file_does_not_exist)]
             outfile: std::path::PathBuf,
 
-            #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
-            compression_ratio: f64,
-
             #[arg(long, default_value_t = DEFAULT_NOISE)]
             noise: f32,
 
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
+
+            #[arg(long="y_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            y_compression_ratio: f64,
+
+            #[arg(long="c_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            c_compression_ratio: f64,
 
             // defaults set for 1080p
             #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
@@ -278,14 +284,17 @@ mod apple {
             #[arg(value_parser = validate_file_does_not_exist)]
             outfile: std::path::PathBuf,
 
-            #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
-            compression_ratio: f64,
-
             #[arg(long, default_value_t = DEFAULT_NOISE)]
             noise: f32,
 
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
+
+            #[arg(long="y_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            y_compression_ratio: f64,
+
+            #[arg(long="c_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            c_compression_ratio: f64,
 
             // defaults set for 1080p
             #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
@@ -343,8 +352,9 @@ mod apple {
         infile: std::path::PathBuf,
         outfile: std::path::PathBuf,
         gop_len: usize,
-        compression_ratio: f64,
         noise: f32,
+        y_compression_ratio: f64,
+        c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
         c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
@@ -411,11 +421,19 @@ mod apple {
         let mut encoder = FileReaderEncoder::with_file(
             infile,
             gop_len,
-            compression_ratio,
             noise,
-            y_chunk_dimensions,
-            c_chunk_dimensions,
-            c_chunk_dimensions,
+            PerPixelConfiguration {
+                compression_ratio: y_compression_ratio,
+                chunk_dimensions: y_chunk_dimensions,
+            },
+            PerPixelConfiguration {
+                compression_ratio: c_compression_ratio,
+                chunk_dimensions: c_chunk_dimensions,
+            },
+            PerPixelConfiguration {
+                compression_ratio: c_compression_ratio,
+                chunk_dimensions: c_chunk_dimensions,
+            },
             None,
         )?;
         let asset_resolution = encoder.asset_resolution();
@@ -425,9 +443,9 @@ mod apple {
             asset_resolution,
             frame_rate,
             gop_len,
-            encoder.y_chunk_dimensions,
-            encoder.cb_chunk_dimensions,
-            encoder.cr_chunk_dimensions,
+            encoder.y_chunk_dimensions(),
+            encoder.cb_chunk_dimensions(),
+            encoder.cr_chunk_dimensions(),
             None,
         )?;
 
@@ -459,8 +477,9 @@ mod apple {
         inpath: std::path::PathBuf,
         outpath: std::path::PathBuf,
         gop_len: usize,
-        compression_ratio: f64,
         noise: f32,
+        y_compression_ratio: f64,
+        c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
         c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
@@ -530,11 +549,19 @@ mod apple {
             let encoder = FileReaderEncoder::with_file(
                 inpath,
                 gop_len,
-                compression_ratio,
                 noise,
-                y_chunk_dimensions,
-                c_chunk_dimensions,
-                c_chunk_dimensions,
+                PerPixelConfiguration {
+                    compression_ratio: y_compression_ratio,
+                    chunk_dimensions: y_chunk_dimensions,
+                },
+                PerPixelConfiguration {
+                    compression_ratio: c_compression_ratio,
+                    chunk_dimensions: c_chunk_dimensions,
+                },
+                PerPixelConfiguration {
+                    compression_ratio: c_compression_ratio,
+                    chunk_dimensions: c_chunk_dimensions,
+                },
                 Some(macro_block_tap),
             )?;
             let asset_resolution = encoder.asset_resolution();
@@ -544,9 +571,9 @@ mod apple {
                 asset_resolution,
                 frame_rate,
                 gop_len,
-                encoder.y_chunk_dimensions,
-                encoder.cb_chunk_dimensions,
-                encoder.cr_chunk_dimensions,
+                encoder.y_chunk_dimensions(),
+                encoder.cb_chunk_dimensions(),
+                encoder.cr_chunk_dimensions(),
                 Some(macro_block_receiver),
             )?;
             run_simulation(encoder, decoder)?;
@@ -557,7 +584,8 @@ mod apple {
     fn transmit(
         infile: std::path::PathBuf,
         gop_len: usize,
-        compression_ratio: f64,
+        y_compression_ratio: f64,
+        c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
         c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
@@ -607,11 +635,19 @@ mod apple {
         let mut encoder = FileReaderEncoder::with_file(
             infile,
             gop_len,
-            compression_ratio,
             0.0,
-            y_chunk_dimensions,
-            c_chunk_dimensions,
-            c_chunk_dimensions,
+            PerPixelConfiguration {
+                compression_ratio: y_compression_ratio,
+                chunk_dimensions: y_chunk_dimensions,
+            },
+            PerPixelConfiguration {
+                compression_ratio: c_compression_ratio,
+                chunk_dimensions: c_chunk_dimensions,
+            },
+            PerPixelConfiguration {
+                compression_ratio: c_compression_ratio,
+                chunk_dimensions: c_chunk_dimensions,
+            },
             None,
         )?;
 
@@ -730,8 +766,9 @@ mod apple {
         match args.command {
             Commands::Tx {
                 infile,
-                compression_ratio,
                 gop_len,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,
@@ -749,7 +786,8 @@ mod apple {
             } => transmit(
                 infile,
                 gop_len,
-                compression_ratio,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,
@@ -807,9 +845,10 @@ mod apple {
             Commands::Loopback {
                 infile,
                 outfile,
-                compression_ratio,
                 noise,
                 gop_len,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,
@@ -832,8 +871,9 @@ mod apple {
                 infile,
                 outfile,
                 gop_len,
-                compression_ratio,
                 noise,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,
@@ -857,8 +897,9 @@ mod apple {
                 infile,
                 outfile,
                 gop_len,
-                compression_ratio,
                 noise,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,
@@ -869,8 +910,9 @@ mod apple {
                 infile,
                 outfile,
                 gop_len,
-                compression_ratio,
                 noise,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,

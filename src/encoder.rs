@@ -36,13 +36,17 @@ use num_complex::Complex32;
 #[cfg(target_vendor = "apple")]
 pub type FileReaderEncoder = Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>;
 
+pub struct PerPixelConfiguration {
+    pub compression_ratio: f64,
+    pub chunk_dimensions: (usize, usize, usize),
+}
+
 pub struct Encoder<I: Iterator<Item = PB>, PB: PixelBuffer> {
     macro_block_3d_iter: MacroBlock3DIterator<I, PB>,
-    compression_ratio: f64,
     noise_power: f32,
-    pub y_chunk_dimensions: (usize, usize, usize),
-    pub cb_chunk_dimensions: (usize, usize, usize),
-    pub cr_chunk_dimensions: (usize, usize, usize),
+    y_config: PerPixelConfiguration,
+    cb_config: PerPixelConfiguration,
+    cr_config: PerPixelConfiguration,
     asset_resolution: (usize, usize),
     frame_rate: f64,
     macro_block_tap: Option<MacroBlockTap>,
@@ -53,11 +57,10 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
     pub fn with_file(
         in_path: std::path::PathBuf,
         gop_len: usize,
-        compression_ratio: f64,
         noise_power: f32,
-        y_chunk_dimensions: (usize, usize, usize),
-        cb_chunk_dimensions: (usize, usize, usize),
-        cr_chunk_dimensions: (usize, usize, usize),
+        y_config: PerPixelConfiguration,
+        cb_config: PerPixelConfiguration,
+        cr_config: PerPixelConfiguration,
         macro_block_tap: Option<MacroBlockTap>,
     ) -> Result<Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>, Box<dyn std::error::Error>>
     {
@@ -78,11 +81,10 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         Ok(Encoder::new(
             pb_iter,
             gop_len,
-            compression_ratio,
             noise_power,
-            y_chunk_dimensions,
-            cb_chunk_dimensions,
-            cr_chunk_dimensions,
+            y_config,
+            cb_config,
+            cr_config,
             asset_resolution,
             frame_rate,
             macro_block_tap,
@@ -92,35 +94,36 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
     pub fn new(
         pb_iter: I,
         gop_len: usize,
-        compression_ratio: f64,
         noise_power: f32,
-        y_chunk_dimensions: (usize, usize, usize),
-        cb_chunk_dimensions: (usize, usize, usize),
-        cr_chunk_dimensions: (usize, usize, usize),
+        mut y_config: PerPixelConfiguration,
+        mut cb_config: PerPixelConfiguration,
+        mut cr_config: PerPixelConfiguration,
         asset_resolution: (usize, usize),
         frame_rate: f64,
         macro_block_tap: Option<MacroBlockTap>,
     ) -> Self {
-        let y_chunk_dimensions =
-            chunk_dimensions_sizer(y_chunk_dimensions, asset_resolution, PixelComponentType::Y);
-        let cb_chunk_dimensions = chunk_dimensions_sizer(
-            cb_chunk_dimensions,
+        y_config.chunk_dimensions = chunk_dimensions_sizer(
+            y_config.chunk_dimensions,
+            asset_resolution,
+            PixelComponentType::Y,
+        );
+        cb_config.chunk_dimensions = chunk_dimensions_sizer(
+            cb_config.chunk_dimensions,
             asset_resolution,
             PixelComponentType::Cb,
         );
-        let cr_chunk_dimensions = chunk_dimensions_sizer(
-            cr_chunk_dimensions,
+        cr_config.chunk_dimensions = chunk_dimensions_sizer(
+            cr_config.chunk_dimensions,
             asset_resolution,
             PixelComponentType::Cr,
         );
 
         Self {
             macro_block_3d_iter: MacroBlock3DIterator::new(pb_iter, gop_len),
-            compression_ratio,
             noise_power,
-            y_chunk_dimensions,
-            cb_chunk_dimensions,
-            cr_chunk_dimensions,
+            y_config,
+            cb_config,
+            cr_config,
             asset_resolution,
             frame_rate,
             macro_block_tap,
@@ -132,6 +135,15 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
     }
     pub fn frame_rate(&self) -> f64 {
         self.frame_rate
+    }
+    pub fn y_chunk_dimensions(&self) -> (usize, usize, usize) {
+        self.y_config.chunk_dimensions
+    }
+    pub fn cb_chunk_dimensions(&self) -> (usize, usize, usize) {
+        self.cb_config.chunk_dimensions
+    }
+    pub fn cr_chunk_dimensions(&self) -> (usize, usize, usize) {
+        self.cr_config.chunk_dimensions
     }
     pub fn run(
         &mut self,
@@ -154,20 +166,24 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             } = macro_block;
 
             let mut y_dct = y_components.into();
-            let y_framer = ofdm_framer(&mut y_dct, self.compression_ratio, self.y_chunk_dimensions);
+            let y_framer = ofdm_framer(
+                &mut y_dct,
+                self.y_config.compression_ratio,
+                self.y_config.chunk_dimensions,
+            );
 
             let mut cb_dct = cb_components.into();
             let cb_framer = ofdm_framer(
                 &mut cb_dct,
-                self.compression_ratio,
-                self.cb_chunk_dimensions,
+                self.cb_config.compression_ratio,
+                self.cb_config.chunk_dimensions,
             );
 
             let mut cr_dct = cr_components.into();
             let cr_framer = ofdm_framer(
                 &mut cr_dct,
-                self.compression_ratio,
-                self.cr_chunk_dimensions,
+                self.cr_config.compression_ratio,
+                self.cr_config.chunk_dimensions,
             );
 
             let count_symbols_arc_clone = count_symbols_arc.clone();
