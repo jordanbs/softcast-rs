@@ -21,3 +21,12 @@ pub enum ViewOrOwnedArray3<'a> {
     Owned(ndarray::Array3<f32>),
     OwnedArc(ndarray::ArcArray<f32, ndarray::Ix3>),
 }
+
+pub trait PSNR {
+    fn psnr(&self, peak: Self) -> Self;
+}
+impl PSNR for f64 {
+    fn psnr(&self, peak: Self) -> Self {
+        10.0 * (peak.powi(2) / self).log10()
+    }
+}

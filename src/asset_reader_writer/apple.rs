@@ -79,12 +79,18 @@ pub mod asset_reader {
 
             unsafe {
                 // copyNextSampleBuffer returns the next CMSampleBufferRef or nil at EOF.
-                if let Some(sample_buffer) = av_output.copyNextSampleBuffer() {
-                    let cv_pixel_buffer = sample_buffer
-                        .image_buffer()
-                        .ok_or("Failed to get CVPixelBuffer.")?;
-
-                    let pixel_buffer = CVPixelBufferWrapper::new(cv_pixel_buffer);
+                let maybe_some_pixel_buffer =
+                    if let Some(sample_buffer) = av_output.copyNextSampleBuffer() {
+                        if let Some(cv_pixel_buffer) = sample_buffer.image_buffer() {
+                            let pixel_buffer = CVPixelBufferWrapper::new(cv_pixel_buffer);
+                            Some(pixel_buffer)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                if let Some(pixel_buffer) = maybe_some_pixel_buffer {
                     return Ok(Some(pixel_buffer));
                 }
                 // No sample buffer, see if we've reached the end of file.

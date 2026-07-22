@@ -45,6 +45,7 @@ pub struct Encoder<I: Iterator<Item = PB>, PB: PixelBuffer> {
     pub cr_chunk_dimensions: (usize, usize, usize),
     asset_resolution: (usize, usize),
     frame_rate: f64,
+    macro_block_tap: Option<MacroBlockTap>,
 }
 
 impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
@@ -57,6 +58,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         y_chunk_dimensions: (usize, usize, usize),
         cb_chunk_dimensions: (usize, usize, usize),
         cr_chunk_dimensions: (usize, usize, usize),
+        macro_block_tap: Option<MacroBlockTap>,
     ) -> Result<Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>, Box<dyn std::error::Error>>
     {
         let mut reader = AssetReader::new(in_path);
@@ -83,6 +85,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             cr_chunk_dimensions,
             asset_resolution,
             frame_rate,
+            macro_block_tap,
         ))
     }
 
@@ -96,6 +99,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         cr_chunk_dimensions: (usize, usize, usize),
         asset_resolution: (usize, usize),
         frame_rate: f64,
+        macro_block_tap: Option<MacroBlockTap>,
     ) -> Self {
         let y_chunk_dimensions =
             chunk_dimensions_sizer(y_chunk_dimensions, asset_resolution, PixelComponentType::Y);
@@ -119,6 +123,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             cr_chunk_dimensions,
             asset_resolution,
             frame_rate,
+            macro_block_tap,
         }
     }
 
@@ -135,6 +140,11 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let count_symbols_arc = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
         for macro_block in self.macro_block_3d_iter.by_ref() {
+            if let Some(tap) = &mut self.macro_block_tap {
+                let clone = macro_block.clone();
+                tap.writer.send(clone)?;
+            }
+
             // encoder
             let MacroBlock3D {
                 y_components,
@@ -256,4 +266,23 @@ fn chunk_dimensions_sizer(
 
     // rval is (len, height, width) in conformance with ndarray
     (chunk_len, chunk_height, chunk_width)
+}
+
+pub struct MacroBlockTap {
+    writer: std::sync::mpsc::SyncSender<MacroBlock3D>,
+    reader: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
+}
+impl Default for MacroBlockTap {
+    fn default() -> Self {
+        let (writer, reader) = std::sync::mpsc::sync_channel(1); // limit to 1 macro block at a time
+        Self {
+            writer,
+            reader: Some(reader),
+        }
+    }
+}
+impl MacroBlockTap {
+    pub fn take_receiver(&mut self) -> std::sync::mpsc::Receiver<MacroBlock3D> {
+        self.reader.take().expect("reader already taken")
+    }
 }

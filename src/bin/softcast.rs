@@ -21,8 +21,10 @@ use softcast_rs::config::*;
 use softcast_rs::digital_modem::*;
 use softcast_rs::encoder::*;
 use softcast_rs::noise::*;
+use softcast_rs::pixel_buffer::transform_block_3d::*;
 use softcast_rs::radio::*;
 use softcast_rs::sync::AbortToken;
+use softcast_rs::utils::*;
 
 const DEFAULT_COMPRESSION_RATIO: f64 = 0.1875;
 const DEFAULT_GOP_LEN: usize = 22;
@@ -414,6 +416,7 @@ mod apple {
             y_chunk_dimensions,
             c_chunk_dimensions,
             c_chunk_dimensions,
+            None,
         )?;
         let asset_resolution = encoder.asset_resolution();
         let frame_rate = encoder.frame_rate();
@@ -425,6 +428,7 @@ mod apple {
             encoder.y_chunk_dimensions,
             encoder.cb_chunk_dimensions,
             encoder.cr_chunk_dimensions,
+            None,
         )?;
 
         rx_radio.activate()?;
@@ -452,8 +456,8 @@ mod apple {
     }
 
     fn simulate(
-        infile: std::path::PathBuf,
-        outfile: std::path::PathBuf,
+        inpath: std::path::PathBuf,
+        outpath: std::path::PathBuf,
         gop_len: usize,
         compression_ratio: f64,
         noise: f32,
@@ -465,7 +469,7 @@ mod apple {
         digital: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if digital {
-            let infile = std::fs::File::open(infile)?;
+            let infile = std::fs::File::open(&inpath)?;
             let reader = std::io::BufReader::new(infile);
             let encoder: DigitalEncoder<_> = reader.into();
             let mut count_symbols = 0u64;
@@ -473,10 +477,42 @@ mod apple {
                 count_symbols += iqs.len() as u64;
             });
             let mut decoder: DigitalDecoder<_> = noisy_encoder.into();
-            let mut outfile = std::fs::File::create_new(outfile)?;
+            let mut outfile = std::fs::File::create_new(&outpath)?;
             std::io::copy(&mut decoder, &mut outfile)?;
             drop(decoder);
             eprintln!("Symbols Transmitted: {count_symbols}");
+
+            // compute PSNR
+            use ndarray_stats::*;
+            let mut orig_reader =
+                softcast_rs::asset_reader_writer::asset_reader::AssetReader::new(inpath);
+            let orig_mb_iter = orig_reader
+                .pixel_buffer_iter()
+                .macro_block_3d_iterator(gop_len);
+            let mut new_reader =
+                softcast_rs::asset_reader_writer::asset_reader::AssetReader::new(outpath);
+            let mut new_mb_iter = new_reader
+                .pixel_buffer_iter()
+                .macro_block_3d_iterator(gop_len);
+            for orig_mb in orig_mb_iter {
+                let new_mb = new_mb_iter.next().unwrap_or(MacroBlock3D::new(gop_len));
+                let y_err = orig_mb
+                    .y_components
+                    .values()
+                    .mean_sq_err(new_mb.y_components.values())?
+                    .psnr(u8::MAX as f64);
+                let cb_err = orig_mb
+                    .cb_components
+                    .values()
+                    .mean_sq_err(new_mb.cb_components.values())?
+                    .psnr(u8::MAX as f64);
+                let cr_err = orig_mb
+                    .cr_components
+                    .values()
+                    .mean_sq_err(new_mb.cr_components.values())?
+                    .psnr(u8::MAX as f64);
+                println!("PSNR: {y_err:.2} Y dB\t{cb_err:.2} Cb dB\t{cr_err:.2} Cr dB");
+            }
         } else {
             let config = Config {
                 frame_length: frame_len,
@@ -489,25 +525,29 @@ mod apple {
             };
             Config::set(config);
 
+            let mut macro_block_tap = MacroBlockTap::default();
+            let macro_block_receiver = macro_block_tap.take_receiver();
             let encoder = FileReaderEncoder::with_file(
-                infile,
+                inpath,
                 gop_len,
                 compression_ratio,
                 noise,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 c_chunk_dimensions,
+                Some(macro_block_tap),
             )?;
             let asset_resolution = encoder.asset_resolution();
             let frame_rate = encoder.frame_rate();
             let decoder = FileWriterDecoder::try_new(
-                outfile,
+                outpath,
                 asset_resolution,
                 frame_rate,
                 gop_len,
                 encoder.y_chunk_dimensions,
                 encoder.cb_chunk_dimensions,
                 encoder.cr_chunk_dimensions,
+                Some(macro_block_receiver),
             )?;
             run_simulation(encoder, decoder)?;
         }
@@ -572,6 +612,7 @@ mod apple {
             y_chunk_dimensions,
             c_chunk_dimensions,
             c_chunk_dimensions,
+            None,
         )?;
 
         tx_radio.activate()?;
@@ -662,6 +703,7 @@ mod apple {
             y_chunk_dimensions,
             c_chunk_dimensions,
             c_chunk_dimensions,
+            None,
         )?;
 
         rx_radio.activate()?;

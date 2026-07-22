@@ -489,8 +489,14 @@ impl CallbackContext {
     }
 }
 
-impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
-    pub fn reset(&mut self) {
+pub trait OFDMFrameSynchronizerTrait: Iterator<Item = QuadratureSymbol> {
+    fn reset(&mut self);
+    fn reset_seeking_frame_index(&mut self);
+    fn signal_to_noise_db(&self) -> f64;
+    fn signal_to_noise_ratio(&self) -> f64;
+}
+impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizerTrait for OFDMFrameSynchronizer<I> {
+    fn reset(&mut self) {
         // print frame stats
         {
             let snr_db = self.callback_context.signal_to_noise_db();
@@ -517,17 +523,19 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
 
         self.callback_context.reset();
     }
-    pub fn reset_seeking_frame_index(&mut self) {
+    fn reset_seeking_frame_index(&mut self) {
         self.frame_symbols_iter = vec![].into_iter().peekable();
         self.seeking_frame_index = 0;
         self.long_term_stats = SignalStats::default();
     }
-    pub fn signal_to_noise_db(&self) -> f64 {
+    fn signal_to_noise_db(&self) -> f64 {
         self.long_term_stats.signal_to_noise_db()
     }
-    pub fn signal_to_noise_ratio(&self) -> f64 {
+    fn signal_to_noise_ratio(&self) -> f64 {
         self.long_term_stats.signal_to_noise_ratio()
     }
+}
+impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
     fn next_raw_iq_symbol(&mut self) -> Option<QuadratureSymbol> {
         while self.freq_domain_symbols_iter.peek().is_none() {
             // break out if aborted
@@ -1537,7 +1545,7 @@ mod tests {
             .values()
             .mean_sq_err(new_y_components.values())
             .unwrap();
-        assert!(mean_sq_error < 3.0);
+        assert!(mean_sq_error < 3.0, "mean_sq_error < 3.0, {mean_sq_error}");
     }
 
     #[test]
@@ -1694,7 +1702,7 @@ mod tests {
             .values()
             .mean_sq_err(new_cb_components.values())
             .unwrap();
-        assert!(mean_sq_error < 1.0);
+        assert!(mean_sq_error < 1.0, "mean_sq_error < 1.0, {mean_sq_error}");
     }
 
     #[test]

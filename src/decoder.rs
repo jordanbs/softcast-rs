@@ -33,6 +33,8 @@ use crate::source_coding::chunk::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::*;
+use crate::utils::*;
+use ndarray_stats::DeviationExt;
 
 pub struct FileWriterDecoder {
     asset_writer: AssetWriter,
@@ -42,6 +44,7 @@ pub struct FileWriterDecoder {
     cb_chunk_dim: (usize, usize, usize),
     cr_chunk_dim: (usize, usize, usize),
     started_writing: bool,
+    original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>, // to compute PSNR
 }
 impl FileWriterDecoder {
     pub fn try_new(
@@ -52,6 +55,7 @@ impl FileWriterDecoder {
         y_chunk_dim: (usize, usize, usize), // length, height, width
         cb_chunk_dim: (usize, usize, usize), // length, height, width
         cr_chunk_dim: (usize, usize, usize), // length, height, width
+        original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let writer_settings = AssetWritterSettings {
             path: out_path,
@@ -69,6 +73,7 @@ impl FileWriterDecoder {
             cr_chunk_dim,
             asset_writer: writer,
             started_writing: false,
+            original_macro_block_3ds,
         })
     }
 
@@ -83,72 +88,157 @@ impl FileWriterDecoder {
         let mut frame_synchronizer: OFDMFrameSynchronizer<_> = complex32_reader.into_iter().into();
         frame_synchronizer.abort_token = Some(abort_token);
 
-        let mut gops_received = 0;
+        let mut decoder = Decoder::new(
+            frame_synchronizer,
+            self.asset_resolution,
+            self.gop_len,
+            self.y_chunk_dim,
+            self.cb_chunk_dim,
+            self.cr_chunk_dim,
+            self.original_macro_block_3ds.take(),
+        );
 
-        let mut snr = f64::INFINITY;
         loop {
-            let y_dct_out = into_transform_block_3d_dct(
-                &mut frame_synchronizer,
-                self.gop_len,
-                self.asset_resolution,
-                self.y_chunk_dim,
-                snr, // a bit stale
-            )
-            .inspect_err(|_err| {
-                println!("Fatal SNR: {:.2}", frame_synchronizer.signal_to_noise_db())
-            })?;
-
-            snr = frame_synchronizer.signal_to_noise_ratio();
-            frame_synchronizer.reset();
-            frame_synchronizer.reset_seeking_frame_index();
-
-            gops_received += 1;
-            eprintln!("Y GOPS Received: {}", gops_received);
-
-            let cb_dct_out = into_transform_block_3d_dct(
-                &mut frame_synchronizer,
-                self.gop_len,
-                self.asset_resolution,
-                self.cb_chunk_dim,
-                snr,
-            )
-            .inspect_err(|_err| {
-                println!("Fatal SNR: {:.2}", frame_synchronizer.signal_to_noise_db())
-            })?;
-            snr = frame_synchronizer.signal_to_noise_ratio();
-            frame_synchronizer.reset();
-            frame_synchronizer.reset_seeking_frame_index();
-            eprintln!("Cb GOPS Received: {}", gops_received);
-
-            let cr_dct_out = into_transform_block_3d_dct(
-                &mut frame_synchronizer,
-                self.gop_len,
-                self.asset_resolution,
-                self.cr_chunk_dim,
-                snr,
-            )
-            .inspect_err(|_err| {
-                println!("Fatal SNR: {:.2}", frame_synchronizer.signal_to_noise_db())
-            })?;
-            snr = frame_synchronizer.signal_to_noise_ratio();
-            frame_synchronizer.reset();
-            frame_synchronizer.reset_seeking_frame_index();
-            eprintln!("Cr GOPS Received: {}", gops_received);
-
-            let new_macro_block_3d = MacroBlock3D {
-                y_components: y_dct_out.into(),
-                cb_components: cb_dct_out.into(),
-                cr_components: cr_dct_out.into(),
-                gop_len: self.gop_len,
-            };
-            let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_, _> =
-                new_macro_block_3d.into();
-
+            let pixel_buffer_iter = decoder.next_pb_iter()?;
             for pixel_buffer in pixel_buffer_iter {
                 self.asset_writer.append_pixel_buffer(pixel_buffer)?;
                 self.asset_writer.wait_for_writer_to_be_ready()?;
             }
         }
+    }
+}
+
+struct Decoder<O: OFDMFrameSynchronizerTrait> {
+    frame_synchronizer: O,
+    asset_resolution: (usize, usize),
+    gop_len: usize,
+    y_chunk_dim: (usize, usize, usize),
+    cb_chunk_dim: (usize, usize, usize),
+    cr_chunk_dim: (usize, usize, usize),
+    snr: f64,
+    gops_received: usize,
+    original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
+}
+impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
+    fn next_pb_iter(
+        &mut self,
+    ) -> Result<impl Iterator<Item = CVPixelBufferWrapper>, Box<dyn std::error::Error>> {
+        let gop = self.next_gop()?;
+        let iter = gop.into_iter();
+        Ok(iter)
+    }
+
+    pub fn new(
+        frame_synchronizer: O,
+        asset_resolution: (usize, usize),
+        gop_len: usize,
+        y_chunk_dim: (usize, usize, usize),
+        cb_chunk_dim: (usize, usize, usize),
+        cr_chunk_dim: (usize, usize, usize),
+        original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
+    ) -> Self {
+        Self {
+            frame_synchronizer,
+            asset_resolution,
+            gop_len,
+            y_chunk_dim,
+            cb_chunk_dim,
+            cr_chunk_dim,
+            snr: 0.0,
+            gops_received: 0,
+            original_macro_block_3ds,
+        }
+    }
+
+    pub fn next_gop(&mut self) -> Result<Box<[CVPixelBufferWrapper]>, Box<dyn std::error::Error>> {
+        let y_dct_out = into_transform_block_3d_dct(
+            &mut self.frame_synchronizer,
+            self.gop_len,
+            self.asset_resolution,
+            self.y_chunk_dim,
+            self.snr, // a bit stale
+        )
+        .inspect_err(|_err| {
+            println!(
+                "Fatal SNR: {:.2}",
+                self.frame_synchronizer.signal_to_noise_db()
+            )
+        })?;
+
+        self.snr = self.frame_synchronizer.signal_to_noise_ratio();
+        self.frame_synchronizer.reset();
+        self.frame_synchronizer.reset_seeking_frame_index();
+
+        self.gops_received += 1;
+        eprintln!("Y GOPS Received: {}", self.gops_received);
+
+        let cb_dct_out = into_transform_block_3d_dct(
+            &mut self.frame_synchronizer,
+            self.gop_len,
+            self.asset_resolution,
+            self.cb_chunk_dim,
+            self.snr,
+        )
+        .inspect_err(|_err| {
+            println!(
+                "Fatal SNR: {:.2}",
+                self.frame_synchronizer.signal_to_noise_db()
+            )
+        })?;
+        self.snr = self.frame_synchronizer.signal_to_noise_ratio();
+        self.frame_synchronizer.reset();
+        self.frame_synchronizer.reset_seeking_frame_index();
+        eprintln!("Cb GOPS Received: {}", self.gops_received);
+
+        let cr_dct_out = into_transform_block_3d_dct(
+            &mut self.frame_synchronizer,
+            self.gop_len,
+            self.asset_resolution,
+            self.cr_chunk_dim,
+            self.snr,
+        )
+        .inspect_err(|_err| {
+            println!(
+                "Fatal SNR: {:.2}",
+                self.frame_synchronizer.signal_to_noise_db()
+            )
+        })?;
+        self.snr = self.frame_synchronizer.signal_to_noise_ratio();
+        self.frame_synchronizer.reset();
+        self.frame_synchronizer.reset_seeking_frame_index();
+        eprintln!("Cr GOPS Received: {}", self.gops_received);
+
+        let new_macro_block_3d = MacroBlock3D {
+            y_components: y_dct_out.into(),
+            cb_components: cb_dct_out.into(),
+            cr_components: cr_dct_out.into(),
+            gop_len: self.gop_len,
+        };
+
+        if let Some(mb_receiver) = &mut self.original_macro_block_3ds {
+            let original_mb = mb_receiver.recv()?;
+            let y_err = original_mb
+                .y_components
+                .values()
+                .mean_sq_err(new_macro_block_3d.y_components.values())?
+                .psnr(u8::MAX as f64);
+            let cb_err = original_mb
+                .cb_components
+                .values()
+                .mean_sq_err(new_macro_block_3d.cb_components.values())?
+                .psnr(u8::MAX as f64);
+            let cr_err = original_mb
+                .cr_components
+                .values()
+                .mean_sq_err(new_macro_block_3d.cr_components.values())?
+                .psnr(u8::MAX as f64);
+            println!("PSNR: {y_err:.2} Y dB\t{cb_err:.2} Cb dB\t{cr_err:.2} Cr dB");
+        }
+
+        let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_, _> =
+            new_macro_block_3d.into();
+        let gop = pixel_buffer_iter.collect();
+        Ok(gop)
     }
 }
 
