@@ -38,7 +38,7 @@ pub fn run_simulation(
         result
     });
     encoder.run(&mut mpsc_writer, abort_token)?;
-
+    drop(mpsc_writer); // finishes the decocder thread
     let _ = decoder_result.join().map_err(|_| "thread panic'd")?; // TODO: preserve inner error
 
     Ok(())
