@@ -491,14 +491,21 @@ mod apple {
         frame_len: usize,
         digital: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let noise = if noise_db != 0.0 {
+            noise_db.db_to_awgn_power()
+        } else {
+            noise
+        };
+
         if digital {
             let infile = std::fs::File::open(&inpath)?;
             let reader = std::io::BufReader::new(infile);
             let encoder: DigitalEncoder<_> = reader.into();
             let mut count_symbols = 0u64;
-            let noisy_encoder = AdditiveWhiteGaussianNoise::new(encoder, noise).inspect(|iqs| {
-                count_symbols += iqs.len() as u64;
-            });
+            let noisy_encoder =
+                AdditiveWhiteGaussianNoise::new(encoder, noise, 100).inspect(|iqs| {
+                    count_symbols += iqs.len() as u64;
+                });
             let mut decoder: DigitalDecoder<_> = noisy_encoder.into();
             let mut outfile = std::fs::File::create_new(&outpath)?;
             std::io::copy(&mut decoder, &mut outfile)?;

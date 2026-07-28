@@ -151,7 +151,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let count_symbols_arc = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
-        for macro_block in self.macro_block_3d_iter.by_ref() {
+        for (mb_idx, macro_block) in self.macro_block_3d_iter.by_ref().enumerate() {
             if let Some(tap) = &mut self.macro_block_tap {
                 let clone = macro_block.clone();
                 tap.writer.send(clone)?;
@@ -200,7 +200,8 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 if self.noise_power == 0.0 {
                     Box::new(encoder)
                 } else {
-                    let noise_encoder = AdditiveWhiteGaussianNoise::new(encoder, self.noise_power);
+                    let noise_encoder =
+                        AdditiveWhiteGaussianNoise::new(encoder, self.noise_power, mb_idx as u64);
                     Box::new(noise_encoder)
                 };
 

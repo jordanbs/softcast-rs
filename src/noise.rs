@@ -26,10 +26,10 @@ pub struct AdditiveWhiteGaussianNoise<I: Iterator<Item = Box<[Complex32]>>> {
     bypass: bool,
 }
 impl<I: Iterator<Item = Box<[Complex32]>>> AdditiveWhiteGaussianNoise<I> {
-    pub fn new(inner: I, noise_power: f32) -> Self {
+    pub fn new(inner: I, noise_power: f32, seed: u64) -> Self {
         Self {
             inner,
-            rng: rand_xoshiro::Xoshiro128PlusPlus::seed_from_u64(100), // deterministic
+            rng: rand_xoshiro::Xoshiro128PlusPlus::seed_from_u64(seed), // deterministic
             noise_σ: (noise_power / 2.0).sqrt(),
             bypass: 0.0 == noise_power,
         }
