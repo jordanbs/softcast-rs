@@ -287,6 +287,9 @@ mod apple {
             #[arg(long, default_value_t = DEFAULT_NOISE)]
             noise: f32,
 
+            #[arg(long, default_value_t = 0.0)]
+            noise_db: f32,
+
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
 
@@ -478,6 +481,7 @@ mod apple {
         outpath: std::path::PathBuf,
         gop_len: usize,
         noise: f32,
+        noise_db: f32,
         y_compression_ratio: f64,
         c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
@@ -898,6 +902,7 @@ mod apple {
                 outfile,
                 gop_len,
                 noise,
+                noise_db,
                 y_compression_ratio,
                 c_compression_ratio,
                 y_chunk_dimensions,
@@ -911,6 +916,7 @@ mod apple {
                 outfile,
                 gop_len,
                 noise,
+                noise_db,
                 y_compression_ratio,
                 c_compression_ratio,
                 y_chunk_dimensions,

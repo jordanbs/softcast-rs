@@ -30,3 +30,11 @@ impl PSNR for f64 {
         10.0 * (peak.powi(2) / self).log10()
     }
 }
+pub trait DbToAWGNPower {
+    fn db_to_awgn_power(&self) -> Self;
+}
+impl DbToAWGNPower for f32 {
+    fn db_to_awgn_power(&self) -> Self {
+        10f32.powf(-self / 10f32)
+    }
+}
