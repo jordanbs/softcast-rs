@@ -99,15 +99,34 @@ impl FileWriterDecoder {
         );
 
         loop {
-            let pixel_buffer_iter = decoder.next_pb_iter()?;
-            for pixel_buffer in pixel_buffer_iter {
-                self.asset_writer.append_pixel_buffer(pixel_buffer)?;
-                self.asset_writer.wait_for_writer_to_be_ready()?;
+            if let Err(err) = self.run_loop_inner(&mut decoder) {
+                // compute and print stats
+                let Statistics {
+                    y_psnr,
+                    cb_psnr,
+                    cr_psnr,
+                    weighted_total_psnr,
+                } = decoder.stats.finalize();
+                println!(
+                    "PSNR: {weighted_total_psnr:.2} dB\t{y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB"
+                );
+                return Err(err);
             }
         }
     }
-}
 
+    fn run_loop_inner<O: OFDMFrameSynchronizerTrait>(
+        &mut self,
+        decoder: &mut Decoder<O>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let pixel_buffer_iter = decoder.next_pb_iter()?;
+        for pixel_buffer in pixel_buffer_iter {
+            self.asset_writer.append_pixel_buffer(pixel_buffer)?;
+            self.asset_writer.wait_for_writer_to_be_ready()?;
+        }
+        Ok(())
+    }
+}
 struct Decoder<O: OFDMFrameSynchronizerTrait> {
     frame_synchronizer: O,
     asset_resolution: (usize, usize),
@@ -118,6 +137,7 @@ struct Decoder<O: OFDMFrameSynchronizerTrait> {
     snr: f64,
     gops_received: usize,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
+    stats: PartialStatistics,
 }
 impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
     fn next_pb_iter(
@@ -147,6 +167,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             snr: 0.0,
             gops_received: 0,
             original_macro_block_3ds,
+            stats: PartialStatistics::default(),
         }
     }
 
@@ -217,22 +238,27 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
 
         if let Some(mb_receiver) = &mut self.original_macro_block_3ds {
             let original_mb = mb_receiver.recv()?;
-            let y_err = original_mb
+            let y_psnr = original_mb
                 .y_components
                 .values()
                 .mean_sq_err(new_macro_block_3d.y_components.values())?
                 .psnr(u8::MAX as f64);
-            let cb_err = original_mb
+            let cb_psnr = original_mb
                 .cb_components
                 .values()
                 .mean_sq_err(new_macro_block_3d.cb_components.values())?
                 .psnr(u8::MAX as f64);
-            let cr_err = original_mb
+            let cr_psnr = original_mb
                 .cr_components
                 .values()
                 .mean_sq_err(new_macro_block_3d.cr_components.values())?
                 .psnr(u8::MAX as f64);
-            println!("PSNR: {y_err:.2} Y dB\t{cb_err:.2} Cb dB\t{cr_err:.2} Cr dB");
+
+            self.stats.y_psnr_partial_sum += y_psnr;
+            self.stats.cb_psnr_partial_sum += cb_psnr;
+            self.stats.cr_psnr_partial_sum += cr_psnr;
+            self.stats.sample_count += 1;
+            println!("PSNR: {y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB");
         }
 
         let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_, _> =
@@ -358,6 +384,34 @@ fn into_transform_block_3d_dct<
         chunk_dim,
     );
     Ok(dct)
+}
+
+#[derive(Default)]
+struct PartialStatistics {
+    y_psnr_partial_sum: f64,
+    cb_psnr_partial_sum: f64,
+    cr_psnr_partial_sum: f64,
+    sample_count: usize,
+}
+impl PartialStatistics {
+    fn finalize(&self) -> Statistics {
+        let sample_count = self.sample_count as f64;
+        Statistics {
+            y_psnr: self.y_psnr_partial_sum / sample_count,
+            cb_psnr: self.cb_psnr_partial_sum / sample_count,
+            cr_psnr: self.cr_psnr_partial_sum / sample_count,
+            weighted_total_psnr: (6.0 * self.y_psnr_partial_sum
+                + self.cb_psnr_partial_sum
+                + self.cr_psnr_partial_sum)
+                / (8.0 * sample_count),
+        }
+    }
+}
+struct Statistics {
+    y_psnr: f64,
+    cb_psnr: f64,
+    cr_psnr: f64,
+    weighted_total_psnr: f64,
 }
 
 impl Drop for FileWriterDecoder {
