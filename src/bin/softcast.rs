@@ -94,10 +94,10 @@ mod apple {
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
 
-            #[arg(long="y_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            #[arg(long="y-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
             y_compression_ratio: f64,
 
-            #[arg(long="c_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            #[arg(long="cbcr-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
             c_compression_ratio: f64,
 
             // defaults set for 1080p
@@ -214,10 +214,10 @@ mod apple {
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
 
-            #[arg(long="y_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            #[arg(long="y-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
             y_compression_ratio: f64,
 
-            #[arg(long="c_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            #[arg(long="cbcr-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
             c_compression_ratio: f64,
 
             // defaults set for 1080p
@@ -290,10 +290,10 @@ mod apple {
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
 
-            #[arg(long="y_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            #[arg(long="y-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
             y_compression_ratio: f64,
 
-            #[arg(long="c_compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            #[arg(long="cbcr-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
             c_compression_ratio: f64,
 
             // defaults set for 1080p
