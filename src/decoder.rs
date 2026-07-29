@@ -107,6 +107,8 @@ impl FileWriterDecoder {
                     cr_psnr,
                     weighted_total_psnr,
                 } = decoder.stats.finalize();
+                let cumulative_snr = decoder.signal_stats.signal_to_noise_db();
+                println!("Cumulative SNR: {cumulative_snr:.2}");
                 println!(
                     "PSNR: {weighted_total_psnr:.2} dB\t{y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB"
                 );
@@ -138,6 +140,7 @@ struct Decoder<O: OFDMFrameSynchronizerTrait> {
     gops_received: usize,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
     stats: PartialStatistics,
+    signal_stats: SignalStats,
 }
 impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
     fn next_pb_iter(
@@ -168,6 +171,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             gops_received: 0,
             original_macro_block_3ds,
             stats: PartialStatistics::default(),
+            signal_stats: SignalStats::default(),
         }
     }
 
@@ -187,6 +191,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
         })?;
 
         self.snr = self.frame_synchronizer.signal_to_noise_ratio();
+        self.signal_stats += self.frame_synchronizer.current_signal_stats();
         self.frame_synchronizer.reset();
         self.frame_synchronizer.reset_seeking_frame_index();
 
@@ -207,6 +212,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             )
         })?;
         self.snr = self.frame_synchronizer.signal_to_noise_ratio();
+        self.signal_stats += self.frame_synchronizer.current_signal_stats();
         self.frame_synchronizer.reset();
         self.frame_synchronizer.reset_seeking_frame_index();
         eprintln!("Cb GOPS Received: {}", self.gops_received);
@@ -225,6 +231,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             )
         })?;
         self.snr = self.frame_synchronizer.signal_to_noise_ratio();
+        self.signal_stats += self.frame_synchronizer.current_signal_stats();
         self.frame_synchronizer.reset();
         self.frame_synchronizer.reset_seeking_frame_index();
         eprintln!("Cr GOPS Received: {}", self.gops_received);

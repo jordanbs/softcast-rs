@@ -393,10 +393,16 @@ extern "C" fn ofdm_framesync_callback(
     liquid_sys::liquid_error_code_LIQUID_OK as i32 // always ok
 }
 
-#[derive(Default)]
-struct SignalStats {
+#[derive(Default, Copy, Clone)]
+pub struct SignalStats {
     error_vector_magnitude: f64,
     signal_vector_magnitude: f64,
+}
+impl std::ops::AddAssign for SignalStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.error_vector_magnitude += rhs.error_vector_magnitude;
+        self.signal_vector_magnitude += rhs.signal_vector_magnitude;
+    }
 }
 
 impl SignalStats {
@@ -494,6 +500,7 @@ pub trait OFDMFrameSynchronizerTrait: Iterator<Item = QuadratureSymbol> {
     fn reset_seeking_frame_index(&mut self);
     fn signal_to_noise_db(&self) -> f64;
     fn signal_to_noise_ratio(&self) -> f64;
+    fn current_signal_stats(&self) -> SignalStats;
 }
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizerTrait for OFDMFrameSynchronizer<I> {
     fn reset(&mut self) {
@@ -533,6 +540,9 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizerTrait for OFDMFr
     }
     fn signal_to_noise_ratio(&self) -> f64 {
         self.long_term_stats.signal_to_noise_ratio()
+    }
+    fn current_signal_stats(&self) -> SignalStats {
+        self.callback_context.stats
     }
 }
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
