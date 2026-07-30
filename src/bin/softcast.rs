@@ -952,11 +952,14 @@ mod linux {
     #[derive(Subcommand)]
     enum Commands {
         TxCamera {
-            #[arg(short, default_value_t = DEFAULT_COMPRESSION_RATIO)]
-            compression_ratio: f64,
-
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
+
+            #[arg(long="y-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            y_compression_ratio: f64,
+
+            #[arg(long="cbcr-compression", default_value_t = DEFAULT_COMPRESSION_RATIO)]
+            c_compression_ratio: f64,
 
             // defaults set for 1080p
             #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
@@ -1005,7 +1008,8 @@ mod linux {
 
     fn transmit_camera(
         gop_len: usize,
-        compression_ratio: f64,
+        y_compression_ratio: f64,
+        c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
         c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
@@ -1061,16 +1065,24 @@ mod linux {
 
         let pb_iter = camera.pixel_buffer_iter();
 
+        let y_config = PerPixelConfiguration {
+            compression_ratio: y_compression_ratio,
+            chunk_dimensions: y_chunk_dimensions,
+        };
+        let c_config = PerPixelConfiguration {
+            compression_ratio: c_compression_ratio,
+            chunk_dimensions: c_chunk_dimensions,
+        };
         let mut encoder = Encoder::new(
             pb_iter,
             gop_len,
-            compression_ratio,
             0.0,
-            y_chunk_dimensions,
-            c_chunk_dimensions,
-            c_chunk_dimensions,
+            y_config,
+            c_config.clone(),
+            c_config,
             resolution,
             frame_rate,
+            None,
         );
 
         tx_radio.activate()?;
@@ -1087,8 +1099,9 @@ mod linux {
 
         match args.command {
             Commands::TxCamera {
-                compression_ratio,
                 gop_len,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,
@@ -1105,7 +1118,8 @@ mod linux {
                 skip_cal,
             } => transmit_camera(
                 gop_len,
-                compression_ratio,
+                y_compression_ratio,
+                c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 y_whiten_len,

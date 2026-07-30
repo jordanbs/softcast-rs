@@ -36,6 +36,7 @@ use num_complex::Complex32;
 #[cfg(target_vendor = "apple")]
 pub type FileReaderEncoder = Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>;
 
+#[derive(Copy, Clone)]
 pub struct PerPixelConfiguration {
     pub compression_ratio: f64,
     pub chunk_dimensions: (usize, usize, usize),
