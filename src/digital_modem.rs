@@ -35,9 +35,9 @@ impl<R: std::io::Read> From<R> for DigitalEncoder<R> {
     fn from(reader: R) -> Self {
         let mut fgprops = liquid_sys::ofdmflexframegenprops_s {
             check: liquid_sys::crc_scheme_LIQUID_CRC_32,
-            fec0: liquid_sys::fec_scheme_LIQUID_FEC_RS_M8_50,
+            fec0: liquid_sys::fec_scheme_LIQUID_FEC_RS_M8,
             fec1: liquid_sys::fec_scheme_LIQUID_FEC_NONE,
-            mod_scheme: liquid_sys::modulation_scheme_LIQUID_MODEM_QAM64,
+            mod_scheme: liquid_sys::modulation_scheme_LIQUID_MODEM_QAM32,
         };
         let _guard = FFTW_PLANNER_LOCK.lock().unwrap();
         let fg = unsafe {
