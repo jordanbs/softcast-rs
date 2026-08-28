@@ -9,6 +9,11 @@ The employed protocol is unstable and subject to change. The implementation omit
 softcast tx-camera only runs on Raspbian.
 softcast receive, transmit, and all other operations only run on macOS.
 
+## Example Video Recovery
+https://github.com/user-attachments/assets/2be81ae1-7a3d-4755-8b1a-6924ceb6e176
+
+*Comparable encodes of softcast (top) vs digital (bottom) video recovered over a simulated noisy (AWGN) channel. SNR is 15.18dB. Each is occupying 4.3MHz bandwidth. Digital video is H.264, modulated with QAM32, protected using RS(255,223) FEC. Note that some digital compression artifacts are present in the softcast version due to GitHub's 10MB file size limit for this video embed.*
+
 ## Requirements
 - fftw
 - limesuite
@@ -31,9 +36,6 @@ Without a software defined radio, a digital simulation can be performed:
 ```
 softcast simulate --noise 0.01 path/to/infile/mp4 path/to/outfile.mp4
 ```
-
-![Bird falling off tree branch discernable amidst snowy luma and color distortion](images/bigbuck-noise.png)
-*Example of a compressed SoftCast-encoded image frame recovered over a noisy channel*
 
 ## Contact
 If you would like to collaborate on, deploy, or commercially license softcast-rs, please email me at jordan.schneider.media at gmail.com.
