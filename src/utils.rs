@@ -38,3 +38,31 @@ impl DbToAWGNPower for f32 {
         10f32.powf(-self / 10f32)
     }
 }
+
+pub mod dump_file {
+    use num_complex::Complex32;
+    use std::io::Write;
+
+    pub fn create_dump_file(is_write: bool) -> std::fs::File {
+        let mut idx = 0;
+        loop {
+            let rw = if is_write { "w" } else { "r" };
+            let try_path = format!("/tmp/dump{}_{:03}", rw, idx);
+            if let Ok(file) = std::fs::File::create_new(try_path) {
+                return file;
+            }
+            idx += 1;
+        }
+    }
+
+    pub fn write_complex32_symbols(
+        file: &mut std::fs::File,
+        symbols: &[Complex32],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for iq in symbols {
+            file.write_all(&iq.re.to_be_bytes())?;
+            file.write_all(&iq.im.to_be_bytes())?;
+        }
+        Ok(())
+    }
+}

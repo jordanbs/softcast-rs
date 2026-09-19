@@ -17,11 +17,12 @@
 
 use crate::rtlsdr_iq;
 use crate::sync::*;
+use crate::utils::dump_file::*;
 use limesuite_sys;
 use num_complex::Complex32;
 use rtlsdr;
 use soapysdr;
-use std::io::{Read, Write};
+use std::io::Read;
 
 const RECEIVE_BUF_SIZE_IN_SAMPLES: usize = 0x256_000_000;
 const READ_BUF_SIZE_IN_SAMPLES: usize = 0x400_000;
@@ -198,7 +199,7 @@ impl ReceiveDevice for SoapyReceiveDevice {
             read_buf.truncate(samples_read);
 
             if let Some(dump_file) = self.dump_file.as_mut() {
-                write_symbols(dump_file, &read_buf)?;
+                write_complex32_symbols(dump_file, &read_buf)?;
             }
             self.mpsc_writer.consume(read_buf.into(), false)?;
         }
@@ -378,7 +379,7 @@ impl LimeTransmitDevice {
             let num_symbols_sent = num_symbols_sent_or_failure as usize;
 
             if let Some(dump_file) = self.dump_file.as_mut() {
-                write_symbols(dump_file, &symbols)?;
+                write_complex32_symbols(dump_file, &symbols)?;
             }
             num_symbols_sent
         };
@@ -591,7 +592,7 @@ impl ReceiveDevice for LimeReceiveDevice {
             read_buf.truncate(samples_read);
 
             if let Some(dump_file) = self.dump_file.as_mut() {
-                write_symbols(dump_file, &read_buf)?;
+                write_complex32_symbols(dump_file, &read_buf)?;
             }
             self.mpsc_writer.sender.send(read_buf.into())?;
         }
@@ -610,40 +611,6 @@ impl Drop for LimeReceiveDevice {
         // let _success = limesuite_sys::LMS_Close(self.device);
         // }
     }
-}
-
-fn create_dump_file(is_write: bool) -> std::fs::File {
-    let mut idx = 0;
-    loop {
-        let rw = if is_write { "w" } else { "r" };
-        let try_path = format!("/tmp/dump{}_{:03}", rw, idx);
-        if let Ok(file) = std::fs::File::create_new(try_path) {
-            return file;
-        }
-        idx += 1;
-    }
-}
-
-fn write_complex32_symbols(
-    file: &mut std::fs::File,
-    buf: &[Complex32],
-) -> Result<(), Box<dyn std::error::Error>> {
-    for iq in buf {
-        file.write_all(&iq.re.to_be_bytes())?;
-        file.write_all(&iq.im.to_be_bytes())?;
-    }
-    Ok(())
-}
-
-fn write_symbols(
-    file: &mut std::fs::File,
-    symbols: &[Complex32],
-) -> Result<(), Box<dyn std::error::Error>> {
-    for iq in symbols {
-        file.write_all(&iq.re.to_be_bytes())?;
-        file.write_all(&iq.im.to_be_bytes())?;
-    }
-    Ok(())
 }
 
 pub fn play_dump_file(mut stream: soapysdr::TxStream<Complex32>, path: &std::path::Path) {
@@ -769,7 +736,7 @@ unsafe extern "C" fn rtlsdr_read_callback(
         .collect();
 
     if let Some(dump_file) = dump_file.as_mut() {
-        let _ = write_symbols(dump_file, &read_buf_iq); // ingore err
+        let _ = write_complex32_symbols(dump_file, &read_buf_iq); // ingore err
     }
     mpsc_writer
         .consume(read_buf_iq, false)

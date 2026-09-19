@@ -320,6 +320,9 @@ mod apple {
 
             #[arg(long, default_value_t = false)]
             digital: bool,
+
+            #[arg(long, default_value_t = false)]
+            dump: bool,
         },
     }
 
@@ -491,6 +494,7 @@ mod apple {
         cbcr_whiten_len: usize,
         frame_len: usize,
         digital: bool,
+        dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let noise = if noise_db != 0.0 {
             noise_db.db_to_awgn_power()
@@ -587,7 +591,7 @@ mod apple {
                 encoder.cr_chunk_dimensions(),
                 Some(macro_block_receiver),
             )?;
-            run_simulation(encoder, decoder, noise)?;
+            run_simulation(encoder, decoder, noise, dump)?;
         }
         Ok(())
     }
@@ -915,6 +919,7 @@ mod apple {
                 cbcr_whiten_len,
                 frame_len,
                 digital,
+                dump,
             } => simulate(
                 infile,
                 outfile,
@@ -929,6 +934,7 @@ mod apple {
                 cbcr_whiten_len,
                 frame_len,
                 digital,
+                dump,
             ),
         }
         .map_err(|e| e.to_string())?;

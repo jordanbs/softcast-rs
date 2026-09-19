@@ -21,12 +21,14 @@ use crate::decoder::*;
 use crate::encoder::*;
 use crate::noise::*;
 use crate::sync::*;
+use crate::utils::dump_file::*;
 use num_complex::Complex32;
 
 pub fn run_simulation(
     mut encoder: FileReaderEncoder,
     mut decoder: FileWriterDecoder,
     noise_power: f32,
+    dump: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
 
@@ -34,11 +36,15 @@ pub fn run_simulation(
     let abort_token_clone = abort_token.clone();
 
     let decoder_result = std::thread::spawn(move || {
-        let transformer = SignalTransformer::new(mpsc_reader, noise_power);
+        let mut transformer = SignalTransformer::new(mpsc_reader, noise_power, dump);
+        let dump_join = transformer.dump_join.take();
         let result = decoder
             .run(transformer, abort_token_clone)
             .map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
+        if let Some(dump_join) = dump_join {
+            let _ = dump_join.join(); // ignore err
+        }
         result
     });
     encoder.run(&mut mpsc_writer, abort_token)?;
@@ -50,17 +56,37 @@ pub fn run_simulation(
 
 struct SignalTransformer {
     iter: Box<dyn Iterator<Item = Box<[Complex32]>>>,
+    pub dump_join: Option<std::thread::JoinHandle<()>>,
 }
 impl SignalTransformer {
-    fn new(mpsc_reader: MPSCReader, noise_power: f32) -> Self {
+    fn new(mpsc_reader: MPSCReader, noise_power: f32, dump: bool) -> Self {
         let mut transformer: Box<dyn Iterator<Item = Box<[Complex32]>>> =
             Box::new(mpsc_reader.into_iter());
         if 0.0 < noise_power {
             let noise_iter = AdditiveWhiteGaussianNoise::new(transformer, noise_power, 0);
             transformer = Box::new(noise_iter);
         }
+        let mut dump_join = None;
+        if dump {
+            let (sender, receiver) = std::sync::mpsc::channel::<Box<[Complex32]>>();
+            dump_join = Some(std::thread::spawn(move || {
+                let mut dump_file = create_dump_file(false);
 
-        Self { iter: transformer }
+                while let Ok(complex32_symbols) = receiver.recv() {
+                    let _ = write_complex32_symbols(&mut dump_file, &complex32_symbols);
+                }
+            }));
+            let dump_iter = transformer.inspect(move |buf| {
+                let buf_copy = buf.clone();
+                let _ = sender.send(buf_copy); // ingore err
+            });
+            transformer = Box::new(dump_iter);
+        }
+
+        Self {
+            iter: transformer,
+            dump_join,
+        }
     }
 }
 
