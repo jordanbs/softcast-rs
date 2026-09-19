@@ -317,14 +317,21 @@ fn into_transform_block_3d_dct<
     let chunks_per_gop =
         (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-    let de_whitener = Whitener::new(
-        synchronizer,
-        Config::get().per_pixel_type::<PixelType>().whiten_length,
-        data_symbols_per_ofdm_symbol(),
-        true,
-    );
+    // If whiten_len == 0, skip whitening.
+    let whiten_len = Config::get().per_pixel_type::<PixelType>().whiten_length;
+    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_len {
+        let de_whitener = Whitener::new(
+            synchronizer,
+            whiten_len,
+            data_symbols_per_ofdm_symbol(),
+            true,
+        );
+        Box::new(de_whitener)
+    } else {
+        Box::new(synchronizer)
+    };
 
-    let metadata_demodulator: MetadataDemodulator<_> = de_whitener.into();
+    let metadata_demodulator: MetadataDemodulator<_> = iq_iter.into();
     let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
 
     let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);

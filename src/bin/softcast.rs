@@ -72,6 +72,12 @@ fn parse_power_of_two(s: &str) -> Result<usize, String> {
     }
 }
 
+fn parse_power_of_two_or_zero(s: &str) -> Result<usize, String> {
+    let u: usize = parse_int::parse(s).map_err(|_| "{s} is not an int")?;
+
+    if 0 == u { Ok(u) } else { parse_power_of_two(s) }
+}
+
 #[cfg(target_vendor = "apple")]
 mod apple {
     use super::*;
@@ -107,10 +113,10 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
@@ -163,10 +169,10 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
@@ -227,10 +233,10 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
@@ -306,10 +312,10 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
@@ -490,6 +496,7 @@ mod apple {
         cbcr_whiten_len: usize,
         frame_len: usize,
         digital: bool,
+        dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let noise = if noise_db != 0.0 {
             noise_db.db_to_awgn_power()
@@ -968,10 +975,10 @@ mod linux {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]

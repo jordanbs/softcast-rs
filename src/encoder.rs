@@ -23,6 +23,7 @@ use crate::config::*;
 use crate::framing::*;
 use crate::metadata_coding::packetizer::*;
 use crate::metadata_coding::*;
+use crate::modulation::QuadratureSymbol;
 use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
 use crate::noise::*;
@@ -244,15 +245,23 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
         .into();
 
     let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
-    let whitener = Whitener::new(
-        frequency_domain_signal,
-        Config::get().per_pixel_type::<PixelType>().whiten_length,
-        data_symbols_per_ofdm_symbol(),
-        false,
-    );
+
+    // If whiten_len == 0, skip whitening.
+    let whiten_len = Config::get().per_pixel_type::<PixelType>().whiten_length;
+    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_len {
+        let whitener = Whitener::new(
+            frequency_domain_signal,
+            whiten_len,
+            data_symbols_per_ofdm_symbol(),
+            false,
+        );
+        Box::new(whitener)
+    } else {
+        Box::new(frequency_domain_signal)
+    };
 
     // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_> = whitener.into();
+    let ofdm_framer: OFDMFrameGenerator<_> = iq_iter.into();
     ofdm_framer
 }
 
