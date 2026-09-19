@@ -19,11 +19,14 @@
 
 use crate::decoder::*;
 use crate::encoder::*;
+use crate::noise::*;
 use crate::sync::*;
+use num_complex::Complex32;
 
 pub fn run_simulation(
     mut encoder: FileReaderEncoder,
     mut decoder: FileWriterDecoder,
+    noise_power: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
 
@@ -31,8 +34,9 @@ pub fn run_simulation(
     let abort_token_clone = abort_token.clone();
 
     let decoder_result = std::thread::spawn(move || {
+        let transformer = SignalTransformer::new(mpsc_reader, noise_power);
         let result = decoder
-            .run(mpsc_reader, abort_token_clone)
+            .run(transformer, abort_token_clone)
             .map_err(|e| e.to_string());
         eprintln!("decoder result: {:?}", result);
         result
@@ -42,6 +46,28 @@ pub fn run_simulation(
     let _ = decoder_result.join().map_err(|_| "thread panic'd")?; // TODO: preserve inner error
 
     Ok(())
+}
+
+struct SignalTransformer {
+    iter: Box<dyn Iterator<Item = Box<[Complex32]>>>,
+}
+impl SignalTransformer {
+    fn new(mpsc_reader: MPSCReader, noise_power: f32) -> Self {
+        let mut transformer: Box<dyn Iterator<Item = Box<[Complex32]>>> =
+            Box::new(mpsc_reader.into_iter());
+        if 0.0 < noise_power {
+            let noise_iter = AdditiveWhiteGaussianNoise::new(transformer, noise_power, 0);
+            transformer = Box::new(noise_iter);
+        }
+
+        Self { iter: transformer }
+    }
+}
+
+impl Complex32Reader for SignalTransformer {
+    fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>> {
+        self.iter
+    }
 }
 
 #[cfg(test)]

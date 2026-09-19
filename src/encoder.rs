@@ -26,13 +26,11 @@ use crate::metadata_coding::*;
 use crate::modulation::QuadratureSymbol;
 use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
-use crate::noise::*;
 use crate::pixel_buffer::transform_block_3d::*;
 use crate::pixel_buffer::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::*;
-use num_complex::Complex32;
 
 #[cfg(target_vendor = "apple")]
 pub type FileReaderEncoder = Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>;
@@ -45,7 +43,6 @@ pub struct PerPixelConfiguration {
 
 pub struct Encoder<I: Iterator<Item = PB>, PB: PixelBuffer> {
     macro_block_3d_iter: MacroBlock3DIterator<I, PB>,
-    noise_power: f32,
     y_config: PerPixelConfiguration,
     cb_config: PerPixelConfiguration,
     cr_config: PerPixelConfiguration,
@@ -59,7 +56,6 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
     pub fn with_file(
         in_path: std::path::PathBuf,
         gop_len: usize,
-        noise_power: f32,
         y_config: PerPixelConfiguration,
         cb_config: PerPixelConfiguration,
         cr_config: PerPixelConfiguration,
@@ -83,7 +79,6 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         Ok(Encoder::new(
             pb_iter,
             gop_len,
-            noise_power,
             y_config,
             cb_config,
             cr_config,
@@ -96,7 +91,6 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
     pub fn new(
         pb_iter: I,
         gop_len: usize,
-        noise_power: f32,
         mut y_config: PerPixelConfiguration,
         mut cb_config: PerPixelConfiguration,
         mut cr_config: PerPixelConfiguration,
@@ -122,7 +116,6 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
 
         Self {
             macro_block_3d_iter: MacroBlock3DIterator::new(pb_iter, gop_len),
-            noise_power,
             y_config,
             cb_config,
             cr_config,
@@ -153,7 +146,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let count_symbols_arc = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
-        for (mb_idx, macro_block) in self.macro_block_3d_iter.by_ref().enumerate() {
+        for macro_block in self.macro_block_3d_iter.by_ref() {
             if let Some(tap) = &mut self.macro_block_tap {
                 let clone = macro_block.clone();
                 tap.writer.send(clone)?;
@@ -189,7 +182,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             );
 
             let count_symbols_arc_clone = count_symbols_arc.clone();
-            let encoder = y_framer
+            let mut encoder = y_framer
                 .chain(cb_framer)
                 .chain(cr_framer)
                 .map(|ofdmframe| ofdmframe.into_box_complex32_slice())
@@ -198,16 +191,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                         .fetch_add(iqs.len() as i64, std::sync::atomic::Ordering::Relaxed);
                 });
 
-            let mut dyn_encoder: Box<dyn Iterator<Item = Box<[Complex32]>>> =
-                if self.noise_power == 0.0 {
-                    Box::new(encoder)
-                } else {
-                    let noise_encoder =
-                        AdditiveWhiteGaussianNoise::new(encoder, self.noise_power, mb_idx as u64);
-                    Box::new(noise_encoder)
-                };
-
-            while let Some(frame) = dyn_encoder.next() {
+            while let Some(frame) = encoder.next() {
                 ofdm_symbol_writer.consume(frame, true)?;
                 if abort_token.is_aborted() {
                     return Err("Encoder aborted.".into());

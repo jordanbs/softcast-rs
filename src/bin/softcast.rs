@@ -214,9 +214,6 @@ mod apple {
             #[arg(value_parser = validate_file_does_not_exist)]
             outfile: std::path::PathBuf,
 
-            #[arg(long, default_value_t = DEFAULT_NOISE)]
-            noise: f32,
-
             #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
             gop_len: usize,
 
@@ -361,7 +358,6 @@ mod apple {
         infile: std::path::PathBuf,
         outfile: std::path::PathBuf,
         gop_len: usize,
-        noise: f32,
         y_compression_ratio: f64,
         c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
@@ -430,7 +426,6 @@ mod apple {
         let mut encoder = FileReaderEncoder::with_file(
             infile,
             gop_len,
-            noise,
             PerPixelConfiguration {
                 compression_ratio: y_compression_ratio,
                 chunk_dimensions: y_chunk_dimensions,
@@ -496,7 +491,6 @@ mod apple {
         cbcr_whiten_len: usize,
         frame_len: usize,
         digital: bool,
-        dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let noise = if noise_db != 0.0 {
             noise_db.db_to_awgn_power()
@@ -567,7 +561,6 @@ mod apple {
             let encoder = FileReaderEncoder::with_file(
                 inpath,
                 gop_len,
-                noise,
                 PerPixelConfiguration {
                     compression_ratio: y_compression_ratio,
                     chunk_dimensions: y_chunk_dimensions,
@@ -594,7 +587,7 @@ mod apple {
                 encoder.cr_chunk_dimensions(),
                 Some(macro_block_receiver),
             )?;
-            run_simulation(encoder, decoder)?;
+            run_simulation(encoder, decoder, noise)?;
         }
         Ok(())
     }
@@ -653,7 +646,6 @@ mod apple {
         let mut encoder = FileReaderEncoder::with_file(
             infile,
             gop_len,
-            0.0,
             PerPixelConfiguration {
                 compression_ratio: y_compression_ratio,
                 chunk_dimensions: y_chunk_dimensions,
@@ -863,7 +855,6 @@ mod apple {
             Commands::Loopback {
                 infile,
                 outfile,
-                noise,
                 gop_len,
                 y_compression_ratio,
                 c_compression_ratio,
@@ -889,7 +880,6 @@ mod apple {
                 infile,
                 outfile,
                 gop_len,
-                noise,
                 y_compression_ratio,
                 c_compression_ratio,
                 y_chunk_dimensions,
@@ -1083,7 +1073,6 @@ mod linux {
         let mut encoder = Encoder::new(
             pb_iter,
             gop_len,
-            0.0,
             y_config,
             c_config.clone(),
             c_config,
