@@ -86,16 +86,18 @@ pub mod slice {
         chunk_iter: std::iter::Peekable<I>,
         inner_slice_iter: std::vec::IntoIter<SliceAndChunkMetadata<'a, PixelType>>,
         chunks_per_gop: usize,
+        hadamard: bool,
     }
 
     impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
         SliceIter<'a, PixelType, I>
     {
-        pub fn new(chunk_iter: I, chunks_per_gop: usize) -> Self {
+        pub fn new(chunk_iter: I, chunks_per_gop: usize, hadamard: bool) -> Self {
             SliceIter {
                 chunk_iter: chunk_iter.peekable(),
                 inner_slice_iter: vec![].into_iter(),
                 chunks_per_gop,
+                hadamard,
             }
         }
     }
@@ -116,8 +118,17 @@ pub mod slice {
                     return None;
                 }
 
-                let slices =
-                    fwht_softcast::fwht_chunks_copy(chunks).expect("Failed to create slices.");
+                let slices = if self.hadamard {
+                    fwht_softcast::fwht_chunks_copy(chunks).expect("Failed to create slices.")
+                } else {
+                    chunks
+                        .into_iter()
+                        .map(|chunk| {
+                            let slice = Slice::from_view(chunk.values);
+                            SliceAndChunkMetadata::new(slice, chunk.metadata)
+                        })
+                        .collect()
+                };
                 self.inner_slice_iter = slices.into_iter();
             }
         }
@@ -131,6 +142,7 @@ pub mod slice {
         slice_iter: std::iter::Peekable<I>,
         inner_chunk_iter: std::vec::IntoIter<Chunk<'a, PixelType>>,
         chunks_per_gop: usize,
+        hadamard: bool,
     }
 
     impl<
@@ -139,11 +151,12 @@ pub mod slice {
         I: Iterator<Item = SliceAndChunkMetadata<'a, PixelType>>,
     > ChunkIter<'a, PixelType, I>
     {
-        pub fn new(slice_iter: I, chunks_per_gop: usize) -> Self {
+        pub fn new(slice_iter: I, chunks_per_gop: usize, hadamard: bool) -> Self {
             ChunkIter {
                 slice_iter: slice_iter.peekable(),
                 inner_chunk_iter: vec![].into_iter(),
                 chunks_per_gop,
+                hadamard,
             }
         }
     }
@@ -169,10 +182,15 @@ pub mod slice {
                 if slices.is_empty() {
                     return None;
                 }
-                assert_eq!(slices.len(), hadamard_len, "Not enough slices.");
 
-                let chunks = fwht_softcast::fwht_slices(slices, hadamard_len - self.chunks_per_gop)
-                    .expect("Failed to create chunks.");
+                let chunks = if self.hadamard {
+                    assert_eq!(slices.len(), hadamard_len, "Not enough slices.");
+                    fwht_softcast::fwht_slices(slices, hadamard_len - self.chunks_per_gop)
+                        .expect("Failed to create chunks.")
+                } else {
+                    assert_eq!(slices.len(), self.chunks_per_gop, "Not enough slices.");
+                    slices.into_iter().map(|slice| slice.into()).collect()
+                };
                 self.inner_chunk_iter = chunks.into_iter();
             }
         }
@@ -181,20 +199,32 @@ pub mod slice {
     pub trait ChunkIterIntoExt<'a, PixelType: HasPixelComponentType>:
         Iterator<Item = Chunk<'a, PixelType>> + Sized
     {
-        fn into_slice_iter(self, chunks_per_gop: usize) -> SliceIter<'a, PixelType, Self>;
+        fn into_slice_iter(
+            self,
+            chunks_per_gop: usize,
+            hadamard: bool,
+        ) -> SliceIter<'a, PixelType, Self>;
     }
     impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
         ChunkIterIntoExt<'a, PixelType> for I
     {
-        fn into_slice_iter(self, chunks_per_gop: usize) -> SliceIter<'a, PixelType, Self> {
-            SliceIter::new(self, chunks_per_gop)
+        fn into_slice_iter(
+            self,
+            chunks_per_gop: usize,
+            hadamard: bool,
+        ) -> SliceIter<'a, PixelType, Self> {
+            SliceIter::new(self, chunks_per_gop, hadamard)
         }
     }
 
     pub trait SliceIterExt<'a, PixelType: HasPixelComponentType>:
         Iterator<Item = SliceAndChunkMetadata<'a, PixelType>> + Sized
     {
-        fn into_chunks_iter(self, chunks_per_gop: usize) -> ChunkIter<'a, PixelType, Self>;
+        fn into_chunks_iter(
+            self,
+            chunks_per_gop: usize,
+            hadamard: bool,
+        ) -> ChunkIter<'a, PixelType, Self>;
     }
     impl<
         'a,
@@ -202,8 +232,12 @@ pub mod slice {
         I: Iterator<Item = SliceAndChunkMetadata<'a, PixelType>>,
     > SliceIterExt<'a, PixelType> for I
     {
-        fn into_chunks_iter(self, chunks_per_gop: usize) -> ChunkIter<'a, PixelType, Self> {
-            ChunkIter::new(self, chunks_per_gop)
+        fn into_chunks_iter(
+            self,
+            chunks_per_gop: usize,
+            hadamard: bool,
+        ) -> ChunkIter<'a, PixelType, Self> {
+            ChunkIter::new(self, chunks_per_gop, hadamard)
         }
     }
 }
@@ -483,21 +517,31 @@ pub mod fwht_softcast {
         let mut chunks = Vec::with_capacity(slices.len() - num_padding_rows);
         for slice in slices {
             // consume slice.values
-            let chunk: Chunk<'a, PixelType> = match slice.slice.values {
-                ViewOrOwnedArray3::View(view) => Chunk::new(view, slice.chunk_metadata),
+            let chunk: Chunk<'a, PixelType> = slice.into();
+            chunks.push(chunk);
+        }
+
+        Ok(chunks.into())
+    }
+
+    impl<'a, PixelType: HasPixelComponentType> From<SliceAndChunkMetadata<'a, PixelType>>
+        for Chunk<'a, PixelType>
+    {
+        fn from(slice_and_chunk_metadata: SliceAndChunkMetadata<'a, PixelType>) -> Self {
+            // consume slice.values
+            match slice_and_chunk_metadata.slice.values {
+                ViewOrOwnedArray3::View(view) => {
+                    Chunk::new(view, slice_and_chunk_metadata.chunk_metadata)
+                }
                 ViewOrOwnedArray3::Owned(_) => {
                     // TODO: This assumption might not be true in the testing loopback.
                     panic!("slice not expected to own its data in decode.")
                 }
                 ViewOrOwnedArray3::OwnedArc(owned_arc) => {
-                    Chunk::with_owned_arc(owned_arc, slice.chunk_metadata)
+                    Chunk::with_owned_arc(owned_arc, slice_and_chunk_metadata.chunk_metadata)
                 }
-            };
-
-            chunks.push(chunk);
+            }
         }
-
-        Ok(chunks.into())
     }
 }
 

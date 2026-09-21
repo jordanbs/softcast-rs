@@ -310,6 +310,9 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
+            #[arg(long, default_value_t = false)]
+            disable_hadamard: bool,
+
             #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
@@ -348,6 +351,9 @@ mod apple {
 
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
+
+            #[arg(long, default_value_t = false)]
+            disable_hadamard: bool,
 
             #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
@@ -475,6 +481,7 @@ mod apple {
                 compression_ratio: c_compression_ratio,
                 chunk_dimensions: c_chunk_dimensions,
             },
+            true,
             None,
         )?;
         let asset_resolution = encoder.asset_resolution();
@@ -487,6 +494,7 @@ mod apple {
             encoder.y_chunk_dimensions(),
             encoder.cb_chunk_dimensions(),
             encoder.cr_chunk_dimensions(),
+            true,
             None,
         )?;
 
@@ -524,6 +532,7 @@ mod apple {
         c_compression_ratio: f64,
         y_chunk_dimensions: (usize, usize, usize),
         c_chunk_dimensions: (usize, usize, usize),
+        disable_hadamard: bool,
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
         frame_len: usize,
@@ -611,6 +620,7 @@ mod apple {
                     compression_ratio: c_compression_ratio,
                     chunk_dimensions: c_chunk_dimensions,
                 },
+                !disable_hadamard,
                 Some(macro_block_tap),
             )?;
             let asset_resolution = encoder.asset_resolution();
@@ -623,6 +633,7 @@ mod apple {
                 encoder.y_chunk_dimensions(),
                 encoder.cb_chunk_dimensions(),
                 encoder.cr_chunk_dimensions(),
+                !disable_hadamard,
                 Some(macro_block_receiver),
             )?;
             run_simulation(encoder, decoder, noise, dump)?;
@@ -638,6 +649,7 @@ mod apple {
         gop_len: usize,
         mut y_chunk_dimensions: (usize, usize, usize),
         mut c_chunk_dimensions: (usize, usize, usize),
+        disable_hadamard: bool,
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
         frame_len: usize,
@@ -665,6 +677,7 @@ mod apple {
             y_chunk_dimensions,
             c_chunk_dimensions,
             c_chunk_dimensions,
+            !disable_hadamard,
             None,
         )?;
 
@@ -741,6 +754,7 @@ mod apple {
                 compression_ratio: c_compression_ratio,
                 chunk_dimensions: c_chunk_dimensions,
             },
+            true,
             None,
         )?;
 
@@ -824,6 +838,7 @@ mod apple {
             y_chunk_dimensions,
             c_chunk_dimensions,
             c_chunk_dimensions,
+            true,
             None,
         )?;
 
@@ -986,6 +1001,7 @@ mod apple {
                 c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
+                disable_hadamard,
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
@@ -1001,6 +1017,7 @@ mod apple {
                 c_compression_ratio,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
+                disable_hadamard,
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
@@ -1015,6 +1032,7 @@ mod apple {
                 gop_len,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
+                disable_hadamard,
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
@@ -1026,6 +1044,7 @@ mod apple {
                 gop_len,
                 y_chunk_dimensions,
                 c_chunk_dimensions,
+                disable_hadamard,
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,

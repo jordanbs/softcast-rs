@@ -49,6 +49,7 @@ pub struct Encoder<I: Iterator<Item = PB>, PB: PixelBuffer> {
     asset_resolution: (usize, usize),
     frame_rate: f64,
     macro_block_tap: Option<MacroBlockTap>,
+    hadamard: bool,
 }
 
 impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
@@ -59,6 +60,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         y_config: PerPixelConfiguration,
         cb_config: PerPixelConfiguration,
         cr_config: PerPixelConfiguration,
+        hadamard: bool,
         macro_block_tap: Option<MacroBlockTap>,
     ) -> Result<Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>, Box<dyn std::error::Error>>
     {
@@ -84,6 +86,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             cr_config,
             asset_resolution,
             frame_rate,
+            hadamard,
             macro_block_tap,
         ))
     }
@@ -96,6 +99,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         mut cr_config: PerPixelConfiguration,
         asset_resolution: (usize, usize),
         frame_rate: f64,
+        hadamard: bool,
         macro_block_tap: Option<MacroBlockTap>,
     ) -> Self {
         y_config.chunk_dimensions = chunk_dimensions_sizer(
@@ -122,6 +126,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             asset_resolution,
             frame_rate,
             macro_block_tap,
+            hadamard,
         }
     }
 
@@ -165,6 +170,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 &mut y_dct,
                 self.y_config.compression_ratio,
                 self.y_config.chunk_dimensions,
+                self.hadamard,
             );
 
             let mut cb_dct = cb_components.into();
@@ -172,6 +178,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 &mut cb_dct,
                 self.cb_config.compression_ratio,
                 self.cb_config.chunk_dimensions,
+                self.hadamard,
             );
 
             let mut cr_dct = cr_components.into();
@@ -179,6 +186,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 &mut cr_dct,
                 self.cr_config.compression_ratio,
                 self.cr_config.chunk_dimensions,
+                self.hadamard,
             );
 
             let count_symbols_arc_clone = count_symbols_arc.clone();
@@ -210,6 +218,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     dct_components: &mut TransformBlock3DDCT<PixelType>,
     compression_ratio: f64,
     chunk_dimensions: (usize, usize, usize),
+    hadamard: bool,
 ) -> impl Iterator<Item = OFDMFrame> {
     let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
 
@@ -224,7 +233,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     let num_included_chunks = metadata_bitmap.values.count_ones();
     let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
     let slice_modulator: SliceModulator<'_, _, _> = PowerScaler::new(compressor)
-        .into_slice_iter(num_included_chunks)
+        .into_slice_iter(num_included_chunks, hadamard)
         .map(|slice_and_chunk_metadata| slice_and_chunk_metadata.slice)
         .into();
 

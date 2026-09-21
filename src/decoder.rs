@@ -43,6 +43,7 @@ pub struct FileWriterDecoder {
     y_chunk_dim: (usize, usize, usize),
     cb_chunk_dim: (usize, usize, usize),
     cr_chunk_dim: (usize, usize, usize),
+    hadamard: bool,
     started_writing: bool,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>, // to compute PSNR
 }
@@ -55,6 +56,7 @@ impl FileWriterDecoder {
         y_chunk_dim: (usize, usize, usize), // length, height, width
         cb_chunk_dim: (usize, usize, usize), // length, height, width
         cr_chunk_dim: (usize, usize, usize), // length, height, width
+        hadamard: bool,
         original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let writer_settings = AssetWritterSettings {
@@ -71,6 +73,7 @@ impl FileWriterDecoder {
             y_chunk_dim,
             cb_chunk_dim,
             cr_chunk_dim,
+            hadamard,
             asset_writer: writer,
             started_writing: false,
             original_macro_block_3ds,
@@ -95,6 +98,7 @@ impl FileWriterDecoder {
             self.y_chunk_dim,
             self.cb_chunk_dim,
             self.cr_chunk_dim,
+            self.hadamard,
             self.original_macro_block_3ds.take(),
         );
 
@@ -136,6 +140,7 @@ struct Decoder<O: OFDMFrameSynchronizerTrait> {
     y_chunk_dim: (usize, usize, usize),
     cb_chunk_dim: (usize, usize, usize),
     cr_chunk_dim: (usize, usize, usize),
+    hadamard: bool,
     snr: f64,
     gops_received: usize,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
@@ -158,6 +163,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
         y_chunk_dim: (usize, usize, usize),
         cb_chunk_dim: (usize, usize, usize),
         cr_chunk_dim: (usize, usize, usize),
+        hadamard: bool,
         original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
     ) -> Self {
         Self {
@@ -167,6 +173,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             y_chunk_dim,
             cb_chunk_dim,
             cr_chunk_dim,
+            hadamard,
             snr: 0.0,
             gops_received: 0,
             original_macro_block_3ds,
@@ -181,6 +188,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             self.gop_len,
             self.asset_resolution,
             self.y_chunk_dim,
+            self.hadamard,
             self.snr, // a bit stale
         )
         .inspect_err(|_err| {
@@ -203,6 +211,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             self.gop_len,
             self.asset_resolution,
             self.cb_chunk_dim,
+            self.hadamard,
             self.snr,
         )
         .inspect_err(|_err| {
@@ -222,6 +231,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             self.gop_len,
             self.asset_resolution,
             self.cr_chunk_dim,
+            self.hadamard,
             self.snr,
         )
         .inspect_err(|_err| {
@@ -308,6 +318,7 @@ fn into_transform_block_3d_dct<
     gop_len: usize,
     asset_resolution: (usize, usize),
     chunk_dim: (usize, usize, usize),
+    hadamard: bool,
     snr: f64,
 ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
     let (frame_width, frame_height) = (
@@ -360,7 +371,11 @@ fn into_transform_block_3d_dct<
         .collect();
 
     let num_included_chunks = metadata_bitmap.values.count_ones();
-    let num_included_slices = num_included_chunks.next_power_of_two();
+    let num_included_slices = if hadamard {
+        num_included_chunks.next_power_of_two()
+    } else {
+        num_included_chunks
+    };
     println!("{num_included_chunks} chunks | {num_included_slices} slices");
 
     let de_whitener = metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
@@ -385,7 +400,7 @@ fn into_transform_block_3d_dct<
     let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
     let chunks_iter = slice_and_chunk_metadata_iter
-        .into_chunks_iter(num_included_chunks)
+        .into_chunks_iter(num_included_chunks, hadamard)
         .take(num_included_chunks);
     let power_descaler = PowerScaler::inverse(chunks_iter, snr);
     let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
