@@ -64,24 +64,27 @@ impl Complex32Reader for MPSCReader {
 
 pub struct Complex32IterReadWrapper<R: std::io::Read> {
     reader: R,
+    finished: bool,
 }
 impl<R: std::io::Read> From<R> for Complex32IterReadWrapper<R> {
     fn from(reader: R) -> Self {
-        Self { reader }
+        Self {
+            reader,
+            finished: false,
+        }
     }
 }
 impl<R: std::io::Read> Iterator for Complex32IterReadWrapper<R> {
     type Item = Box<[Complex32]>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
         const BUF_SIZE: usize = 0x1000;
         let mut buf = vec![0u8; BUF_SIZE];
         let bytes_read = self.reader.read(&mut buf).ok()?;
-        assert_eq!(
-            bytes_read % 8,
-            0,
-            "Did not read a multiple of 8 bytes from the dump file"
-        );
+        self.finished = 0 != bytes_read % 8; // file has rough ending; don't read any more
         buf.truncate(bytes_read);
         if buf.is_empty() {
             return None;
