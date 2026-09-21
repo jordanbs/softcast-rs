@@ -29,6 +29,7 @@ pub fn run_simulation(
     mut decoder: FileWriterDecoder,
     noise_power: f32,
     dump: bool,
+    decode: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
 
@@ -36,16 +37,30 @@ pub fn run_simulation(
     let abort_token_clone = abort_token.clone();
 
     let decoder_result = std::thread::spawn(move || {
-        let mut transformer = SignalTransformer::new(mpsc_reader, noise_power, dump);
-        let dump_join = transformer.dump_join.take();
-        let result = decoder
-            .run(transformer, abort_token_clone)
-            .map_err(|e| e.to_string());
-        eprintln!("decoder result: {:?}", result);
-        if let Some(dump_join) = dump_join {
-            let _ = dump_join.join(); // ignore err
+        if decode {
+            let mut transformer = SignalTransformer::new(mpsc_reader, noise_power, dump);
+            let dump_join = transformer.dump_join.take();
+            let result = decoder
+                .run(transformer, abort_token_clone)
+                .map_err(|e| e.to_string());
+            eprintln!("decoder result: {:?}", result);
+            if let Some(dump_join) = dump_join {
+                let _ = dump_join.join(); // ignore err
+            }
+            result
+        } else {
+            if !dump {
+                return Err(
+                    "Specify --dump when --disable--ofdm. No decode is expected in this case."
+                        .into(),
+                );
+            }
+            let mut dumper = SignalTransformer::new(mpsc_reader, noise_power, true);
+            let dumper_join = dumper.dump_join.take().unwrap();
+            let _ = dumper.into_iter().count(); // drain the iterator to dump
+            let _ = dumper_join.join();
+            Ok(())
         }
-        result
     });
     encoder.run(&mut mpsc_writer, abort_token)?;
     drop(mpsc_writer); // finishes the decocder thread

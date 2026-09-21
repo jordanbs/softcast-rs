@@ -31,7 +31,7 @@ pub const OFDM_SYMBOL_LEN: usize = NUM_SUBCARRIERS + CP_LEN;
 
 pub static FFTW_PLANNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct OFDMSymbol {
     pub time_domain_symbols: [Complex32; OFDM_SYMBOL_LEN],
@@ -45,8 +45,9 @@ impl Default for OFDMSymbol {
     }
 }
 
+#[repr(transparent)]
 pub struct OFDMFrame {
-    symbols: Vec<OFDMSymbol>,
+    pub symbols: Vec<OFDMSymbol>,
 }
 
 impl OFDMFrame {

@@ -50,6 +50,7 @@ pub struct Encoder<I: Iterator<Item = PB>, PB: PixelBuffer> {
     frame_rate: f64,
     macro_block_tap: Option<MacroBlockTap>,
     hadamard: bool,
+    ofdm: bool,
 }
 
 impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
@@ -61,6 +62,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         cb_config: PerPixelConfiguration,
         cr_config: PerPixelConfiguration,
         hadamard: bool,
+        ofdm: bool,
         macro_block_tap: Option<MacroBlockTap>,
     ) -> Result<Encoder<IntoPixelBufferIterator, CVPixelBufferWrapper>, Box<dyn std::error::Error>>
     {
@@ -87,6 +89,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             asset_resolution,
             frame_rate,
             hadamard,
+            ofdm,
             macro_block_tap,
         ))
     }
@@ -100,6 +103,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         asset_resolution: (usize, usize),
         frame_rate: f64,
         hadamard: bool,
+        ofdm: bool,
         macro_block_tap: Option<MacroBlockTap>,
     ) -> Self {
         y_config.chunk_dimensions = chunk_dimensions_sizer(
@@ -127,6 +131,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             frame_rate,
             macro_block_tap,
             hadamard,
+            ofdm,
         }
     }
 
@@ -171,6 +176,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 self.y_config.compression_ratio,
                 self.y_config.chunk_dimensions,
                 self.hadamard,
+                self.ofdm,
             );
 
             let mut cb_dct = cb_components.into();
@@ -179,6 +185,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 self.cb_config.compression_ratio,
                 self.cb_config.chunk_dimensions,
                 self.hadamard,
+                self.ofdm,
             );
 
             let mut cr_dct = cr_components.into();
@@ -187,6 +194,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 self.cr_config.compression_ratio,
                 self.cr_config.chunk_dimensions,
                 self.hadamard,
+                self.ofdm,
             );
 
             let count_symbols_arc_clone = count_symbols_arc.clone();
@@ -219,6 +227,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     compression_ratio: f64,
     chunk_dimensions: (usize, usize, usize),
     hadamard: bool,
+    ofdm: bool,
 ) -> impl Iterator<Item = OFDMFrame> {
     let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
 
@@ -253,9 +262,27 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
         Box::new(frequency_domain_signal)
     };
 
-    // ofdm
-    let ofdm_framer: OFDMFrameGenerator<_> = iq_iter.into();
-    ofdm_framer
+    let framer: Box<dyn Iterator<Item = OFDMFrame>> = if ofdm {
+        let ofdm_framer: OFDMFrameGenerator<_> = iq_iter.into();
+        Box::new(ofdm_framer)
+    } else {
+        // cram raw iq symbols into an OFDMFrame iterator
+        let mut iq_iter = iq_iter.peekable();
+        let iter = std::iter::from_fn(move || {
+            if iq_iter.peek().is_none() {
+                return None;
+            }
+            let mut ofdm_symbol = OFDMSymbol::default();
+            for iq in ofdm_symbol.time_domain_symbols.iter_mut() {
+                *iq = iq_iter.next().unwrap_or_default().into();
+            }
+            Some(OFDMFrame {
+                symbols: vec![ofdm_symbol; 1],
+            })
+        });
+        Box::new(iter)
+    };
+    framer
 }
 
 fn max_factor_at_or_below(limit: usize, value: usize) -> usize {

@@ -32,8 +32,13 @@ pub struct QuadratureSymbol {
     pub value: Complex32,
 }
 impl From<Complex32> for QuadratureSymbol {
-    fn from(value: Complex32) -> Self {
-        Self { value }
+    fn from(c32: Complex32) -> Self {
+        unsafe { std::mem::transmute(c32) }
+    }
+}
+impl From<QuadratureSymbol> for Complex32 {
+    fn from(iq: QuadratureSymbol) -> Self {
+        unsafe { std::mem::transmute(iq) }
     }
 }
 trait FromByte {

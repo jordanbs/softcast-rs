@@ -313,6 +313,9 @@ mod apple {
             #[arg(long, default_value_t = false)]
             disable_hadamard: bool,
 
+            #[arg(long, default_value_t = false)]
+            disable_ofdm: bool,
+
             #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
@@ -482,6 +485,7 @@ mod apple {
                 chunk_dimensions: c_chunk_dimensions,
             },
             true,
+            true,
             None,
         )?;
         let asset_resolution = encoder.asset_resolution();
@@ -533,6 +537,7 @@ mod apple {
         y_chunk_dimensions: (usize, usize, usize),
         c_chunk_dimensions: (usize, usize, usize),
         disable_hadamard: bool,
+        disable_ofdm: bool,
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
         frame_len: usize,
@@ -603,8 +608,14 @@ mod apple {
             };
             Config::set(config);
 
-            let mut macro_block_tap = MacroBlockTap::default();
-            let macro_block_receiver = macro_block_tap.take_receiver();
+            let use_macro_block_tap = !disable_ofdm; // disabling ofdm disables decode
+            let (macro_block_tap, macro_block_receiver) = if use_macro_block_tap {
+                let mut macro_block_tap = MacroBlockTap::default();
+                let macro_block_receiver = macro_block_tap.take_receiver();
+                (Some(macro_block_tap), Some(macro_block_receiver))
+            } else {
+                (None, None)
+            };
             let encoder = FileReaderEncoder::with_file(
                 inpath,
                 gop_len,
@@ -621,7 +632,8 @@ mod apple {
                     chunk_dimensions: c_chunk_dimensions,
                 },
                 !disable_hadamard,
-                Some(macro_block_tap),
+                !disable_ofdm,
+                macro_block_tap,
             )?;
             let asset_resolution = encoder.asset_resolution();
             let frame_rate = encoder.frame_rate();
@@ -634,9 +646,10 @@ mod apple {
                 encoder.cb_chunk_dimensions(),
                 encoder.cr_chunk_dimensions(),
                 !disable_hadamard,
-                Some(macro_block_receiver),
+                macro_block_receiver,
             )?;
-            run_simulation(encoder, decoder, noise, dump)?;
+            let should_decode = !disable_ofdm;
+            run_simulation(encoder, decoder, noise, dump, should_decode)?;
         }
         Ok(())
     }
@@ -754,6 +767,7 @@ mod apple {
                 compression_ratio: c_compression_ratio,
                 chunk_dimensions: c_chunk_dimensions,
             },
+            true,
             true,
             None,
         )?;
@@ -1002,6 +1016,7 @@ mod apple {
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 disable_hadamard,
+                disable_ofdm,
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
@@ -1018,6 +1033,7 @@ mod apple {
                 y_chunk_dimensions,
                 c_chunk_dimensions,
                 disable_hadamard,
+                disable_ofdm,
                 y_whiten_len,
                 cbcr_whiten_len,
                 frame_len,
