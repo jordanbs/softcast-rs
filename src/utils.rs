@@ -66,3 +66,12 @@ pub mod dump_file {
         Ok(())
     }
 }
+
+pub trait InvertDimensions {
+    fn invert_dimensions(&mut self);
+}
+impl InvertDimensions for (usize, usize, usize) {
+    fn invert_dimensions(&mut self) {
+        std::mem::swap(&mut self.0, &mut self.2);
+    }
+}

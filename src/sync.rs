@@ -62,6 +62,51 @@ impl Complex32Reader for MPSCReader {
     }
 }
 
+pub struct Complex32IterReadWrapper<R: std::io::Read> {
+    reader: R,
+}
+impl<R: std::io::Read> From<R> for Complex32IterReadWrapper<R> {
+    fn from(reader: R) -> Self {
+        Self { reader }
+    }
+}
+impl<R: std::io::Read> Iterator for Complex32IterReadWrapper<R> {
+    type Item = Box<[Complex32]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        const BUF_SIZE: usize = 0x1000;
+        let mut buf = vec![0u8; BUF_SIZE];
+        let bytes_read = self.reader.read(&mut buf).ok()?;
+        assert_eq!(
+            bytes_read % 8,
+            0,
+            "Did not read a multiple of 8 bytes from the dump file"
+        );
+        buf.truncate(bytes_read);
+        if buf.is_empty() {
+            return None;
+        }
+        let c32_buf: Box<[Complex32]> = buf
+            .chunks_exact(size_of::<Complex32>())
+            .map(|be_bytes| {
+                const F32_SIZE: usize = size_of::<f32>();
+                let re_bytes: [u8; F32_SIZE] = be_bytes[..F32_SIZE].try_into().unwrap();
+                let im_bytes: [u8; F32_SIZE] = be_bytes[F32_SIZE..].try_into().unwrap();
+                let re = f32::from_be_bytes(re_bytes);
+                let im = f32::from_be_bytes(im_bytes);
+                Complex32::new(re, im)
+            })
+            .collect();
+        Some(c32_buf)
+    }
+}
+
+impl<R: std::io::Read> Complex32Reader for Complex32IterReadWrapper<R> {
+    fn into_iter(self) -> impl Iterator<Item = Box<[Complex32]>> {
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct AbortToken {
     aborted: Arc<atomic::AtomicBool>,

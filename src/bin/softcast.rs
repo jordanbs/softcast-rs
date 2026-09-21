@@ -24,6 +24,7 @@ use softcast_rs::noise::*;
 use softcast_rs::pixel_buffer::transform_block_3d::*;
 use softcast_rs::radio::*;
 use softcast_rs::sync::AbortToken;
+use softcast_rs::sync::Complex32IterReadWrapper;
 use softcast_rs::utils::*;
 
 const DEFAULT_COMPRESSION_RATIO: f64 = 0.1875;
@@ -324,6 +325,39 @@ mod apple {
             #[arg(long, default_value_t = false)]
             dump: bool,
         },
+        Replay {
+            #[arg(value_hint = clap::ValueHint::FilePath)]
+            #[arg(value_parser = validate_file_exists)]
+            infile: std::path::PathBuf,
+
+            #[arg(value_hint = clap::ValueHint::FilePath)]
+            #[arg(value_parser = validate_file_does_not_exist)]
+            outfile: std::path::PathBuf,
+
+            #[arg(value_parser = parse_dimensions_2d)]
+            asset_resolution: (usize, usize),
+
+            frame_rate: f64,
+
+            #[arg(short, default_value_t = DEFAULT_GOP_LEN)]
+            gop_len: usize,
+
+            // defaults set for 1080p
+            #[arg(long="y", value_parser = parse_dimensions_3d, default_value = DEFAULT_Y_CHUNK_DIMENSIONS)]
+            y_chunk_dimensions: (usize, usize, usize),
+
+            #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
+            c_chunk_dimensions: (usize, usize, usize),
+
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            y_whiten_len: usize,
+
+            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            cbcr_whiten_len: usize,
+
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
+            frame_len: usize,
+        },
     }
 
     fn parse_dimensions_2d(s: &str) -> Result<(usize, usize), String> {
@@ -596,6 +630,51 @@ mod apple {
         Ok(())
     }
 
+    fn replay(
+        inpath: std::path::PathBuf,
+        outpath: std::path::PathBuf,
+        asset_resolution: (usize, usize),
+        frame_rate: f64,
+        gop_len: usize,
+        mut y_chunk_dimensions: (usize, usize, usize),
+        mut c_chunk_dimensions: (usize, usize, usize),
+        y_whiten_len: usize,
+        cbcr_whiten_len: usize,
+        frame_len: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let config = Config {
+            frame_length: frame_len,
+            y: PerPixelTypeConfig {
+                whiten_length: y_whiten_len,
+            },
+            cbcr: PerPixelTypeConfig {
+                whiten_length: cbcr_whiten_len,
+            },
+        };
+        Config::set(config);
+
+        // invert dimensions to match encode
+        y_chunk_dimensions.invert_dimensions();
+        c_chunk_dimensions.invert_dimensions();
+
+        let mut decoder = FileWriterDecoder::try_new(
+            outpath,
+            asset_resolution,
+            frame_rate,
+            gop_len,
+            y_chunk_dimensions,
+            c_chunk_dimensions,
+            c_chunk_dimensions,
+            None,
+        )?;
+
+        let replay_file = std::fs::File::open(inpath)?;
+        let replay_reader = std::io::BufReader::new(replay_file);
+        let complex32_reader = Complex32IterReadWrapper::from(replay_reader);
+        decoder.run(complex32_reader, AbortToken::new())?;
+        Ok(())
+    }
+
     fn transmit(
         infile: std::path::PathBuf,
         gop_len: usize,
@@ -677,8 +756,8 @@ mod apple {
         asset_resolution: (usize, usize),
         frame_rate: f64,
         gop_len: usize,
-        y_chunk_dimensions: (usize, usize, usize),
-        c_chunk_dimensions: (usize, usize, usize),
+        mut y_chunk_dimensions: (usize, usize, usize),
+        mut c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
         frame_len: usize,
@@ -734,16 +813,8 @@ mod apple {
         };
 
         // invert dimensions to match encode
-        let y_chunk_dimensions = (
-            y_chunk_dimensions.2,
-            y_chunk_dimensions.1,
-            y_chunk_dimensions.0,
-        );
-        let c_chunk_dimensions = (
-            c_chunk_dimensions.2,
-            c_chunk_dimensions.1,
-            c_chunk_dimensions.0,
-        );
+        y_chunk_dimensions.invert_dimensions();
+        c_chunk_dimensions.invert_dimensions();
 
         let mut decoder = FileWriterDecoder::try_new(
             outfile,
@@ -935,6 +1006,29 @@ mod apple {
                 frame_len,
                 digital,
                 dump,
+            ),
+            Commands::Replay {
+                infile,
+                outfile,
+                asset_resolution,
+                frame_rate,
+                gop_len,
+                y_chunk_dimensions,
+                c_chunk_dimensions,
+                y_whiten_len,
+                cbcr_whiten_len,
+                frame_len,
+            } => replay(
+                infile,
+                outfile,
+                asset_resolution,
+                frame_rate,
+                gop_len,
+                y_chunk_dimensions,
+                c_chunk_dimensions,
+                y_whiten_len,
+                cbcr_whiten_len,
+                frame_len,
             ),
         }
         .map_err(|e| e.to_string())?;
