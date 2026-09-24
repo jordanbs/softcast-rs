@@ -1033,7 +1033,7 @@ mod tests {
         // Expensive.. can I defer?
         let y_slices_and_metadata: Box<_> = y_dct
             .chunks_iter((1, 30, 40))
-            .into_slice_iter(LENGTH)
+            .into_slice_iter(LENGTH, true)
             .collect();
 
         let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
@@ -1091,8 +1091,10 @@ mod tests {
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-        let y_slices_and_metadata: Box<_> =
-            chunks.into_iter().into_slice_iter(chunks_per_gop).collect();
+        let y_slices_and_metadata: Box<_> = chunks
+            .into_iter()
+            .into_slice_iter(chunks_per_gop, true)
+            .collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
         let framer: OFDMFrameGenerator<_> =
@@ -1179,7 +1181,8 @@ mod tests {
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
         let power_scaler = PowerScaler::new(chunks.into_iter());
-        let y_slices_and_metadata: Box<_> = power_scaler.into_slice_iter(chunks_per_gop).collect();
+        let y_slices_and_metadata: Box<_> =
+            power_scaler.into_slice_iter(chunks_per_gop, true).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
@@ -1235,7 +1238,7 @@ mod tests {
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
         let chunks_iter: ChunkIter<_, _> =
-            slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
+            slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop, true);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
         let power_descaler = PowerScaler::inverse(chunks.into_iter(), f64::default());
@@ -1342,7 +1345,8 @@ mod tests {
 
         let power_scaler = PowerScaler::new(chunks.into_iter());
 
-        let y_slices_and_metadata: Box<_> = power_scaler.into_slice_iter(chunks_per_gop).collect();
+        let y_slices_and_metadata: Box<_> =
+            power_scaler.into_slice_iter(chunks_per_gop, true).collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
@@ -1397,7 +1401,7 @@ mod tests {
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
         let chunks_iter: ChunkIter<_, _> =
-            slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop);
+            slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop, true);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
         let power_descaler = PowerScaler::inverse(chunks.into_iter(), f64::default());
@@ -1480,8 +1484,9 @@ mod tests {
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-        let y_slices_and_metadata: Box<_> =
-            power_scaler.into_slice_iter(num_included_chunks).collect();
+        let y_slices_and_metadata: Box<_> = power_scaler
+            .into_slice_iter(num_included_chunks, true)
+            .collect();
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let slice_modulator: SliceModulator<'_, _, _> = y_slices_iter.into();
@@ -1547,7 +1552,7 @@ mod tests {
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
         let chunks_iter = slice_and_chunk_metadata_iter
-            .into_chunks_iter(num_included_chunks)
+            .into_chunks_iter(num_included_chunks, true)
             .take(num_included_chunks);
         let power_descaler = PowerScaler::inverse(chunks_iter, f64::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
@@ -1633,8 +1638,9 @@ mod tests {
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
-        let cb_slices_and_metadata: Box<_> =
-            power_scaler.into_slice_iter(num_included_chunks).collect();
+        let cb_slices_and_metadata: Box<_> = power_scaler
+            .into_slice_iter(num_included_chunks, true)
+            .collect();
         assert_eq!(
             ((chunks_per_gop as f64 * compression_ratio).floor() as usize).next_power_of_two(),
             cb_slices_and_metadata.len()
@@ -1703,7 +1709,7 @@ mod tests {
         let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
         let chunks_iter = slice_and_chunk_metadata_iter
-            .into_chunks_iter(num_included_chunks)
+            .into_chunks_iter(num_included_chunks, true)
             .take(num_included_chunks);
         let power_descaler = PowerScaler::inverse(chunks_iter, f64::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
@@ -1736,10 +1742,10 @@ mod tests {
         let signal_clone = signal.clone();
 
         let whitened_signal: Vec<QuadratureSymbol> =
-            Whitener::new(signal.into_iter(), rows, cols, false).collect();
+            Whitener::new(signal.into_iter(), rows, cols, 1, false).collect();
 
         let recovered_signal: Vec<QuadratureSymbol> =
-            Whitener::new(whitened_signal.into_iter(), rows, cols, true).collect();
+            Whitener::new(whitened_signal.into_iter(), rows, cols, 1, true).collect();
 
         assert_eq!(signal_clone.len(), recovered_signal.len());
         for (orig, new) in signal_clone.iter().zip(recovered_signal.iter()) {

@@ -829,11 +829,11 @@ mod tests {
         //         let original_y_dct = y_dct.clone();
         let y_slices: Box<_> = y_dct
             .chunks_iter((1, 36, 48))
-            .into_slice_iter(LENGTH)
+            .into_slice_iter(LENGTH, true)
             .collect();
         let new_y_dct = y_slices
             .into_iter()
-            .into_chunks_iter(LENGTH)
+            .into_chunks_iter(LENGTH, true)
             .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Y 3D DCT");
@@ -844,11 +844,11 @@ mod tests {
 
         let cb_slices: Box<_> = cb_dct
             .chunks_iter((1, 27, 32))
-            .into_slice_iter(LENGTH)
+            .into_slice_iter(LENGTH, true)
             .collect();
         let new_cb_components = cb_slices
             .into_iter()
-            .into_chunks_iter(LENGTH)
+            .into_chunks_iter(LENGTH, true)
             .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Cb 3D DCT")
@@ -856,11 +856,11 @@ mod tests {
 
         let cr_slices: Box<_> = cr_dct
             .chunks_iter((1, 27, 32))
-            .into_slice_iter(LENGTH)
+            .into_slice_iter(LENGTH, true)
             .collect();
         let new_cr_components = cr_slices
             .into_iter()
-            .into_chunks_iter(LENGTH)
+            .into_chunks_iter(LENGTH, true)
             .into_transform_block_3d_dct_iter(frame_resolution, LENGTH)
             .next()
             .expect("Failed to produce a Cr 3D DCT")

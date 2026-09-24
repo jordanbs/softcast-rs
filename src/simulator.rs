@@ -130,13 +130,24 @@ mod tests {
         let encoder = FileReaderEncoder::with_file(
             infile.into(),
             gop_len,
-            compression_ratio,
-            noise_power,
-            y_chunk_dimensions,
-            c_chunk_dimensions,
-            c_chunk_dimensions,
+            PerPixelConfiguration {
+                compression_ratio: compression_ratio,
+                chunk_dimensions: y_chunk_dimensions,
+            },
+            PerPixelConfiguration {
+                compression_ratio: compression_ratio,
+                chunk_dimensions: c_chunk_dimensions,
+            },
+            PerPixelConfiguration {
+                compression_ratio: compression_ratio,
+                chunk_dimensions: c_chunk_dimensions,
+            },
+            true,
+            true,
+            None,
         )
         .expect("Failed to create encoder.");
+
         let asset_resolution = encoder.asset_resolution();
         let frame_rate = encoder.frame_rate();
         let decoder = FileWriterDecoder::try_new(
@@ -144,11 +155,13 @@ mod tests {
             asset_resolution,
             frame_rate,
             gop_len,
-            encoder.y_chunk_dimensions,
-            encoder.cb_chunk_dimensions,
-            encoder.cr_chunk_dimensions,
+            encoder.y_chunk_dimensions(),
+            encoder.cb_chunk_dimensions(),
+            encoder.cr_chunk_dimensions(),
+            true,
+            None,
         )
         .expect("Failed to create decoder.");
-        run_simulation(encoder, decoder).expect("run_simulation failed.");
+        run_simulation(encoder, decoder, noise_power, false, true).expect("run_simulation failed.");
     }
 }
