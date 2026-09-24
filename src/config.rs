@@ -17,8 +17,9 @@
 
 pub const FRAME_LEN: usize = 0x400; // ofdm symbols per frame
 
-pub const DEFAULT_Y_WHITEN_LEN: usize = 0x8000; // TODO: whiten crashes when a frame is missed
+pub const DEFAULT_Y_WHITEN_LEN: usize = 0x20000; // TODO: whiten crashes when a frame is missed
 pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x4000;
+pub const DEFAULT_WHITEN_ROUNDS: usize = 2;
 
 use crate::pixel_buffer::{HasPixelComponentType, PixelComponentType};
 
@@ -31,6 +32,7 @@ pub struct Config {
 #[derive(Clone, Debug)]
 pub struct PerPixelTypeConfig {
     pub whiten_length: usize, // ofdm frames to whiten; must be a power of 2
+    pub whiten_rounds: usize,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -38,9 +40,11 @@ impl Default for Config {
             frame_length: FRAME_LEN,
             y: PerPixelTypeConfig {
                 whiten_length: DEFAULT_Y_WHITEN_LEN,
+                whiten_rounds: DEFAULT_WHITEN_ROUNDS,
             },
             cbcr: PerPixelTypeConfig {
                 whiten_length: DEFAULT_CBCR_WHITEN_LEN,
+                whiten_rounds: DEFAULT_WHITEN_ROUNDS,
             },
         }
     }

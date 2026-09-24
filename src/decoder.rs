@@ -329,12 +329,16 @@ fn into_transform_block_3d_dct<
         (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
     // If whiten_len == 0, skip whitening.
-    let whiten_len = Config::get().per_pixel_type::<PixelType>().whiten_length;
-    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_len {
+    let PerPixelTypeConfig {
+        whiten_length,
+        whiten_rounds,
+    } = Config::get().per_pixel_type::<PixelType>();
+    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_length {
         let de_whitener = Whitener::new(
             synchronizer,
-            whiten_len,
-            data_symbols_per_ofdm_symbol(),
+            NUM_SUBCARRIERS,
+            (1 + whiten_length) / NUM_SUBCARRIERS,
+            whiten_rounds,
             true,
         );
         Box::new(de_whitener)

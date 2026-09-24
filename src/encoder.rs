@@ -249,12 +249,16 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
     let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
 
     // If whiten_len == 0, skip whitening.
-    let whiten_len = Config::get().per_pixel_type::<PixelType>().whiten_length;
-    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_len {
+    let PerPixelTypeConfig {
+        whiten_length,
+        whiten_rounds,
+    } = Config::get().per_pixel_type::<PixelType>();
+    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_length {
         let whitener = Whitener::new(
             frequency_domain_signal,
-            whiten_len,
-            data_symbols_per_ofdm_symbol(),
+            NUM_SUBCARRIERS,
+            (1 + whiten_length) / NUM_SUBCARRIERS,
+            whiten_rounds,
             false,
         );
         Box::new(whitener)

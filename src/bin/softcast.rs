@@ -62,23 +62,6 @@ fn parse_dimensions_3d(s: &str) -> Result<(usize, usize, usize), String> {
     Ok((x, y, z))
 }
 
-fn parse_power_of_two(s: &str) -> Result<usize, String> {
-    let u: usize = parse_int::parse(s).map_err(|_| "{s} is not an int")?;
-
-    if u.is_power_of_two() {
-        Ok(u)
-    } else {
-        let error_string = format!("{u} is not a power of 2. Try {}", u.next_power_of_two());
-        Err(error_string)
-    }
-}
-
-fn parse_power_of_two_or_zero(s: &str) -> Result<usize, String> {
-    let u: usize = parse_int::parse(s).map_err(|_| "{s} is not an int")?;
-
-    if 0 == u { Ok(u) } else { parse_power_of_two(s) }
-}
-
 #[cfg(target_vendor = "apple")]
 mod apple {
     use super::*;
@@ -114,11 +97,14 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
+
+            #[arg(long, default_value_t = DEFAULT_WHITEN_ROUNDS)]
+            whiten_rounds: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
@@ -170,11 +156,14 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
+
+            #[arg(long, default_value_t = DEFAULT_WHITEN_ROUNDS)]
+            whiten_rounds: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
@@ -231,11 +220,14 @@ mod apple {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
+
+            #[arg(long, default_value_t = DEFAULT_WHITEN_ROUNDS)]
+            whiten_rounds: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
@@ -316,11 +308,14 @@ mod apple {
             #[arg(long, default_value_t = false)]
             disable_ofdm: bool,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
+
+            #[arg(long, default_value_t = DEFAULT_WHITEN_ROUNDS)]
+            whiten_rounds: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
@@ -358,11 +353,14 @@ mod apple {
             #[arg(long, default_value_t = false)]
             disable_hadamard: bool,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
+
+            #[arg(long, default_value_t = DEFAULT_WHITEN_ROUNDS)]
+            whiten_rounds: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
@@ -410,6 +408,7 @@ mod apple {
         c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
+        whiten_rounds: usize,
         frame_len: usize,
         frequency: f64,
         sample_rate: f64,
@@ -429,9 +428,11 @@ mod apple {
             frame_length: frame_len,
             y: PerPixelTypeConfig {
                 whiten_length: y_whiten_len,
+                whiten_rounds,
             },
             cbcr: PerPixelTypeConfig {
                 whiten_length: cbcr_whiten_len,
+                whiten_rounds,
             },
         };
         Config::set(config);
@@ -540,6 +541,7 @@ mod apple {
         disable_ofdm: bool,
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
+        whiten_rounds: usize,
         frame_len: usize,
         digital: bool,
         dump: bool,
@@ -601,9 +603,11 @@ mod apple {
                 frame_length: frame_len,
                 y: PerPixelTypeConfig {
                     whiten_length: y_whiten_len,
+                    whiten_rounds,
                 },
                 cbcr: PerPixelTypeConfig {
                     whiten_length: cbcr_whiten_len,
+                    whiten_rounds,
                 },
             };
             Config::set(config);
@@ -665,15 +669,18 @@ mod apple {
         disable_hadamard: bool,
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
+        whiten_rounds: usize,
         frame_len: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config = Config {
             frame_length: frame_len,
             y: PerPixelTypeConfig {
                 whiten_length: y_whiten_len,
+                whiten_rounds,
             },
             cbcr: PerPixelTypeConfig {
                 whiten_length: cbcr_whiten_len,
+                whiten_rounds,
             },
         };
         Config::set(config);
@@ -710,6 +717,7 @@ mod apple {
         c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
+        whiten_rounds: usize,
         frame_len: usize,
         frequency: f64,
         sample_rate: f64,
@@ -725,9 +733,11 @@ mod apple {
             frame_length: frame_len,
             y: PerPixelTypeConfig {
                 whiten_length: y_whiten_len,
+                whiten_rounds,
             },
             cbcr: PerPixelTypeConfig {
                 whiten_length: cbcr_whiten_len,
+                whiten_rounds,
             },
         };
         Config::set(config);
@@ -788,6 +798,7 @@ mod apple {
         mut c_chunk_dimensions: (usize, usize, usize),
         y_whiten_len: usize,
         cbcr_whiten_len: usize,
+        whiten_rounds: usize,
         frame_len: usize,
         frequency: f64,
         sample_rate: f64,
@@ -803,9 +814,11 @@ mod apple {
             frame_length: frame_len,
             y: PerPixelTypeConfig {
                 whiten_length: y_whiten_len,
+                whiten_rounds,
             },
             cbcr: PerPixelTypeConfig {
                 whiten_length: cbcr_whiten_len,
+                whiten_rounds,
             },
         };
         Config::set(config);
@@ -887,6 +900,7 @@ mod apple {
                 c_chunk_dimensions,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 frequency,
                 sample_rate,
@@ -906,6 +920,7 @@ mod apple {
                 c_chunk_dimensions,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 frequency,
                 sample_rate,
@@ -926,6 +941,7 @@ mod apple {
                 c_chunk_dimensions,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 frequency,
                 sample_rate,
@@ -945,6 +961,7 @@ mod apple {
                 c_chunk_dimensions,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 frequency,
                 sample_rate,
@@ -966,6 +983,7 @@ mod apple {
                 c_chunk_dimensions,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 frequency,
                 sample_rate,
@@ -990,6 +1008,7 @@ mod apple {
                 c_chunk_dimensions,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 frequency,
                 sample_rate,
@@ -1019,6 +1038,7 @@ mod apple {
                 disable_ofdm,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 digital,
                 dump,
@@ -1036,6 +1056,7 @@ mod apple {
                 disable_ofdm,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
                 digital,
                 dump,
@@ -1051,6 +1072,7 @@ mod apple {
                 disable_hadamard,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
             } => replay(
                 infile,
@@ -1063,6 +1085,7 @@ mod apple {
                 disable_hadamard,
                 y_whiten_len,
                 cbcr_whiten_len,
+                whiten_rounds,
                 frame_len,
             ),
         }
@@ -1100,10 +1123,10 @@ mod linux {
             #[arg(long="cbcr", value_parser = parse_dimensions_3d, default_value = DEFAULT_C_CHUNK_DIMENSIONS)]
             c_chunk_dimensions: (usize, usize, usize),
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_Y_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_Y_WHITEN_LEN)]
             y_whiten_len: usize,
 
-            #[arg(long, value_parser = parse_power_of_two_or_zero, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
+            #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = DEFAULT_CBCR_WHITEN_LEN)]
             cbcr_whiten_len: usize,
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]

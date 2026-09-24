@@ -783,11 +783,15 @@ impl Fwht2d for Vec<Complex32> {
 }
 
 trait Whiten {
-    fn whiten(&mut self, rows: usize, cols: usize);
-    fn whiten_reverse(&mut self, rows: usize, cols: usize);
+    fn whiten(&mut self, rows: usize, cols: usize, round: usize);
+    fn whiten_reverse(&mut self, rows: usize, cols: usize, round: usize);
+}
+fn seed(n: usize, round: usize) -> u64 {
+    const NUM_ROUNDS: usize = 4;
+    (n + round * NUM_ROUNDS) as u64
 }
 impl Whiten for Vec<Complex32> {
-    fn whiten(&mut self, rows: usize, cols: usize) {
+    fn whiten(&mut self, rows: usize, cols: usize, round: usize) {
         // major axis is columns, minor axis is rows, reverse from what is usual
         // this is to match subfrequency allocation to rows language from the paper
         // and to perform fwht in-place on the minor axis
@@ -799,22 +803,22 @@ impl Whiten for Vec<Complex32> {
         // X'' = Hadamard(X')
         // X†  = ScrambleSign(PermuteColumns(X"))
 
-        self.permute_columns(rows, cols, 0);
-        self.scramble_signs(1);
+        self.permute_columns(rows, cols, seed(0, round));
+        self.scramble_signs(seed(1, round));
 
         self.fwht_2d_mut(rows, cols);
 
-        self.permute_columns(rows, cols, 2);
-        self.scramble_signs(3);
+        self.permute_columns(rows, cols, seed(2, round));
+        self.scramble_signs(seed(3, round));
     }
-    fn whiten_reverse(&mut self, rows: usize, cols: usize) {
-        self.scramble_signs_reverse(3);
-        self.permute_columns_reverse(rows, cols, 2);
+    fn whiten_reverse(&mut self, rows: usize, cols: usize, round: usize) {
+        self.scramble_signs_reverse(seed(3, round));
+        self.permute_columns_reverse(rows, cols, seed(2, round));
 
         self.fwht_2d_mut(rows, cols);
 
-        self.scramble_signs_reverse(1);
-        self.permute_columns_reverse(rows, cols, 0);
+        self.scramble_signs_reverse(seed(1, round));
+        self.permute_columns_reverse(rows, cols, seed(0, round));
     }
 }
 
@@ -823,10 +827,11 @@ pub struct Whitener<I: Iterator<Item = QuadratureSymbol>> {
     working_iter: std::vec::IntoIter<Complex32>,
     rows: usize,
     cols: usize,
+    rounds: usize,
     reverse: bool,
 }
 impl<I: Iterator<Item = QuadratureSymbol>> Whitener<I> {
-    pub fn new(inner: I, rows: usize, cols: usize, reverse: bool) -> Self {
+    pub fn new(inner: I, rows: usize, cols: usize, rounds: usize, reverse: bool) -> Self {
         assert!(rows.is_power_of_two(), "{rows} rows not a power of two");
         assert_eq!(0, cols % 2, "{cols}");
         Self {
@@ -834,6 +839,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Whitener<I> {
             working_iter: vec![].into_iter(),
             rows,
             cols,
+            rounds,
             reverse,
         }
     }
@@ -844,7 +850,7 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for Whitener<I> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(symbol) = self.working_iter.next() {
-                return Some(unsafe { std::mem::transmute(symbol) });
+                return Some(symbol.into());
             }
             if self.inner.peek().is_none() {
                 return None;
@@ -852,12 +858,16 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for Whitener<I> {
             // collect from inner iter with any necessary padding
             let mut signal = vec![Complex32::ZERO; self.rows * self.cols];
             for (dst, src) in signal.iter_mut().zip(self.inner.by_ref()) {
-                *dst = unsafe { std::mem::transmute(src) };
+                *dst = src.into();
             }
             if self.reverse {
-                signal.whiten_reverse(self.rows, self.cols);
+                for round in 0..self.rounds {
+                    signal.whiten_reverse(self.rows, self.cols, round);
+                }
             } else {
-                signal.whiten(self.rows, self.cols);
+                for round in (0..self.rounds).rev() {
+                    signal.whiten(self.rows, self.cols, round);
+                }
             }
             self.working_iter = signal.into_iter();
         }
