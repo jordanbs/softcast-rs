@@ -2,6 +2,7 @@
 name = "softcast-rs"
 version = "0.1.0"
 edition = "2024"
+default-run = "softcast"
 
 [dependencies]
 bitvec = "1.0.1"
