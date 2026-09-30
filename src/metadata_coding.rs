@@ -61,6 +61,50 @@ where
     })
 }
 
+pub fn compress_metadata_2<'a, M: Iterator<Item = &'a ChunkMetadata>>(
+    y: (&MetadataBitmap, M),
+    cb: (&MetadataBitmap, M),
+    cr: (&MetadataBitmap, M),
+) -> Result<CompressedMetadata2, Box<dyn std::error::Error>> {
+    // 12 bytes per chunk upper limit
+    let size_hint = [&y.1, &cb.1, &cr.1]
+        .into_iter()
+        .map(|chunk_metadatas| chunk_metadatas.size_hint().1)
+        .sum::<Option<usize>>()
+        .unwrap_or_default();
+    let write_buf_len = 12 * size_hint;
+    let write_buf = Vec::with_capacity(write_buf_len);
+    let cursor = std::io::Cursor::new(write_buf);
+
+    let mut encoder = zstd::stream::Encoder::new(cursor, 22)?; // 22 is max compression
+
+    fn compress<'a, W: Write, M: Iterator<Item = &'a ChunkMetadata>>(
+        encoder: &mut zstd::stream::Encoder<W>,
+        metadata_bitmap: &MetadataBitmap,
+        chunk_metadatas: M,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // compress bitmaps
+        encoder.write_all(metadata_bitmap.values.as_raw_slice())?;
+
+        // compress chunks
+        for (idx, metadata) in chunk_metadatas.enumerate() {
+            let mean_i8 = metadata.mean.round() as i8;
+            encoder.write_all(&mean_i8.to_be_bytes())?;
+            if metadata_bitmap.values[idx] {
+                let energy_f16 = f16::from_f32(metadata.energy.sqrt());
+                encoder.write_all(&energy_f16.to_be_bytes())?;
+            }
+        }
+        Ok(())
+    }
+    compress(&mut encoder, y.0, y.1)?;
+    compress(&mut encoder, cb.0, cb.1)?;
+    compress(&mut encoder, cb.0, cr.1)?;
+    let compressed_bytes = encoder.finish()?.into_inner();
+
+    Ok(CompressedMetadata2(compressed_bytes.into()))
+}
+
 pub struct MetadataDecompressor<QI, R: Read> {
     reader: Option<R>,
     decoder: std::cell::OnceCell<zstd::stream::read::Decoder<'static, std::io::BufReader<R>>>,
@@ -73,17 +117,35 @@ pub struct MetadataDecompressor<QI, R: Read> {
 }
 
 impl<QI, R: Read> MetadataDecompressor<QI, R> {
-    pub fn new(reader: R, num_chunks: usize) -> Self {
+    fn default() -> Self {
         Self {
-            reader: Some(reader),
-            decoder: std::cell::OnceCell::new(),
+            reader: None,
             error: None,
-            num_chunks,
+            decoder: std::cell::OnceCell::new(),
+            num_chunks: 0,
             chunk_idx: 0,
             metadata_bitmap: None,
             has_decoded_metadata_bitmap: false,
             _marker: std::marker::PhantomData,
         }
+    }
+    pub fn new(reader: R, num_chunks: usize) -> Self {
+        let mut new_decompressor = Self::default();
+        new_decompressor.reader = Some(reader);
+        new_decompressor.num_chunks = num_chunks;
+        new_decompressor
+    }
+    pub fn into_next(self, num_chunks: usize) -> Self {
+        assert!(self.reader.is_none());
+        assert!(self.decoder.get().is_some());
+        assert!(self.error.is_none());
+        assert_eq!(self.num_chunks, self.chunk_idx);
+        assert!(self.has_decoded_metadata_bitmap);
+
+        let mut new_decompressor = Self::default();
+        new_decompressor.decoder = self.decoder;
+        new_decompressor.num_chunks = num_chunks;
+        new_decompressor
     }
 
     pub fn metadata_bitmap(
@@ -257,6 +319,13 @@ where
         let chunk_metadata_iter = chunk_metadatas.into_iter();
         compress_metadata(&metadata_bitmap, chunk_metadata_iter)
             .expect("Compressing metadata failed.")
+    }
+}
+
+pub struct CompressedMetadata2(Box<[u8]>);
+impl CompressedMetadata2 {
+    pub fn data(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -659,6 +728,69 @@ mod tests {
         let medatadata_out: Vec<ChunkMetadata> = decompressor.map(|r| r.unwrap()).collect();
 
         for (orig, new) in metadata_in.iter().zip(medatadata_out) {
+            assert!((orig.mean - new.mean).abs() < 0.01);
+            assert!((orig.energy - new.energy).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn test_metatada_decompression_multiple() {
+        const NUM_CHUNKS_0: usize = 1024;
+        let metadata_in_0 = vec![
+            ChunkMetadata {
+                mean: 5f32,
+                energy: 6f32,
+            };
+            NUM_CHUNKS_0
+        ];
+        const NUM_CHUNKS_1: usize = 256;
+        let metadata_in_1 = vec![
+            ChunkMetadata {
+                mean: 7f32,
+                energy: 8f32,
+            };
+            NUM_CHUNKS_1
+        ];
+        let metadata_bitmap_0 = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; metadata_in_0.len()],
+        };
+        let metadata_bitmap_1 = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; metadata_in_1.len()],
+        };
+        let compressed_metadata: CompressedMetadata2 = compress_metadata_2(
+            (&metadata_bitmap_0, metadata_in_0.iter()),
+            (&metadata_bitmap_1, metadata_in_1.iter()),
+            (&metadata_bitmap_1, metadata_in_1.iter()),
+        )
+        .expect("CompresMetadata failed");
+        let uncompressed_len = 2 * 16 * (NUM_CHUNKS_0 + 2 * NUM_CHUNKS_1)
+            + (metadata_bitmap_0.values.len() + 2 * metadata_bitmap_1.values.len());
+        let compressed_len = compressed_metadata.data().len();
+        eprintln!("{} -> {}", uncompressed_len, compressed_len);
+
+        let reader = std::io::Cursor::new(compressed_metadata.data());
+        let mut decompressor_0: MetadataDecompressor<(), _> =
+            MetadataDecompressor::new(reader, NUM_CHUNKS_0);
+        let metadata_out_0: Vec<ChunkMetadata> =
+            decompressor_0.by_ref().map(|r| r.unwrap()).collect();
+        let mut decompressor_1: MetadataDecompressor<(), _> =
+            decompressor_0.into_next(NUM_CHUNKS_1);
+        let metadata_out_1: Vec<ChunkMetadata> =
+            decompressor_1.by_ref().map(|r| r.unwrap()).collect();
+        let decompressor_2: MetadataDecompressor<(), _> = decompressor_1.into_next(NUM_CHUNKS_1);
+        let metadata_out_2: Vec<ChunkMetadata> = decompressor_2.map(|r| r.unwrap()).collect();
+
+        for (orig, new) in metadata_in_0
+            .iter()
+            .chain(metadata_in_1.iter())
+            .chain(metadata_in_1.iter())
+            .zip(
+                metadata_out_0
+                    .iter()
+                    .chain(metadata_out_1.iter())
+                    .chain(metadata_out_2.iter()),
+            )
+        {
             assert!((orig.mean - new.mean).abs() < 0.01);
             assert!((orig.energy - new.energy).abs() < 0.01);
         }
