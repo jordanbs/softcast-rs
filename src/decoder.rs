@@ -46,6 +46,7 @@ pub struct FileWriterDecoder {
     hadamard: bool,
     started_writing: bool,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>, // to compute PSNR
+    final_stats: std::cell::OnceCell<Statistics>,
 }
 impl FileWriterDecoder {
     pub fn try_new(
@@ -77,6 +78,7 @@ impl FileWriterDecoder {
             asset_writer: writer,
             started_writing: false,
             original_macro_block_3ds,
+            final_stats: std::cell::OnceCell::new(),
         })
     }
 
@@ -105,12 +107,15 @@ impl FileWriterDecoder {
         loop {
             if let Err(err) = self.run_loop_inner(&mut decoder) {
                 // compute and print stats
+                self.final_stats
+                    .set(decoder.stats.finalize())
+                    .expect("Already initialized.");
                 let Statistics {
                     y_psnr,
                     cb_psnr,
                     cr_psnr,
                     weighted_total_psnr,
-                } = decoder.stats.finalize();
+                } = self.final_stats.get().cloned().unwrap();
                 let cumulative_snr = decoder.signal_stats.signal_to_noise_db();
                 println!("Cumulative SNR: {cumulative_snr:.2}");
                 println!(
@@ -131,6 +136,13 @@ impl FileWriterDecoder {
             self.asset_writer.wait_for_writer_to_be_ready()?;
         }
         Ok(())
+    }
+
+    pub fn final_stats(&self) -> Result<Statistics, Box<dyn std::error::Error>> {
+        self.final_stats
+            .get()
+            .cloned()
+            .ok_or("Stats not yet finalized".into())
     }
 }
 struct Decoder<O: OFDMFrameSynchronizerTrait> {
@@ -351,6 +363,7 @@ fn into_transform_block_3d_dct<
 
     let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
     let mut chunk_metadatas: Vec<ChunkMetadata> = Vec::with_capacity(chunks_per_gop);
+    // TODO: could call collect() instead of take()
     for metadata_result in metadata_decompressor.by_ref().take(chunks_per_gop) {
         chunk_metadatas.push(metadata_result.map_err(|e| e.to_string())?);
     }
@@ -440,11 +453,12 @@ impl PartialStatistics {
         }
     }
 }
-struct Statistics {
-    y_psnr: f64,
-    cb_psnr: f64,
-    cr_psnr: f64,
-    weighted_total_psnr: f64,
+#[derive(Debug, Copy, Clone)]
+pub struct Statistics {
+    pub y_psnr: f64,
+    pub cb_psnr: f64,
+    pub cr_psnr: f64,
+    pub weighted_total_psnr: f64,
 }
 
 impl Drop for FileWriterDecoder {

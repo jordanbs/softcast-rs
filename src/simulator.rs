@@ -63,7 +63,7 @@ pub fn run_simulation(
         }
     });
     encoder.run(&mut mpsc_writer, abort_token)?;
-    drop(mpsc_writer); // finishes the decocder thread
+    drop(mpsc_writer); // finishes the decoder thread
     let _ = decoder_result.join().map_err(|_| "thread panic'd")?; // TODO: preserve inner error
 
     Ok(())
@@ -163,5 +163,79 @@ mod tests {
         )
         .expect("Failed to create decoder.");
         run_simulation(encoder, decoder, noise_power, false, true).expect("run_simulation failed.");
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))] // too slow on debug
+    fn test_encode_decode() {
+        use super::*;
+        let infile = "sample-media/bipbop-768x432-5s.mp4";
+        let outfile = "/tmp/bipbop-768x432-5s.mp4";
+        let _ = std::fs::remove_file(outfile);
+        let gop_len = 2;
+        let per_pixel_config = PerPixelConfiguration {
+            compression_ratio: 0.006,
+            chunk_dimensions: (40, 30, 1),
+        };
+        let mut tap = MacroBlockTap::default();
+        let tap_receiver = tap.take_receiver();
+        let mut encoder = FileReaderEncoder::with_file(
+            infile.into(),
+            gop_len,
+            per_pixel_config.clone(),
+            per_pixel_config.clone(),
+            per_pixel_config.clone(),
+            true,
+            true,
+            Some(tap),
+        )
+        .expect("Failed to create encoder.");
+
+        let mut decoder = FileWriterDecoder::try_new(
+            outfile.into(),
+            encoder.asset_resolution(),
+            encoder.frame_rate(),
+            gop_len,
+            encoder.y_chunk_dimensions(),
+            encoder.cb_chunk_dimensions(),
+            encoder.cr_chunk_dimensions(),
+            true,
+            Some(tap_receiver),
+        )
+        .expect("Failed to create decoder.");
+
+        let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
+        let (stats_sender, stats_receiver) = std::sync::mpsc::sync_channel(0);
+        let abort_token_e = AbortToken::new();
+        let abort_token_d = abort_token_e.clone();
+        let _join_handle = std::thread::spawn(move || {
+            decoder
+                .run(mpsc_reader, abort_token_d)
+                .expect_err("decoder.run() failed.");
+            let stats = decoder.final_stats().expect("Failed to grab final stats.");
+            stats_sender.send(stats).expect("Failed to send stats.");
+        });
+        encoder
+            .run(&mut mpsc_writer, abort_token_e)
+            .expect("encoder.run() failed.");
+        drop(mpsc_writer); // finishes the decoder thread
+
+        let Statistics {
+            y_psnr,
+            cb_psnr,
+            cr_psnr,
+            weighted_total_psnr,
+        } = stats_receiver.recv().expect("Failed to receive stats.");
+        assert!(y_psnr.is_normal());
+        assert!(cb_psnr.is_normal());
+        assert!(cr_psnr.is_normal());
+        assert!(weighted_total_psnr.is_normal());
+        assert!(y_psnr > 20.0, "y_psnr too low: {y_psnr}");
+        assert!(cb_psnr > 20.0, "cb_psnr too low: {cb_psnr}");
+        assert!(cr_psnr > 20.0, "cr_psnr too low: {cr_psnr}");
+        assert!(
+            weighted_total_psnr > 20.0,
+            "weighted_total_psnr too low: {weighted_total_psnr}"
+        );
     }
 }
