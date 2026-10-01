@@ -1036,10 +1036,18 @@ mod tests {
             .into_slice_iter(LENGTH, true)
             .collect();
 
-        let y_compressed_metadata: CompressedMetadata = y_slices_and_metadata
-            .iter()
-            .map(|slice| &slice.chunk_metadata)
-            .into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; y_slices_and_metadata.len()],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (
+                &metadata_bitmap,
+                y_slices_and_metadata.iter().map(|s| &s.chunk_metadata),
+            ),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let y_slices_iter = y_slices_and_metadata.into_iter().map(|slice| slice.slice);
 
         let packetizer: Packetizer = y_compressed_metadata.into();
@@ -1086,8 +1094,15 @@ mod tests {
         let chunks_per_gop =
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-        let y_compressed_metadata: CompressedMetadata =
-            chunks.iter().map(|chunk| &chunk.metadata).into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunks_per_gop],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunks.iter().map(|c| &c.metadata)),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
@@ -1171,8 +1186,15 @@ mod tests {
         let chunks_per_gop =
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-        let y_compressed_metadata: CompressedMetadata =
-            chunks.iter().map(|chunk| &chunk.metadata).into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunks_per_gop],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunks.iter().map(|c| &c.metadata)),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
@@ -1268,7 +1290,15 @@ mod tests {
             cm.energy = idx as f32;
             cm.mean = -(idx as f32);
         }
-        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
+        };
+        let compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunk_metadata.iter()),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let packetizer: Packetizer = compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
         let ofdm_generator: OFDMFrameGenerator<_> = metadata_modulator.flatten().into();
@@ -1331,8 +1361,15 @@ mod tests {
         let chunks_per_gop =
             (LENGTH * asset_height * asset_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
 
-        let y_compressed_metadata: CompressedMetadata =
-            chunks.iter().map(|chunk| &chunk.metadata).into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunks_per_gop],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunks.iter().map(|c| &c.metadata)),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
@@ -1467,8 +1504,12 @@ mod tests {
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
         let compression_ratio = 0.125;
         let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
-        let y_compressed_metadata =
-            CompressedMetadata::new(&metadata_bitmap, chunk_metadatas.iter());
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunk_metadatas.iter()),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let num_included_chunks = metadata_bitmap.values.count_ones();
         let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
         let power_scaler = PowerScaler::new(compressor);
@@ -1613,8 +1654,13 @@ mod tests {
         //         let compression_ratio = 0.234375; // has no error for bipbop
         let compression_ratio = 0.125;
         let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
-        let y_compressed_metadata =
-            CompressedMetadata::new(&metadata_bitmap, chunk_metadatas.iter());
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunk_metadatas.iter()),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
+
         let num_included_chunks = metadata_bitmap.values.count_ones();
         let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
 

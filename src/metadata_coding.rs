@@ -22,42 +22,7 @@ use liquid_sys;
 use std::io::{Read, Write};
 use zstd;
 
-// TODO: compress bitmap of discarded chunks with RLE and huffman
 // TODO: consider using protobuf or similar for metadata binary format
-
-fn compress_metadata<'a, I>(
-    metadata_bitmap: &MetadataBitmap,
-    chunk_metadata_iter: I,
-) -> Result<CompressedMetadata, Box<dyn std::error::Error>>
-where
-    I: Iterator<Item = &'a ChunkMetadata>,
-{
-    let (_, max_chunks) = chunk_metadata_iter.size_hint();
-    let write_buf = Vec::with_capacity(max_chunks.unwrap_or_default());
-    let cursor = std::io::Cursor::new(write_buf);
-
-    let mut encoder = zstd::stream::Encoder::new(cursor, 0)?;
-
-    // [bitmap (len == num_chunks)]
-    // [chunk.mean; (chunk.energy if bitmap==1)]
-
-    encoder.write_all(metadata_bitmap.values.as_raw_slice())?;
-
-    // compress chunks
-    for (idx, chunk_metadata) in chunk_metadata_iter.enumerate() {
-        let mean_i8 = chunk_metadata.mean.round() as i8;
-        encoder.write_all(&mean_i8.to_be_bytes())?;
-        if metadata_bitmap.values[idx] {
-            let energy_f16 = f16::from_f32(chunk_metadata.energy.sqrt());
-            encoder.write_all(&energy_f16.to_be_bytes())?;
-        }
-    }
-    let compressed_bytes = encoder.finish()?.into_inner();
-
-    Ok(CompressedMetadata {
-        data: compressed_bytes.into(),
-    })
-}
 
 pub fn compress_metadata_2<
     'a,
@@ -275,37 +240,6 @@ impl<R: Read> Iterator for MetadataDecompressor<R> {
     }
 }
 
-#[derive(Debug)]
-pub struct CompressedMetadata {
-    data: Box<[u8]>,
-}
-
-impl CompressedMetadata {
-    pub fn new<'a, I: Iterator<Item = &'a ChunkMetadata>>(
-        metadata_bitmap: &MetadataBitmap,
-        chunk_metadata_iter: I,
-    ) -> Self {
-        compress_metadata(metadata_bitmap, chunk_metadata_iter)
-            .expect("Compressing metadata failed.")
-    }
-}
-
-impl<'a, I> From<I> for CompressedMetadata
-where
-    I: Iterator<Item = &'a ChunkMetadata>,
-{
-    fn from(chunk_metadata_iter: I) -> Self {
-        // keeping for legacy tests
-        let chunk_metadatas: Box<_> = chunk_metadata_iter.collect();
-        let metadata_bitmap = MetadataBitmap {
-            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadatas.len()],
-        };
-        let chunk_metadata_iter = chunk_metadatas.into_iter();
-        compress_metadata(&metadata_bitmap, chunk_metadata_iter)
-            .expect("Compressing metadata failed.")
-    }
-}
-
 pub struct CompressedMetadata2(Box<[u8]>);
 impl CompressedMetadata2 {
     pub fn data(&self) -> &[u8] {
@@ -390,11 +324,6 @@ pub mod packetizer {
         }
     }
 
-    impl From<CompressedMetadata> for Packetizer {
-        fn from(compressed_metadata: CompressedMetadata) -> Self {
-            Self::new(compressed_metadata.data)
-        }
-    }
     impl From<CompressedMetadata2> for Packetizer {
         fn from(compressed_metadata: CompressedMetadata2) -> Self {
             Self::new(compressed_metadata.0)
@@ -659,16 +588,24 @@ mod tests {
 
         let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
         let num_chunks = y_chunks.len();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; num_chunks],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, y_chunks.iter().map(|c| &c.metadata)),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
+
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH, true).collect();
-        let y_compressed_metadata: CompressedMetadata =
-            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
 
         eprintln!(
             "orig_size:{} compressed size:{}",
             y_slices.len() * 2 * 4,
-            y_compressed_metadata.data.len()
+            y_compressed_metadata.0.len()
         );
-        let reader = std::io::Cursor::new(y_compressed_metadata.data);
+        let reader = std::io::Cursor::new(y_compressed_metadata.0);
         let decompressor: MetadataDecompressor<_> = MetadataDecompressor::new(reader, num_chunks);
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
             decompressor.map(|r| r.unwrap()).collect();
@@ -683,28 +620,6 @@ mod tests {
                 y_slice.chunk_metadata.energy,
                 y_metadata.energy
             );
-        }
-    }
-
-    #[test]
-    fn test_metatada_decompression() {
-        let num_chunks = 1024;
-        let metadata_in = vec![
-            ChunkMetadata {
-                mean: 5f32,
-                energy: 6f32,
-            };
-            num_chunks
-        ];
-        let compressed_metadata: CompressedMetadata = metadata_in.iter().into();
-        let reader = std::io::Cursor::new(compressed_metadata.data);
-        let decompressor: MetadataDecompressor<_> = MetadataDecompressor::new(reader, num_chunks);
-
-        let medatadata_out: Vec<ChunkMetadata> = decompressor.map(|r| r.unwrap()).collect();
-
-        for (orig, new) in metadata_in.iter().zip(medatadata_out) {
-            assert!((orig.mean - new.mean).abs() < 0.01);
-            assert!((orig.energy - new.energy).abs() < 0.01);
         }
     }
 
@@ -783,9 +698,7 @@ mod tests {
     #[test]
     fn test_depacketizer() {
         let data = vec![0xbau8; 2056];
-        let compressed_metadata = CompressedMetadata {
-            data: data.clone().into(),
-        };
+        let compressed_metadata = CompressedMetadata2(data.clone().into());
         let packetizer = Packetizer::from(compressed_metadata);
 
         let mut depacketizer: Depacketizer<_> = packetizer.into();
@@ -808,9 +721,7 @@ mod tests {
             }
         }
 
-        let compressed_metadata = CompressedMetadata {
-            data: data.clone().into(),
-        };
+        let compressed_metadata = CompressedMetadata2(data.clone().into());
         let packetizer = Packetizer::from(compressed_metadata);
 
         let mut depacketizer: Depacketizer<_> = packetizer.into();
@@ -833,9 +744,7 @@ mod tests {
             }
         }
 
-        let compressed_metadata = CompressedMetadata {
-            data: data.clone().into(),
-        };
+        let compressed_metadata = CompressedMetadata2(data.clone().into());
         let packetizer = Packetizer::from(compressed_metadata);
 
         let mut depacketizer: Depacketizer<_> = packetizer.into();
@@ -852,9 +761,7 @@ mod tests {
     #[test]
     fn test_depacketizer_extra_data_in_iterator() {
         let data = vec![0xbau8; 8];
-        let compressed_metadata = CompressedMetadata {
-            data: data.clone().into(),
-        };
+        let compressed_metadata = CompressedMetadata2(data.clone().into());
         let packetizer = Packetizer::from(compressed_metadata);
 
         let zeros = [0u8; ENCODED_MESSAGE_LENGTH];
@@ -891,9 +798,16 @@ mod tests {
 
         let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
         let num_chunks = y_chunks.len();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; num_chunks],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, y_chunks.iter().map(|c| &c.metadata)),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH, true).collect();
-        let y_compressed_metadata: CompressedMetadata =
-            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
@@ -933,9 +847,16 @@ mod tests {
 
         let y_chunks: Box<_> = y_dct.chunks_iter((1, 30, 40)).collect();
         let num_chunks = y_chunks.len();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; num_chunks],
+        };
+        let y_compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, y_chunks.iter().map(|c| &c.metadata)),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH, true).collect();
-        let y_compressed_metadata: CompressedMetadata =
-            y_slices.iter().map(|slice| &slice.chunk_metadata).into();
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();

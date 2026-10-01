@@ -609,7 +609,15 @@ mod tests {
             cm.energy = idx as f32;
             cm.mean = -(idx as f32);
         }
-        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
+        };
+        let compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunk_metadata.iter()),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let packetizer: Packetizer = compressed_metadata.into();
 
         let orig_encoded_packets: Vec<_> = packetizer.collect();
@@ -629,7 +637,15 @@ mod tests {
             cm.energy = idx as f32;
             cm.mean = -(idx as f32);
         }
-        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
+        };
+        let compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunk_metadata.iter()),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let packetizer: Packetizer = compressed_metadata.into();
 
         let orig_encoded_packets: Vec<_> = packetizer.collect();
@@ -657,7 +673,15 @@ mod tests {
             cm.energy = idx as f32;
             cm.mean = -(idx as f32) % i8::MAX as f32;
         }
-        let compressed_metadata: CompressedMetadata = chunk_metadata.iter().into();
+        let metadata_bitmap = MetadataBitmap {
+            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
+        };
+        let compressed_metadata = compress_metadata_2(
+            (&metadata_bitmap, chunk_metadata.iter()),
+            (&metadata_bitmap, std::iter::empty()),
+            (&metadata_bitmap, std::iter::empty()),
+        )
+        .expect("Failed to compress");
         let packetizer: Packetizer = compressed_metadata.into();
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
