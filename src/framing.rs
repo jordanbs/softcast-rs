@@ -1039,7 +1039,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; y_slices_and_metadata.len()],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (
                 &metadata_bitmap,
                 y_slices_and_metadata.iter().map(|s| &s.chunk_metadata),
@@ -1097,7 +1097,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunks_per_gop],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunks.iter().map(|c| &c.metadata)),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -1189,7 +1189,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunks_per_gop],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunks.iter().map(|c| &c.metadata)),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -1293,7 +1293,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
         };
-        let compressed_metadata = compress_metadata_2(
+        let compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunk_metadata.iter()),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -1364,7 +1364,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunks_per_gop],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunks.iter().map(|c| &c.metadata)),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -1504,7 +1504,7 @@ mod tests {
         let chunk_metadatas: Box<_> = chunks.iter().map(|chunk| chunk.metadata).collect();
         let compression_ratio = 0.125;
         let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunk_metadatas.iter()),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -1654,7 +1654,7 @@ mod tests {
         //         let compression_ratio = 0.234375; // has no error for bipbop
         let compression_ratio = 0.125;
         let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunk_metadatas.iter()),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),

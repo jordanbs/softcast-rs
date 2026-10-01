@@ -242,7 +242,7 @@ fn metadata_signal(
     cb: (&MetadataBitmap, &[Chunk<CbPixelComponentType>]),
     cr: (&MetadataBitmap, &[Chunk<CrPixelComponentType>]),
 ) -> impl Iterator<Item = QuadratureSymbol> + use<> {
-    let compressed_metadata = compress_metadata_2(
+    let compressed_metadata = compress_metadata(
         (&y.0, y.1.metadata_iter()),
         (&cb.0, cb.1.metadata_iter()),
         (&cr.0, cr.1.metadata_iter()),

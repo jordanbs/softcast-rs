@@ -612,7 +612,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
         };
-        let compressed_metadata = compress_metadata_2(
+        let compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunk_metadata.iter()),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -640,7 +640,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
         };
-        let compressed_metadata = compress_metadata_2(
+        let compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunk_metadata.iter()),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -676,7 +676,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
         };
-        let compressed_metadata = compress_metadata_2(
+        let compressed_metadata = compress_metadata(
             (&metadata_bitmap, chunk_metadata.iter()),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),

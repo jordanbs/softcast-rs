@@ -24,7 +24,7 @@ use zstd;
 
 // TODO: consider using protobuf or similar for metadata binary format
 
-pub fn compress_metadata_2<
+pub fn compress_metadata<
     'a,
     Y: Iterator<Item = &'a ChunkMetadata>,
     B: Iterator<Item = &'a ChunkMetadata>,
@@ -591,7 +591,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; num_chunks],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, y_chunks.iter().map(|c| &c.metadata)),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -647,7 +647,7 @@ mod tests {
         let metadata_bitmap_1 = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; metadata_in_1.len()],
         };
-        let compressed_metadata: CompressedMetadata2 = compress_metadata_2(
+        let compressed_metadata: CompressedMetadata2 = compress_metadata(
             (&metadata_bitmap_0, metadata_in_0.iter()),
             (&metadata_bitmap_1, metadata_in_1.iter()),
             (&metadata_bitmap_1, metadata_in_1.iter()),
@@ -801,7 +801,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; num_chunks],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, y_chunks.iter().map(|c| &c.metadata)),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
@@ -850,7 +850,7 @@ mod tests {
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; num_chunks],
         };
-        let y_compressed_metadata = compress_metadata_2(
+        let y_compressed_metadata = compress_metadata(
             (&metadata_bitmap, y_chunks.iter().map(|c| &c.metadata)),
             (&metadata_bitmap, std::iter::empty()),
             (&metadata_bitmap, std::iter::empty()),
