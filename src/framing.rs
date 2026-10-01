@@ -1100,11 +1100,11 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
+        let mut synchronizer: OFDMFrameSynchronizer<_> =
             framer.map(|frame| frame.into_box_complex32_slice()).into();
 
-        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.by_ref().into();
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
 
         let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
@@ -1118,9 +1118,6 @@ mod tests {
         let num_slices = chunks_per_gop.next_power_of_two();
         let mut array3d_view: ndarray::Array3<f32> =
             ndarray::Array3::zeros((num_slices, chunk_dim.1, chunk_dim.2));
-
-        let synchronizer: OFDMFrameSynchronizer<_> =
-            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
@@ -1189,11 +1186,11 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
+        let mut synchronizer: OFDMFrameSynchronizer<_> =
             framer.map(|frame| frame.into_box_complex32_slice()).into();
 
-        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.by_ref().into();
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
 
         let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
@@ -1216,9 +1213,6 @@ mod tests {
             asset_height,
             asset_width,
         ));
-
-        let synchronizer: OFDMFrameSynchronizer<_> =
-            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
 
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
@@ -1283,8 +1277,8 @@ mod tests {
             .map(|frame| frame.into_box_complex32_slice())
             .into();
         let metadata_demodulator: MetadataDemodulator<_> = ofdm_synchronizer.into();
-        let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<(), _> =
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
+        let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, chunk_metadata.len());
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
@@ -1353,11 +1347,11 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
+        let mut synchronizer: OFDMFrameSynchronizer<_> =
             framer.map(|frame| frame.into_box_complex32_slice()).into();
 
-        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.by_ref().into();
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
 
         let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
@@ -1381,8 +1375,6 @@ mod tests {
             asset_width,
         ));
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
-            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
         let metadata_bitmap = MetadataBitmap {
             values: bitvec::bitbox!(u8, bitvec::order::Lsb0; 1; chunks_per_gop),
         };
@@ -1493,11 +1485,11 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
+        let mut synchronizer: OFDMFrameSynchronizer<_> =
             framer.map(|frame| frame.into_box_complex32_slice()).into();
 
-        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.by_ref().into();
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
 
         let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
@@ -1534,8 +1526,6 @@ mod tests {
             asset_width,
         ));
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
-            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
         let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 
@@ -1651,11 +1641,11 @@ mod tests {
         let framer: OFDMFrameGenerator<_> =
             metadata_modulator.flatten().chain(slice_modulator).into();
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
+        let mut synchronizer: OFDMFrameSynchronizer<_> =
             framer.map(|frame| frame.into_box_complex32_slice()).into();
 
-        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.into();
-        let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
+        let metadata_demodulator: MetadataDemodulator<_> = synchronizer.by_ref().into();
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
 
         let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
         let chunk_metadatas: Vec<ChunkMetadata> = metadata_decompressor
@@ -1693,8 +1683,6 @@ mod tests {
             frame_width,
         ));
 
-        let synchronizer: OFDMFrameSynchronizer<_> =
-            metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
         let slice_demodulator: SliceDemodulator<'_, YPixelComponentType, _> =
             SliceDemodulator::new(chunk_dim, metadata_bitmap, synchronizer, &mut array3d);
 

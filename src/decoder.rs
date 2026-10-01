@@ -421,7 +421,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         Box<dyn std::error::Error>,
     > {
         let demodulator: MetadataDemodulator<_> = self.by_ref().into();
-        let depacketizer: Depacketizer<_, MetadataDemodulator<&mut O>> = demodulator.into();
+        let depacketizer: Depacketizer<_> = demodulator.into();
 
         fn chunks_per_gop(
             gop_len: usize,
@@ -455,12 +455,11 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
             PixelComponentType::Cr,
         );
 
-        let mut y_decompressor: MetadataDecompressor<&mut O, _> =
-            MetadataDecompressor::new(depacketizer, y_chunks_per_gop);
+        let mut y_decompressor = MetadataDecompressor::new(depacketizer, y_chunks_per_gop);
 
-        fn next_metadata<PixelType: HasPixelComponentType>(
+        fn next_metadata<PixelType: HasPixelComponentType, R: std::io::Read>(
             chunks_per_gop: usize,
-            decompressor: &mut impl MetadataDecompressorTrait,
+            decompressor: &mut MetadataDecompressor<R>,
         ) -> Result<MetadataInfo<PixelType>, Box<dyn std::error::Error>> {
             let parse_result: Result<Box<[ChunkMetadata]>, _> =
                 decompressor.take(chunks_per_gop).collect(); // using take for a size hint

@@ -16,8 +16,6 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::compressor::*;
-use crate::modulation::IntoInnerQuadratureSymbolIter;
-use crate::modulation::QuadratureSymbol;
 use crate::source_coding::chunk::*;
 use half::f16;
 use liquid_sys;
@@ -108,7 +106,7 @@ pub fn compress_metadata_2<
     Ok(CompressedMetadata2(compressed_bytes.into()))
 }
 
-pub struct MetadataDecompressor<QI, R: Read> {
+pub struct MetadataDecompressor<R: Read> {
     reader: Option<R>,
     decoder: std::cell::OnceCell<zstd::stream::read::Decoder<'static, std::io::BufReader<R>>>,
     error: Option<std::rc::Rc<dyn std::error::Error>>,
@@ -116,26 +114,9 @@ pub struct MetadataDecompressor<QI, R: Read> {
     chunk_idx: usize,
     metadata_bitmap: Option<MetadataBitmap>,
     has_decoded_metadata_bitmap: bool,
-    _marker: std::marker::PhantomData<QI>,
 }
 
-pub trait MetadataDecompressorTrait:
-    Iterator<Item = Result<ChunkMetadata, std::rc::Rc<dyn std::error::Error>>>
-{
-    fn take_metadata_bitmap(
-        &mut self,
-    ) -> Result<MetadataBitmap, std::rc::Rc<dyn std::error::Error>>;
-}
-impl<QI, R: Read> MetadataDecompressorTrait for MetadataDecompressor<QI, R> {
-    fn take_metadata_bitmap(
-        &mut self,
-    ) -> Result<MetadataBitmap, std::rc::Rc<dyn std::error::Error>> {
-        self.ensure_metadata_bitmap()?;
-        Ok(self.metadata_bitmap.take().unwrap())
-    }
-}
-
-impl<QI, R: Read> MetadataDecompressor<QI, R> {
+impl<R: Read> MetadataDecompressor<R> {
     fn default() -> Self {
         Self {
             reader: None,
@@ -145,7 +126,6 @@ impl<QI, R: Read> MetadataDecompressor<QI, R> {
             chunk_idx: 0,
             metadata_bitmap: None,
             has_decoded_metadata_bitmap: false,
-            _marker: std::marker::PhantomData,
         }
     }
     pub fn new(reader: R, num_chunks: usize) -> Self {
@@ -231,7 +211,7 @@ impl<QI, R: Read> MetadataDecompressor<QI, R> {
     }
 }
 
-impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
+impl<R: Read> Iterator for MetadataDecompressor<R> {
     type Item = Result<ChunkMetadata, std::rc::Rc<dyn std::error::Error>>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.error.is_some() {
@@ -292,21 +272,6 @@ impl<QI, R: Read> Iterator for MetadataDecompressor<QI, R> {
                 }
             }
         }
-    }
-}
-
-impl<QI: Iterator<Item = QuadratureSymbol>, R: Read + IntoInnerQuadratureSymbolIter<QI>>
-    IntoInnerQuadratureSymbolIter<QI> for MetadataDecompressor<QI, R>
-{
-    fn into_inner_quadrature_symbol_iter(self) -> QI {
-        let reader = match self.reader {
-            Some(reader) => reader,
-            None => {
-                let decoder = self.decoder.into_inner().unwrap();
-                decoder.finish().into_inner()
-            }
-        };
-        reader.into_inner_quadrature_symbol_iter()
     }
 }
 
@@ -502,17 +467,16 @@ pub mod packetizer {
         }
     }
 
-    pub struct Depacketizer<I: Iterator<Item = EncodedPacket>, QI> {
+    pub struct Depacketizer<I: Iterator<Item = EncodedPacket>> {
         packetizer: *mut liquid_sys::packetizer_s,
         packet_iter: I,
         working_cursor: std::io::Cursor<Box<[u8]>>,
         has_read_first_packet: bool,
         payload_len: std::cell::OnceCell<usize>,
         bytes_read: usize,
-        _marker: std::marker::PhantomData<QI>,
     }
 
-    impl<I: Iterator<Item = EncodedPacket>, QI> From<I> for Depacketizer<I, QI> {
+    impl<I: Iterator<Item = EncodedPacket>> From<I> for Depacketizer<I> {
         fn from(packet_iter: I) -> Self {
             let packetizer = new_packetizer();
 
@@ -523,22 +487,11 @@ pub mod packetizer {
                 has_read_first_packet: false,
                 payload_len: std::cell::OnceCell::new(),
                 bytes_read: 0,
-                _marker: std::marker::PhantomData,
             }
         }
     }
 
-    impl<
-        I: Iterator<Item = EncodedPacket> + IntoInnerQuadratureSymbolIter<QI>,
-        QI: Iterator<Item = QuadratureSymbol>,
-    > IntoInnerQuadratureSymbolIter<QI> for Depacketizer<I, QI>
-    {
-        fn into_inner_quadrature_symbol_iter(self) -> QI {
-            self.packet_iter.into_inner_quadrature_symbol_iter()
-        }
-    }
-
-    impl<I: Iterator<Item = EncodedPacket>, QI> Depacketizer<I, QI> {
+    impl<I: Iterator<Item = EncodedPacket>> Depacketizer<I> {
         pub fn into_inner(self) -> I {
             self.packet_iter
         }
@@ -603,7 +556,7 @@ pub mod packetizer {
         }
     }
 
-    impl<I: Iterator<Item = EncodedPacket>, QI> Read for Depacketizer<I, QI> {
+    impl<I: Iterator<Item = EncodedPacket>> Read for Depacketizer<I> {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let mut buf = buf;
             let mut bytes_in_this_read = 0;
@@ -716,8 +669,7 @@ mod tests {
             y_compressed_metadata.data.len()
         );
         let reader = std::io::Cursor::new(y_compressed_metadata.data);
-        let decompressor: MetadataDecompressor<(), _> =
-            MetadataDecompressor::new(reader, num_chunks);
+        let decompressor: MetadataDecompressor<_> = MetadataDecompressor::new(reader, num_chunks);
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
             decompressor.map(|r| r.unwrap()).collect();
 
@@ -746,8 +698,7 @@ mod tests {
         ];
         let compressed_metadata: CompressedMetadata = metadata_in.iter().into();
         let reader = std::io::Cursor::new(compressed_metadata.data);
-        let decompressor: MetadataDecompressor<(), _> =
-            MetadataDecompressor::new(reader, num_chunks);
+        let decompressor: MetadataDecompressor<_> = MetadataDecompressor::new(reader, num_chunks);
 
         let medatadata_out: Vec<ChunkMetadata> = decompressor.map(|r| r.unwrap()).collect();
 
@@ -793,15 +744,14 @@ mod tests {
         eprintln!("{} -> {}", uncompressed_len, compressed_len);
 
         let reader = std::io::Cursor::new(compressed_metadata.data());
-        let mut decompressor_0: MetadataDecompressor<(), _> =
+        let mut decompressor_0: MetadataDecompressor<_> =
             MetadataDecompressor::new(reader, NUM_CHUNKS_0);
         let metadata_out_0: Vec<ChunkMetadata> =
             decompressor_0.by_ref().map(|r| r.unwrap()).collect();
-        let mut decompressor_1: MetadataDecompressor<(), _> =
-            decompressor_0.into_next(NUM_CHUNKS_1);
+        let mut decompressor_1: MetadataDecompressor<_> = decompressor_0.into_next(NUM_CHUNKS_1);
         let metadata_out_1: Vec<ChunkMetadata> =
             decompressor_1.by_ref().map(|r| r.unwrap()).collect();
-        let decompressor_2: MetadataDecompressor<(), _> = decompressor_1.into_next(NUM_CHUNKS_1);
+        let decompressor_2: MetadataDecompressor<_> = decompressor_1.into_next(NUM_CHUNKS_1);
         let metadata_out_2: Vec<ChunkMetadata> = decompressor_2.map(|r| r.unwrap()).collect();
 
         for (orig, new) in metadata_in_0
@@ -838,7 +788,7 @@ mod tests {
         };
         let packetizer = Packetizer::from(compressed_metadata);
 
-        let mut depacketizer: Depacketizer<_, ()> = packetizer.into();
+        let mut depacketizer: Depacketizer<_> = packetizer.into();
         let mut new_data = vec![];
         let read_bytes = depacketizer
             .read_to_end(&mut new_data)
@@ -863,7 +813,7 @@ mod tests {
         };
         let packetizer = Packetizer::from(compressed_metadata);
 
-        let mut depacketizer: Depacketizer<_, ()> = packetizer.into();
+        let mut depacketizer: Depacketizer<_> = packetizer.into();
         let mut new_data = vec![];
         let read_bytes = depacketizer
             .read_to_end(&mut new_data)
@@ -888,7 +838,7 @@ mod tests {
         };
         let packetizer = Packetizer::from(compressed_metadata);
 
-        let mut depacketizer: Depacketizer<_, ()> = packetizer.into();
+        let mut depacketizer: Depacketizer<_> = packetizer.into();
         let mut new_data = vec![];
         let read_bytes = depacketizer
             .read_to_end(&mut new_data)
@@ -912,7 +862,7 @@ mod tests {
             encoded_data: zeros,
         };
 
-        let mut depacketizer: Depacketizer<_, ()> =
+        let mut depacketizer: Depacketizer<_> =
             packetizer.chain([zeros_encoded_tail].into_iter()).into();
 
         let mut new_data = vec![];
@@ -947,8 +897,8 @@ mod tests {
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
-        let depacketizer: Depacketizer<_, ()> = Depacketizer::from(encoded_packets.into_iter());
-        let decompressor: MetadataDecompressor<(), _> =
+        let depacketizer: Depacketizer<_> = Depacketizer::from(encoded_packets.into_iter());
+        let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, num_chunks);
 
         let y_decompressed_metadata: Box<[ChunkMetadata]> =
@@ -989,8 +939,8 @@ mod tests {
 
         let packetizer: Packetizer = y_compressed_metadata.into();
         let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
-        let depacketizer: Depacketizer<_, ()> = encoded_packets.into_iter().into();
-        let decompressor: MetadataDecompressor<(), _> =
+        let depacketizer: Depacketizer<_> = encoded_packets.into_iter().into();
+        let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, num_chunks);
 
         let y_decompressed_metadata: Box<[ChunkMetadata]> =

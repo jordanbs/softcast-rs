@@ -245,14 +245,6 @@ pub mod metadata {
         }
     }
 
-    impl<I: Iterator<Item = QuadratureSymbol>> IntoInnerQuadratureSymbolIter<I>
-        for MetadataDemodulator<I>
-    {
-        fn into_inner_quadrature_symbol_iter(self) -> I {
-            self.inner
-        }
-    }
-
     // Adds drop support to modemcf, necessary to work around rustc E0509.
     struct ModemCFWrapper {
         ptr: liquid_sys::modemcf,
@@ -263,10 +255,6 @@ pub mod metadata {
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
         }
     }
-}
-
-pub trait IntoInnerQuadratureSymbolIter<I: Iterator<Item = QuadratureSymbol>> {
-    fn into_inner_quadrature_symbol_iter(self) -> I;
 }
 
 pub mod slices {
@@ -650,8 +638,8 @@ mod tests {
             orig_encoded_packets.clone().into_iter().into();
         let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
 
-        let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<(), _> =
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
+        let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, chunk_metadata.len());
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
@@ -674,8 +662,8 @@ mod tests {
         let metadata_modulator: MetadataModulator<_> = packetizer.into();
 
         let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
-        let depacketizer: Depacketizer<_, ()> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<(), _> =
+        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
+        let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, chunk_metadata.len());
         let new_chunk_metatata: Vec<ChunkMetadata> =
             decompressor.map(|result| result.unwrap()).collect();
