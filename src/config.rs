@@ -17,35 +17,21 @@
 
 pub const FRAME_LEN: usize = 0x400; // ofdm symbols per frame
 
-pub const DEFAULT_Y_WHITEN_LEN: usize = 0x20000; // TODO: whiten crashes when a frame is missed
-pub const DEFAULT_CBCR_WHITEN_LEN: usize = 0x4000;
+pub const DEFAULT_WHITEN_LEN: usize = 0x20000;
 pub const DEFAULT_WHITEN_ROUNDS: usize = 2;
-
-use crate::pixel_buffer::{HasPixelComponentType, PixelComponentType};
 
 #[derive(Clone, Debug)]
 pub struct Config {
     pub frame_length: usize,
-    pub y: PerPixelTypeConfig,
-    pub cbcr: PerPixelTypeConfig,
-}
-#[derive(Clone, Debug)]
-pub struct PerPixelTypeConfig {
-    pub whiten_length: usize, // ofdm frames to whiten; must be a power of 2
+    pub whiten_length: usize, // in OFDM symbols
     pub whiten_rounds: usize,
 }
 impl Default for Config {
     fn default() -> Self {
         Self {
             frame_length: FRAME_LEN,
-            y: PerPixelTypeConfig {
-                whiten_length: DEFAULT_Y_WHITEN_LEN,
-                whiten_rounds: DEFAULT_WHITEN_ROUNDS,
-            },
-            cbcr: PerPixelTypeConfig {
-                whiten_length: DEFAULT_CBCR_WHITEN_LEN,
-                whiten_rounds: DEFAULT_WHITEN_ROUNDS,
-            },
+            whiten_length: DEFAULT_WHITEN_LEN,
+            whiten_rounds: DEFAULT_WHITEN_ROUNDS,
         }
     }
 }
@@ -71,13 +57,6 @@ impl Config {
     #[cfg(test)]
     pub fn lock() -> std::sync::MutexGuard<'static, ()> {
         CONFIG_LOCK.lock().expect("failed to grab config lock")
-    }
-    pub fn per_pixel_type<PixelType: HasPixelComponentType>(&self) -> PerPixelTypeConfig {
-        match PixelType::TYPE {
-            PixelComponentType::Y => &self.y,
-            PixelComponentType::Cb | PixelComponentType::Cr => &self.cbcr,
-        }
-        .clone()
     }
 }
 

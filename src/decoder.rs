@@ -20,6 +20,7 @@
 use crate::asset_reader_writer::asset_writer::*;
 use crate::asset_reader_writer::*;
 use crate::channel_coding::slice::*;
+use crate::compressor::*;
 use crate::config::*;
 use crate::framing::*;
 use crate::metadata_coding::packetizer::*;
@@ -194,74 +195,36 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
         }
     }
 
-    pub fn next_gop(&mut self) -> Result<Box<[CVPixelBufferWrapper]>, Box<dyn std::error::Error>> {
-        let y_dct_out = into_transform_block_3d_dct(
-            &mut self.frame_synchronizer,
-            self.gop_len,
-            self.asset_resolution,
-            self.y_chunk_dim,
-            self.hadamard,
-            self.snr, // a bit stale
-        )
-        .inspect_err(|_err| {
-            println!(
-                "Fatal SNR: {:.2}",
-                self.frame_synchronizer.signal_to_noise_db()
+    fn next_gop(&mut self) -> Result<Box<[CVPixelBufferWrapper]>, Box<dyn std::error::Error>> {
+        let (y_dct, cb_dct, cr_dct) = self
+            .frame_synchronizer
+            .next_gop(
+                self.gop_len,
+                self.asset_resolution,
+                self.y_chunk_dim,
+                self.cb_chunk_dim,
+                self.cr_chunk_dim,
+                self.hadamard,
+                self.snr,
             )
-        })?;
-
+            .inspect_err(|_err| {
+                println!(
+                    "Fatal SNR: {:.2}",
+                    self.frame_synchronizer.signal_to_noise_db()
+                )
+            })?;
         self.snr = self.frame_synchronizer.signal_to_noise_ratio();
         self.signal_stats += self.frame_synchronizer.current_signal_stats();
         self.frame_synchronizer.reset();
         self.frame_synchronizer.reset_seeking_frame_index();
 
         self.gops_received += 1;
-        eprintln!("Y GOPS Received: {}", self.gops_received);
-
-        let cb_dct_out = into_transform_block_3d_dct(
-            &mut self.frame_synchronizer,
-            self.gop_len,
-            self.asset_resolution,
-            self.cb_chunk_dim,
-            self.hadamard,
-            self.snr,
-        )
-        .inspect_err(|_err| {
-            println!(
-                "Fatal SNR: {:.2}",
-                self.frame_synchronizer.signal_to_noise_db()
-            )
-        })?;
-        self.snr = self.frame_synchronizer.signal_to_noise_ratio();
-        self.signal_stats += self.frame_synchronizer.current_signal_stats();
-        self.frame_synchronizer.reset();
-        self.frame_synchronizer.reset_seeking_frame_index();
-        eprintln!("Cb GOPS Received: {}", self.gops_received);
-
-        let cr_dct_out = into_transform_block_3d_dct(
-            &mut self.frame_synchronizer,
-            self.gop_len,
-            self.asset_resolution,
-            self.cr_chunk_dim,
-            self.hadamard,
-            self.snr,
-        )
-        .inspect_err(|_err| {
-            println!(
-                "Fatal SNR: {:.2}",
-                self.frame_synchronizer.signal_to_noise_db()
-            )
-        })?;
-        self.snr = self.frame_synchronizer.signal_to_noise_ratio();
-        self.signal_stats += self.frame_synchronizer.current_signal_stats();
-        self.frame_synchronizer.reset();
-        self.frame_synchronizer.reset_seeking_frame_index();
-        eprintln!("Cr GOPS Received: {}", self.gops_received);
+        eprintln!("GOPS Received: {}", self.gops_received);
 
         let new_macro_block_3d = MacroBlock3D {
-            y_components: y_dct_out.into(),
-            cb_components: cb_dct_out.into(),
-            cr_components: cr_dct_out.into(),
+            y_components: y_dct.into(),
+            cb_components: cb_dct.into(),
+            cr_components: cr_dct.into(),
             gop_len: self.gop_len,
         };
 
@@ -322,114 +285,288 @@ fn slices_allocation<PixelType: HasPixelComponentType>(
     ))
 }
 
-fn into_transform_block_3d_dct<
-    PixelType: HasPixelComponentType,
-    O: Iterator<Item = QuadratureSymbol>,
->(
-    synchronizer: &mut O,
-    gop_len: usize,
-    asset_resolution: (usize, usize),
-    chunk_dim: (usize, usize, usize),
-    hadamard: bool,
-    snr: f64,
-) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
-    let (frame_width, frame_height) = (
-        asset_resolution.0 / PixelType::TYPE.interleave_step(),
-        asset_resolution.1 / PixelType::TYPE.vertical_subsampling(),
-    );
-    let chunks_per_gop =
-        (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2);
+trait SignalDecoder {
+    fn next_gop(
+        &mut self,
+        gop_len: usize,
+        asset_resolution: (usize, usize),
+        y_chunk_dim: (usize, usize, usize),
+        cb_chunk_dim: (usize, usize, usize),
+        cr_chunk_dim: (usize, usize, usize),
+        hadamard: bool,
+        snr: f64,
+    ) -> Result<
+        (
+            TransformBlock3DDCT<YPixelComponentType>,
+            TransformBlock3DDCT<CbPixelComponentType>,
+            TransformBlock3DDCT<CrPixelComponentType>,
+        ),
+        Box<dyn std::error::Error>,
+    >;
+    fn de_whiten<'a>(&'a mut self) -> impl Iterator<Item = QuadratureSymbol> + 'a;
+    fn next_metadatas(
+        &mut self,
+        gop_len: usize,
+        asset_resolution: (usize, usize),
+        y_chunk_dim: (usize, usize, usize),
+        cb_chunk_dim: (usize, usize, usize),
+        cr_chunk_dim: (usize, usize, usize),
+    ) -> Result<
+        (
+            MetadataInfo<YPixelComponentType>,
+            MetadataInfo<CbPixelComponentType>,
+            MetadataInfo<CrPixelComponentType>,
+        ),
+        Box<dyn std::error::Error>,
+    >;
+    fn next_dct<PixelType: HasPixelComponentType>(
+        &mut self,
+        metadata: MetadataInfo<PixelType>,
+        gop_len: usize,
+        asset_resolution: (usize, usize),
+        chunk_dim: (usize, usize, usize),
+        hadamard: bool,
+        snr: f64,
+    ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>>;
+}
+impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
+    fn next_gop(
+        &mut self,
+        gop_len: usize,
+        asset_resolution: (usize, usize),
+        y_chunk_dim: (usize, usize, usize),
+        cb_chunk_dim: (usize, usize, usize),
+        cr_chunk_dim: (usize, usize, usize),
+        hadamard: bool,
+        snr: f64,
+    ) -> Result<
+        (
+            TransformBlock3DDCT<YPixelComponentType>,
+            TransformBlock3DDCT<CbPixelComponentType>,
+            TransformBlock3DDCT<CrPixelComponentType>,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let mut clear_signal = self.de_whiten();
+        let (y_metadata, cb_metadata, cr_metadata) = clear_signal.next_metadatas(
+            gop_len,
+            asset_resolution,
+            y_chunk_dim,
+            cb_chunk_dim,
+            cr_chunk_dim,
+        )?;
+        let y_dct = clear_signal.next_dct(
+            y_metadata,
+            gop_len,
+            asset_resolution,
+            y_chunk_dim,
+            hadamard,
+            snr,
+        )?;
+        let cb_dct = clear_signal.next_dct(
+            cb_metadata,
+            gop_len,
+            asset_resolution,
+            cb_chunk_dim,
+            hadamard,
+            snr,
+        )?;
+        let cr_dct = clear_signal.next_dct(
+            cr_metadata,
+            gop_len,
+            asset_resolution,
+            cr_chunk_dim,
+            hadamard,
+            snr,
+        )?;
 
-    // If whiten_len == 0, skip whitening.
-    let PerPixelTypeConfig {
-        whiten_length,
-        whiten_rounds,
-    } = Config::get().per_pixel_type::<PixelType>();
-    let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_length {
-        let de_whitener = Whitener::new(
-            synchronizer,
-            NUM_SUBCARRIERS,
-            (1 + whiten_length) / NUM_SUBCARRIERS,
+        Ok((y_dct, cb_dct, cr_dct))
+    }
+
+    fn de_whiten<'a>(&'a mut self) -> impl Iterator<Item = QuadratureSymbol> + 'a {
+        // If whiten_len == 0, skip whitening.
+        let Config {
+            frame_length: _,
+            whiten_length,
             whiten_rounds,
-            true,
+        } = Config::get();
+        let coerced: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_length {
+            let de_whitener = Whitener::new(
+                self,
+                NUM_SUBCARRIERS,
+                (1 + whiten_length) / NUM_SUBCARRIERS,
+                whiten_rounds,
+                true,
+            );
+            Box::new(de_whitener)
+        } else {
+            Box::new(self)
+        };
+        coerced
+    }
+
+    fn next_metadatas(
+        &mut self,
+        gop_len: usize,
+        asset_resolution: (usize, usize),
+        y_chunk_dim: (usize, usize, usize),
+        cb_chunk_dim: (usize, usize, usize),
+        cr_chunk_dim: (usize, usize, usize),
+    ) -> Result<
+        (
+            MetadataInfo<YPixelComponentType>,
+            MetadataInfo<CbPixelComponentType>,
+            MetadataInfo<CrPixelComponentType>,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let demodulator: MetadataDemodulator<_> = self.by_ref().into();
+        let depacketizer: Depacketizer<_, MetadataDemodulator<&mut O>> = demodulator.into();
+
+        fn chunks_per_gop(
+            gop_len: usize,
+            asset_resolution: (usize, usize),
+            chunk_dim: (usize, usize, usize),
+            pixel_type: PixelComponentType,
+        ) -> usize {
+            let (frame_width, frame_height) = (
+                asset_resolution.0 / pixel_type.interleave_step(),
+                asset_resolution.1 / pixel_type.vertical_subsampling(),
+            );
+            (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2)
+        }
+
+        let y_chunks_per_gop = chunks_per_gop(
+            gop_len,
+            asset_resolution,
+            y_chunk_dim,
+            PixelComponentType::Y,
         );
-        Box::new(de_whitener)
-    } else {
-        Box::new(synchronizer)
-    };
-
-    let metadata_demodulator: MetadataDemodulator<_> = iq_iter.into();
-    let depacketizer: Depacketizer<_, _> = metadata_demodulator.into();
-
-    let mut metadata_decompressor = MetadataDecompressor::new(depacketizer, chunks_per_gop);
-    let mut chunk_metadatas: Vec<ChunkMetadata> = Vec::with_capacity(chunks_per_gop);
-    // TODO: could call collect() instead of take()
-    for metadata_result in metadata_decompressor.by_ref().take(chunks_per_gop) {
-        chunk_metadatas.push(metadata_result.map_err(|e| e.to_string())?);
-    }
-    if chunks_per_gop != chunk_metadatas.len() {
-        // EOF
-        let count_chunk_metadatas = chunk_metadatas.len();
-        let pixel_type = PixelType::TYPE;
-        eprintln!(
-            "Number of chunk metadatas for {pixel_type} {count_chunk_metadatas} does not match chunks per GOP {chunks_per_gop}.",
+        let cb_chunks_per_gop = chunks_per_gop(
+            gop_len,
+            asset_resolution,
+            cr_chunk_dim,
+            PixelComponentType::Cb,
         );
-        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+        let cr_chunks_per_gop = chunks_per_gop(
+            gop_len,
+            asset_resolution,
+            cb_chunk_dim,
+            PixelComponentType::Cr,
+        );
+
+        let mut y_decompressor: MetadataDecompressor<&mut O, _> =
+            MetadataDecompressor::new(depacketizer, y_chunks_per_gop);
+
+        fn next_metadata<PixelType: HasPixelComponentType>(
+            chunks_per_gop: usize,
+            decompressor: &mut impl MetadataDecompressorTrait,
+        ) -> Result<MetadataInfo<PixelType>, Box<dyn std::error::Error>> {
+            let parse_result: Result<Box<[ChunkMetadata]>, _> =
+                decompressor.take(chunks_per_gop).collect(); // using take for a size hint
+            let chunk_metadatas = parse_result.map_err(|e| e.to_string())?;
+
+            let metadata_bitmap = decompressor
+                .take_metadata_bitmap()
+                .map_err(|e| e.to_string())?;
+
+            if chunks_per_gop != chunk_metadatas.len() {
+                // EOF
+                let count_chunk_metadatas = chunk_metadatas.len();
+                let pixel_type = PixelType::TYPE;
+                eprintln!(
+                    "Number of chunk metadatas for {pixel_type} {count_chunk_metadatas} does not match chunks per GOP {chunks_per_gop}.",
+                );
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+            }
+
+            Ok(MetadataInfo::new(metadata_bitmap, chunk_metadatas.into()))
+        }
+
+        let y = next_metadata(y_chunks_per_gop, &mut y_decompressor)?;
+
+        let mut cb_decompressor = y_decompressor.into_next(cb_chunks_per_gop);
+        let cb = next_metadata(cb_chunks_per_gop, &mut cb_decompressor)?;
+
+        let mut cr_decompressor = cb_decompressor.into_next(cr_chunks_per_gop);
+        let cr = next_metadata(cr_chunks_per_gop, &mut cr_decompressor)?;
+
+        Ok((y, cb, cr))
     }
 
-    let metadata_bitmap = metadata_decompressor
-        .take_metadata_bitmap()
-        .map_err(|_| "Failed to decode metadata_bitmap")?; // TODO: don't discard error
+    fn next_dct<PixelType: HasPixelComponentType>(
+        &mut self,
+        metadata: MetadataInfo<PixelType>,
+        gop_len: usize,
+        asset_resolution: (usize, usize),
+        chunk_dim: (usize, usize, usize),
+        hadamard: bool,
+        snr: f64,
+    ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
+        let included_chunk_metadatas: Box<_> = metadata
+            .bitmap
+            .values
+            .iter_ones()
+            .map(|idx| metadata.values[idx])
+            .collect();
 
-    let included_chunk_metadatas: Box<_> = metadata_bitmap
-        .values
-        .iter_ones()
-        .map(|idx| chunk_metadatas[idx])
-        .collect();
+        let num_included_chunks = metadata.bitmap.values.count_ones();
+        let num_included_slices = if hadamard {
+            num_included_chunks.next_power_of_two()
+        } else {
+            num_included_chunks
+        };
+        println!("{num_included_chunks} chunks | {num_included_slices} slices");
 
-    let num_included_chunks = metadata_bitmap.values.count_ones();
-    let num_included_slices = if hadamard {
-        num_included_chunks.next_power_of_two()
-    } else {
-        num_included_chunks
-    };
-    println!("{num_included_chunks} chunks | {num_included_slices} slices");
+        let mut dct_allocation = slices_allocation::<PixelType>(
+            gop_len,
+            asset_resolution,
+            chunk_dim,
+            num_included_slices - num_included_chunks,
+        );
+        let slice_demodulator: SliceDemodulator<'_, PixelType, _> =
+            SliceDemodulator::new(chunk_dim, metadata.bitmap, self, &mut dct_allocation);
 
-    let de_whitener = metadata_decompressor.into_inner_quadrature_symbol_iter(); // return quad_iter for slicing
+        let mut slice_and_metadatas = vec![];
+        let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
+        for slice in slice_demodulator.take(num_included_slices) {
+            // there will be more slices than chunk_metadatas
+            let chunk_metadata = included_chunk_metadatas_iter.next().unwrap_or_default();
+            let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
+            slice_and_metadatas.push(slice_and_metadata);
+        }
+        let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
 
-    let mut dct_allocation = slices_allocation::<PixelType>(
-        gop_len,
-        asset_resolution,
-        chunk_dim,
-        num_included_slices - num_included_chunks,
-    );
-    let slice_demodulator: SliceDemodulator<'_, PixelType, _> =
-        SliceDemodulator::new(chunk_dim, metadata_bitmap, de_whitener, &mut dct_allocation);
+        let chunks_iter = slice_and_chunk_metadata_iter
+            .into_chunks_iter(num_included_chunks, hadamard)
+            .take(num_included_chunks);
+        let power_descaler = PowerScaler::inverse(chunks_iter, snr);
+        let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
-    let mut slice_and_metadatas = vec![];
-    let mut included_chunk_metadatas_iter = included_chunk_metadatas.into_iter();
-    for slice in slice_demodulator.take(num_included_slices) {
-        // there will be more slices than chunk_metadatas
-        let chunk_metadata = included_chunk_metadatas_iter.next().unwrap_or_default();
-        let slice_and_metadata = SliceAndChunkMetadata::new(slice, chunk_metadata);
-        slice_and_metadatas.push(slice_and_metadata);
+        let dct = TransformBlock3DDCT::from_chunks_owned(
+            dct_allocation,
+            &metadata.values,
+            gop_len,
+            asset_resolution,
+            chunk_dim,
+        );
+        Ok(dct)
     }
-    let slice_and_chunk_metadata_iter = slice_and_metadatas.into_iter();
+}
 
-    let chunks_iter = slice_and_chunk_metadata_iter
-        .into_chunks_iter(num_included_chunks, hadamard)
-        .take(num_included_chunks);
-    let power_descaler = PowerScaler::inverse(chunks_iter, snr);
-    let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
-
-    let dct = TransformBlock3DDCT::from_chunks_owned(
-        dct_allocation,
-        &chunk_metadatas,
-        gop_len,
-        asset_resolution,
-        chunk_dim,
-    );
-    Ok(dct)
+struct MetadataInfo<PixelType: HasPixelComponentType> {
+    bitmap: MetadataBitmap,
+    values: Box<[ChunkMetadata]>,
+    _marker: std::marker::PhantomData<PixelType>,
+}
+impl<PixelType: HasPixelComponentType> MetadataInfo<PixelType> {
+    pub fn new(bitmap: MetadataBitmap, values: Box<[ChunkMetadata]>) -> Self {
+        Self {
+            bitmap,
+            values,
+            _marker: std::marker::PhantomData,
+        }
+    }
 }
 
 #[derive(Default)]

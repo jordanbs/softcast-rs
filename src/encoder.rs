@@ -28,6 +28,7 @@ use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
 use crate::pixel_buffer::transform_block_3d::*;
 use crate::pixel_buffer::*;
+use crate::source_coding::chunk::*;
 use crate::source_coding::power_scaling::*;
 use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::*;
@@ -155,14 +156,13 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         ofdm_symbol_writer: &mut dyn Complex32Consumer,
         abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let count_symbols_arc = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+        let mut count_symbols = 0;
         for macro_block in self.macro_block_3d_iter.by_ref() {
             if let Some(tap) = &mut self.macro_block_tap {
                 let clone = macro_block.clone();
                 tap.writer.send(clone)?;
             }
 
-            // encoder
             let MacroBlock3D {
                 y_components,
                 cb_components,
@@ -170,75 +170,94 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
                 ..
             } = macro_block;
 
-            let mut y_dct = y_components.into();
-            let y_framer = ofdm_framer(
+            let mut y_dct: TransformBlock3DDCT<YPixelComponentType> = y_components.into();
+            let mut cb_dct: TransformBlock3DDCT<CbPixelComponentType> = cb_components.into();
+            let mut cr_dct: TransformBlock3DDCT<CrPixelComponentType> = cr_components.into();
+
+            let encode_signal = encode_signal(
                 &mut y_dct,
-                self.y_config.compression_ratio,
-                self.y_config.chunk_dimensions,
-                self.hadamard,
-                self.ofdm,
-            );
-
-            let mut cb_dct = cb_components.into();
-            let cb_framer = ofdm_framer(
                 &mut cb_dct,
-                self.cb_config.compression_ratio,
-                self.cb_config.chunk_dimensions,
-                self.hadamard,
-                self.ofdm,
-            );
-
-            let mut cr_dct = cr_components.into();
-            let cr_framer = ofdm_framer(
                 &mut cr_dct,
-                self.cr_config.compression_ratio,
-                self.cr_config.chunk_dimensions,
+                self.y_config,
+                self.cb_config,
+                self.cr_config,
                 self.hadamard,
                 self.ofdm,
             );
 
-            let count_symbols_arc_clone = count_symbols_arc.clone();
-            let mut encoder = y_framer
-                .chain(cb_framer)
-                .chain(cr_framer)
-                .map(|ofdmframe| ofdmframe.into_box_complex32_slice())
-                .inspect(|iqs| {
-                    count_symbols_arc_clone
-                        .fetch_add(iqs.len() as i64, std::sync::atomic::Ordering::Relaxed);
-                });
-
-            while let Some(frame) = encoder.next() {
-                ofdm_symbol_writer.consume(frame, true)?;
+            for frame in encode_signal {
+                count_symbols += frame.symbols.len();
+                ofdm_symbol_writer.consume(frame.into_box_complex32_slice(), true)?;
                 if abort_token.is_aborted() {
                     return Err("Encoder aborted.".into());
                 }
             }
-            eprintln!(
-                "Cumulative Symbols Transmitted: {}",
-                count_symbols_arc.load(std::sync::atomic::Ordering::Relaxed)
-            );
+            eprintln!("Cumulative Symbols Transmitted: {}", count_symbols);
         }
         Ok(())
     }
 }
 
-fn ofdm_framer<PixelType: HasPixelComponentType>(
-    dct_components: &mut TransformBlock3DDCT<PixelType>,
-    compression_ratio: f64,
-    chunk_dimensions: (usize, usize, usize),
+fn encode_signal<'a>(
+    y_dct: &'a mut TransformBlock3DDCT<YPixelComponentType>,
+    cb_dct: &'a mut TransformBlock3DDCT<CbPixelComponentType>,
+    cr_dct: &'a mut TransformBlock3DDCT<CrPixelComponentType>,
+    y_config: PerPixelConfiguration,
+    cb_config: PerPixelConfiguration,
+    cr_config: PerPixelConfiguration,
     hadamard: bool,
     ofdm: bool,
-) -> impl Iterator<Item = OFDMFrame> {
-    let chunks: Box<_> = dct_components.chunks_iter(chunk_dimensions).collect();
+) -> impl Iterator<Item = OFDMFrame> + 'a {
+    let y_chunks: Box<_> = y_dct.chunks_iter(y_config.chunk_dimensions).collect();
+    let cb_chunks: Box<_> = cb_dct.chunks_iter(cb_config.chunk_dimensions).collect();
+    let cr_chunks: Box<_> = cr_dct.chunks_iter(cr_config.chunk_dimensions).collect();
 
     // metadata
-    let metadata_bitmap = MetadataBitmap::new(&chunks, compression_ratio);
-    let chunk_metadata_iter = chunks.iter().map(|chunk| &chunk.metadata);
-    let compressed_metadata = CompressedMetadata::new(&metadata_bitmap, chunk_metadata_iter);
-    let packetizer: Packetizer = compressed_metadata.into();
-    let metadata_modulator: MetadataModulator<_> = packetizer.into();
+    let y_mbitmap = MetadataBitmap::new(&y_chunks, y_config.compression_ratio);
+    let cb_mbitmap = MetadataBitmap::new(&cb_chunks, cb_config.compression_ratio);
+    let cr_mbitmap = MetadataBitmap::new(&cr_chunks, cr_config.compression_ratio);
+
+    let metadata_signal = metadata_signal(
+        (&y_mbitmap, &y_chunks),
+        (&cb_mbitmap, &cb_chunks),
+        (&cb_mbitmap, &cr_chunks),
+    );
 
     // slices
+    let y_slice_signal = slice_signal(y_chunks, y_mbitmap, hadamard);
+    let cb_slice_signal = slice_signal(cb_chunks, cb_mbitmap, hadamard);
+    let cr_slice_signal = slice_signal(cr_chunks, cr_mbitmap, hadamard);
+
+    let clear_signal = metadata_signal
+        .chain(y_slice_signal)
+        .chain(cb_slice_signal)
+        .chain(cr_slice_signal);
+
+    // framing
+    framed_signal(clear_signal, ofdm)
+}
+
+fn metadata_signal(
+    y: (&MetadataBitmap, &[Chunk<YPixelComponentType>]),
+    cb: (&MetadataBitmap, &[Chunk<CbPixelComponentType>]),
+    cr: (&MetadataBitmap, &[Chunk<CrPixelComponentType>]),
+) -> impl Iterator<Item = QuadratureSymbol> + use<> {
+    let compressed_metadata = compress_metadata_2(
+        (&y.0, y.1.metadata_iter()),
+        (&cb.0, cb.1.metadata_iter()),
+        (&cr.0, cr.1.metadata_iter()),
+    )
+    .expect("Compressing metadata failed.");
+    let packetizer: Packetizer = compressed_metadata.into();
+    let metadata_modulator: MetadataModulator<_> = packetizer.into();
+    metadata_modulator.flatten()
+}
+
+fn slice_signal<PixelType: HasPixelComponentType>(
+    chunks: Box<[Chunk<PixelType>]>,
+    metadata_bitmap: MetadataBitmap,
+    hadamard: bool,
+) -> impl Iterator<Item = QuadratureSymbol> {
     let num_included_chunks = metadata_bitmap.values.count_ones();
     let compressor = Compressor::new(chunks.into_iter(), metadata_bitmap);
     let slice_modulator: SliceModulator<'_, _, _> = PowerScaler::new(compressor)
@@ -246,16 +265,22 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
         .map(|slice_and_chunk_metadata| slice_and_chunk_metadata.slice)
         .into();
 
-    let frequency_domain_signal = metadata_modulator.flatten().chain(slice_modulator);
+    slice_modulator
+}
 
+fn framed_signal<'a>(
+    signal: impl Iterator<Item = QuadratureSymbol> + 'a,
+    ofdm: bool,
+) -> impl Iterator<Item = OFDMFrame> + 'a {
     // If whiten_len == 0, skip whitening.
-    let PerPixelTypeConfig {
+    let Config {
+        frame_length: _,
         whiten_length,
         whiten_rounds,
-    } = Config::get().per_pixel_type::<PixelType>();
+    } = Config::get();
     let iq_iter: Box<dyn Iterator<Item = QuadratureSymbol>> = if 0 != whiten_length {
         let whitener = Whitener::new(
-            frequency_domain_signal,
+            signal,
             NUM_SUBCARRIERS,
             (1 + whiten_length) / NUM_SUBCARRIERS,
             whiten_rounds,
@@ -263,7 +288,7 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
         );
         Box::new(whitener)
     } else {
-        Box::new(frequency_domain_signal)
+        Box::new(signal)
     };
 
     let framer: Box<dyn Iterator<Item = OFDMFrame>> = if ofdm {
@@ -287,6 +312,15 @@ fn ofdm_framer<PixelType: HasPixelComponentType>(
         Box::new(iter)
     };
     framer
+}
+
+trait ChunkMetadataIter {
+    fn metadata_iter(&self) -> impl Iterator<Item = &ChunkMetadata>;
+}
+impl<PixelType: HasPixelComponentType> ChunkMetadataIter for &[Chunk<'_, PixelType>] {
+    fn metadata_iter(&self) -> impl Iterator<Item = &ChunkMetadata> {
+        self.iter().map(|chunk| &chunk.metadata)
+    }
 }
 
 fn max_factor_at_or_below(limit: usize, value: usize) -> usize {

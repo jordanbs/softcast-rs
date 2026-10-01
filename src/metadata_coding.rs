@@ -61,17 +61,20 @@ where
     })
 }
 
-pub fn compress_metadata_2<'a, M: Iterator<Item = &'a ChunkMetadata>>(
-    y: (&MetadataBitmap, M),
-    cb: (&MetadataBitmap, M),
-    cr: (&MetadataBitmap, M),
+pub fn compress_metadata_2<
+    'a,
+    Y: Iterator<Item = &'a ChunkMetadata>,
+    B: Iterator<Item = &'a ChunkMetadata>,
+    R: Iterator<Item = &'a ChunkMetadata>,
+>(
+    y: (&MetadataBitmap, Y),
+    cb: (&MetadataBitmap, B),
+    cr: (&MetadataBitmap, R),
 ) -> Result<CompressedMetadata2, Box<dyn std::error::Error>> {
     // 12 bytes per chunk upper limit
-    let size_hint = [&y.1, &cb.1, &cr.1]
-        .into_iter()
-        .map(|chunk_metadatas| chunk_metadatas.size_hint().1)
-        .sum::<Option<usize>>()
-        .unwrap_or_default();
+    let size_hint = y.1.size_hint().1.unwrap_or_default()
+        + cb.1.size_hint().1.unwrap_or_default()
+        + cr.1.size_hint().1.unwrap_or_default();
     let write_buf_len = 12 * size_hint;
     let write_buf = Vec::with_capacity(write_buf_len);
     let cursor = std::io::Cursor::new(write_buf);
@@ -114,6 +117,22 @@ pub struct MetadataDecompressor<QI, R: Read> {
     metadata_bitmap: Option<MetadataBitmap>,
     has_decoded_metadata_bitmap: bool,
     _marker: std::marker::PhantomData<QI>,
+}
+
+pub trait MetadataDecompressorTrait:
+    Iterator<Item = Result<ChunkMetadata, std::rc::Rc<dyn std::error::Error>>>
+{
+    fn take_metadata_bitmap(
+        &mut self,
+    ) -> Result<MetadataBitmap, std::rc::Rc<dyn std::error::Error>>;
+}
+impl<QI, R: Read> MetadataDecompressorTrait for MetadataDecompressor<QI, R> {
+    fn take_metadata_bitmap(
+        &mut self,
+    ) -> Result<MetadataBitmap, std::rc::Rc<dyn std::error::Error>> {
+        self.ensure_metadata_bitmap()?;
+        Ok(self.metadata_bitmap.take().unwrap())
+    }
 }
 
 impl<QI, R: Read> MetadataDecompressor<QI, R> {
@@ -409,6 +428,11 @@ pub mod packetizer {
     impl From<CompressedMetadata> for Packetizer {
         fn from(compressed_metadata: CompressedMetadata) -> Self {
             Self::new(compressed_metadata.data)
+        }
+    }
+    impl From<CompressedMetadata2> for Packetizer {
+        fn from(compressed_metadata: CompressedMetadata2) -> Self {
+            Self::new(compressed_metadata.0)
         }
     }
 
