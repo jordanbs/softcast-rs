@@ -186,7 +186,7 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
             );
 
             for frame in encode_signal {
-                count_symbols += frame.symbols.len();
+                count_symbols += OFDM_SYMBOL_LEN * frame.symbols.len();
                 ofdm_symbol_writer.consume(frame.into_box_complex32_slice(), true)?;
                 if abort_token.is_aborted() {
                     return Err("Encoder aborted.".into());
