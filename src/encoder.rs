@@ -354,12 +354,12 @@ fn chunk_dimensions_sizer(
 }
 
 pub struct MacroBlockTap {
-    writer: std::sync::mpsc::SyncSender<MacroBlock3D>,
+    writer: std::sync::mpsc::Sender<MacroBlock3D>,
     reader: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
 }
 impl Default for MacroBlockTap {
     fn default() -> Self {
-        let (writer, reader) = std::sync::mpsc::sync_channel(1); // limit to 1 macro block at a time
+        let (writer, reader) = std::sync::mpsc::channel();
         Self {
             writer,
             reader: Some(reader),
