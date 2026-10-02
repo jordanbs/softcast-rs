@@ -162,6 +162,9 @@ mod apple {
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
 
+            #[arg(long, default_value_t = false)]
+            disable_wiener: bool,
+
             #[arg(short, default_value_t = DEFAULT_FREQ)]
             frequency: f64,
 
@@ -222,6 +225,9 @@ mod apple {
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
+
+            #[arg(long, default_value_t = false)]
+            disable_wiener: bool,
 
             #[arg(short, default_value_t = DEFAULT_FREQ)]
             frequency: f64,
@@ -309,6 +315,9 @@ mod apple {
             frame_len: usize,
 
             #[arg(long, default_value_t = false)]
+            disable_wiener: bool,
+
+            #[arg(long, default_value_t = false)]
             digital: bool,
 
             #[arg(long, default_value_t = false)]
@@ -349,6 +358,9 @@ mod apple {
 
             #[arg(long, value_parser = parse_int::parse::<usize>, default_value_t = FRAME_LEN)]
             frame_len: usize,
+
+            #[arg(long, default_value_t = false)]
+            disable_wiener: bool,
         },
     }
 
@@ -394,6 +406,7 @@ mod apple {
         whiten_length: usize,
         whiten_rounds: usize,
         frame_len: usize,
+        disable_wiener: bool,
         frequency: f64,
         sample_rate: f64,
         bandwidth: f64,
@@ -478,6 +491,7 @@ mod apple {
             encoder.cb_chunk_dimensions(),
             encoder.cr_chunk_dimensions(),
             true,
+            !disable_wiener,
             None,
         )?;
 
@@ -520,6 +534,7 @@ mod apple {
         whiten_length: usize,
         whiten_rounds: usize,
         frame_length: usize,
+        disable_wiener: bool,
         digital: bool,
         dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -621,6 +636,7 @@ mod apple {
                 encoder.cb_chunk_dimensions(),
                 encoder.cr_chunk_dimensions(),
                 !disable_hadamard,
+                !disable_wiener,
                 macro_block_receiver,
             )?;
             let should_decode = !disable_ofdm;
@@ -641,6 +657,7 @@ mod apple {
         whiten_length: usize,
         whiten_rounds: usize,
         frame_len: usize,
+        disable_wiener: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config = Config {
             frame_length: frame_len,
@@ -662,6 +679,7 @@ mod apple {
             c_chunk_dimensions,
             c_chunk_dimensions,
             !disable_hadamard,
+            !disable_wiener,
             None,
         )?;
 
@@ -756,6 +774,7 @@ mod apple {
         whiten_length: usize,
         whiten_rounds: usize,
         frame_len: usize,
+        disable_wiener: bool,
         frequency: f64,
         sample_rate: f64,
         bandwidth: f64,
@@ -816,6 +835,7 @@ mod apple {
             c_chunk_dimensions,
             c_chunk_dimensions,
             true,
+            !disable_wiener,
             None,
         )?;
 
@@ -890,6 +910,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
                 frequency,
                 sample_rate,
                 bandwidth,
@@ -909,6 +930,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
                 frequency,
                 sample_rate,
                 bandwidth,
@@ -930,6 +952,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
                 frequency,
                 sample_rate,
                 bandwidth,
@@ -954,6 +977,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
                 frequency,
                 sample_rate,
                 bandwidth,
@@ -983,6 +1007,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
                 digital,
                 dump,
             } => simulate(
@@ -1000,6 +1025,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
                 digital,
                 dump,
             ),
@@ -1015,6 +1041,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
             } => replay(
                 infile,
                 outfile,
@@ -1027,6 +1054,7 @@ mod apple {
                 whiten_len,
                 whiten_rounds,
                 frame_len,
+                disable_wiener,
             ),
         }
         .map_err(|e| e.to_string())?;
