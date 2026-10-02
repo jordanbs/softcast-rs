@@ -15,10 +15,12 @@
 // You should have received a copy of the GNU General Public License along with
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::framing::SignalStats;
 use crate::pixel_buffer::transform_block_3d::*;
 use crate::pixel_buffer::*;
 use ndarray;
 use ndrustfft;
+use std::{cell::Cell, rc::Rc};
 
 pub mod transform_block_3d_dct {
     use super::*;
@@ -306,7 +308,7 @@ pub mod power_scaling {
         chunk_energies: std::cell::OnceCell<Box<[f32]>>,
         compute_cache: std::cell::OnceCell<f32>,
         inverse: bool,
-        signal_to_noise_ratio: f64,
+        signal_stats: Rc<Cell<SignalStats>>,
     }
     impl<'a, PixelType: HasPixelComponentType, I: Iterator<Item = Chunk<'a, PixelType>>>
         PowerScaler<'a, PixelType, I>
@@ -318,17 +320,17 @@ pub mod power_scaling {
                 chunk_energies: std::cell::OnceCell::new(),
                 compute_cache: std::cell::OnceCell::new(),
                 inverse: false,
-                signal_to_noise_ratio: f64::default(),
+                signal_stats: Rc::default(),
             }
         }
-        pub fn inverse(chunks_iter: I, signal_to_noise_ratio: f64) -> Self {
+        pub fn inverse(chunks_iter: I, signal_stats: Rc<Cell<SignalStats>>) -> Self {
             Self {
                 inner1: Some(chunks_iter),
                 inner2: std::cell::OnceCell::new(),
                 chunk_energies: std::cell::OnceCell::new(),
                 compute_cache: std::cell::OnceCell::new(),
                 inverse: true,
-                signal_to_noise_ratio,
+                signal_stats,
             }
         }
     }
@@ -353,10 +355,10 @@ pub mod power_scaling {
                 power_scale(chunk.metadata.energy, chunk_energies, &self.compute_cache);
             if power_scale.is_normal() {
                 if self.inverse {
-                    let avg_noise_power = self
-                        .signal_to_noise_ratio
+                    let snr = self.signal_stats.get().signal_to_noise_ratio();
+                    let avg_noise_power = snr
                         .is_normal()
-                        .then(|| 1.0 / self.signal_to_noise_ratio)
+                        .then(|| 1.0 / snr)
                         .map(|avg_noise_power| avg_noise_power as f32)
                         .unwrap_or_default();
 

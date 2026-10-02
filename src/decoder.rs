@@ -36,6 +36,7 @@ use crate::source_coding::transform_block_3d_dct::*;
 use crate::sync::*;
 use crate::utils::*;
 use ndarray_stats::DeviationExt;
+use std::{cell::Cell, rc::Rc};
 
 pub struct FileWriterDecoder {
     asset_writer: AssetWriter,
@@ -117,7 +118,7 @@ impl FileWriterDecoder {
                     cr_psnr,
                     weighted_total_psnr,
                 } = self.final_stats.get().cloned().unwrap();
-                let cumulative_snr = decoder.signal_stats.signal_to_noise_db();
+                let cumulative_snr = decoder.signal_to_noise_db();
                 println!("Cumulative SNR: {cumulative_snr:.2}");
                 println!(
                     "PSNR: {weighted_total_psnr:.2} dB\t{y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB"
@@ -154,11 +155,9 @@ struct Decoder<O: OFDMFrameSynchronizerTrait> {
     cb_chunk_dim: (usize, usize, usize),
     cr_chunk_dim: (usize, usize, usize),
     hadamard: bool,
-    snr: f64,
     gops_received: usize,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
     stats: PartialStatistics,
-    signal_stats: SignalStats,
 }
 impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
     fn next_pb_iter(
@@ -187,34 +186,22 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             cb_chunk_dim,
             cr_chunk_dim,
             hadamard,
-            snr: 0.0,
             gops_received: 0,
             original_macro_block_3ds,
             stats: PartialStatistics::default(),
-            signal_stats: SignalStats::default(),
         }
     }
 
     fn next_gop(&mut self) -> Result<Box<[CVPixelBufferWrapper]>, Box<dyn std::error::Error>> {
-        let (y_dct, cb_dct, cr_dct) = self
-            .frame_synchronizer
-            .next_gop(
-                self.gop_len,
-                self.asset_resolution,
-                self.y_chunk_dim,
-                self.cb_chunk_dim,
-                self.cr_chunk_dim,
-                self.hadamard,
-                self.snr,
-            )
-            .inspect_err(|_err| {
-                println!(
-                    "Fatal SNR: {:.2}",
-                    self.frame_synchronizer.signal_to_noise_db()
-                )
-            })?;
-        self.snr = self.frame_synchronizer.signal_to_noise_ratio();
-        self.signal_stats += self.frame_synchronizer.current_signal_stats();
+        let (y_dct, cb_dct, cr_dct) = self.frame_synchronizer.next_gop(
+            self.gop_len,
+            self.asset_resolution,
+            self.y_chunk_dim,
+            self.cb_chunk_dim,
+            self.cr_chunk_dim,
+            self.hadamard,
+            self.frame_synchronizer.signal_stats(),
+        )?;
         self.frame_synchronizer.reset();
         self.frame_synchronizer.reset_seeking_frame_index();
 
@@ -258,6 +245,13 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
         let gop = pixel_buffer_iter.collect();
         Ok(gop)
     }
+
+    fn signal_to_noise_db(&self) -> f64 {
+        self.frame_synchronizer
+            .signal_stats()
+            .get()
+            .signal_to_noise_db()
+    }
 }
 
 fn slices_allocation<PixelType: HasPixelComponentType>(
@@ -294,7 +288,7 @@ trait SignalDecoder {
         cb_chunk_dim: (usize, usize, usize),
         cr_chunk_dim: (usize, usize, usize),
         hadamard: bool,
-        snr: f64,
+        signal_stats: Rc<Cell<SignalStats>>,
     ) -> Result<
         (
             TransformBlock3DDCT<YPixelComponentType>,
@@ -326,7 +320,7 @@ trait SignalDecoder {
         asset_resolution: (usize, usize),
         chunk_dim: (usize, usize, usize),
         hadamard: bool,
-        snr: f64,
+        signal_stats: Rc<Cell<SignalStats>>,
     ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>>;
 }
 impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
@@ -338,7 +332,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         cb_chunk_dim: (usize, usize, usize),
         cr_chunk_dim: (usize, usize, usize),
         hadamard: bool,
-        snr: f64,
+        signal_stats: Rc<Cell<SignalStats>>,
     ) -> Result<
         (
             TransformBlock3DDCT<YPixelComponentType>,
@@ -361,7 +355,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
             asset_resolution,
             y_chunk_dim,
             hadamard,
-            snr,
+            signal_stats.clone(),
         )?;
         let cb_dct = clear_signal.next_dct(
             cb_metadata,
@@ -369,7 +363,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
             asset_resolution,
             cb_chunk_dim,
             hadamard,
-            snr,
+            signal_stats.clone(),
         )?;
         let cr_dct = clear_signal.next_dct(
             cr_metadata,
@@ -377,7 +371,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
             asset_resolution,
             cr_chunk_dim,
             hadamard,
-            snr,
+            signal_stats.clone(),
         )?;
 
         Ok((y_dct, cb_dct, cr_dct))
@@ -500,7 +494,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         asset_resolution: (usize, usize),
         chunk_dim: (usize, usize, usize),
         hadamard: bool,
-        snr: f64,
+        signal_stats: Rc<Cell<SignalStats>>,
     ) -> Result<TransformBlock3DDCT<PixelType>, Box<dyn std::error::Error>> {
         let included_chunk_metadatas: Box<_> = metadata
             .bitmap
@@ -539,7 +533,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks, hadamard)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter, snr);
+        let power_descaler = PowerScaler::inverse(chunks_iter, signal_stats);
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let dct = TransformBlock3DDCT::from_chunks_owned(

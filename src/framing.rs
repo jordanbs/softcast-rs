@@ -24,6 +24,9 @@ use num_complex::Complex32;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro;
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 pub const NUM_SUBCARRIERS: usize = 64;
 const CP_LEN: usize = 16;
 const TAPER_LEN: usize = 4;
@@ -371,7 +374,7 @@ pub struct OFDMFrameSynchronizer<I: Iterator<Item = Box<[Complex32]>>> {
     seeking_frame_index: u8,
     header_modem: U8QPacketModem,
     frame_symbols_iter: std::iter::Peekable<std::vec::IntoIter<QuadratureSymbol>>,
-    long_term_stats: SignalStats,
+    signal_stats: Rc<Cell<SignalStats>>,
 }
 
 #[allow(non_snake_case)]
@@ -413,11 +416,16 @@ impl SignalStats {
     pub fn signal_to_noise_ratio(&self) -> f64 {
         self.signal_vector_magnitude / self.error_vector_magnitude
     }
+    pub fn push(&mut self, error_power: f32, signal_power: f32) {
+        self.error_vector_magnitude += error_power as f64;
+        self.signal_vector_magnitude += signal_power as f64;
+    }
 }
 
 struct CallbackContext {
     freq_domain_symbols: Option<Vec<QuadratureSymbol>>,
     stats: SignalStats,
+    long_term_stats: Rc<Cell<SignalStats>>,
     ms_pilot: liquid_sys::msequence,
 }
 impl Default for CallbackContext {
@@ -425,6 +433,7 @@ impl Default for CallbackContext {
         Self {
             freq_domain_symbols: Option::default(),
             stats: SignalStats::default(),
+            long_term_stats: std::rc::Rc::default(),
             ms_pilot: unsafe { liquid_sys::msequence_create_default(8) },
         }
     }
@@ -477,8 +486,11 @@ impl CallbackContext {
 
         let signal_power = pilot_count as f32;
 
-        self.stats.error_vector_magnitude += error_power as f64;
-        self.stats.signal_vector_magnitude += signal_power as f64;
+        self.stats.push(error_power, signal_power);
+
+        let mut long_term_stats = self.long_term_stats.get();
+        long_term_stats.push(error_power, signal_power);
+        self.long_term_stats.set(long_term_stats);
     }
     pub fn signal_to_noise_db(&self) -> f64 {
         self.stats.signal_to_noise_db()
@@ -501,7 +513,7 @@ pub trait OFDMFrameSynchronizerTrait: Iterator<Item = QuadratureSymbol> {
     fn reset_seeking_frame_index(&mut self);
     fn signal_to_noise_db(&self) -> f64;
     fn signal_to_noise_ratio(&self) -> f64;
-    fn current_signal_stats(&self) -> SignalStats;
+    fn signal_stats(&self) -> Rc<Cell<SignalStats>>;
 }
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizerTrait for OFDMFrameSynchronizer<I> {
     fn reset(&mut self) {
@@ -523,27 +535,20 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizerTrait for OFDMFr
         self.freq_domain_symbols_iter = vec![].into_iter().peekable();
         self.symbols_received_since_reset = 0;
 
-        // accumulate signal stats
-        self.long_term_stats.error_vector_magnitude +=
-            self.callback_context.stats.error_vector_magnitude;
-        self.long_term_stats.signal_vector_magnitude +=
-            self.callback_context.stats.signal_vector_magnitude;
-
         self.callback_context.reset();
     }
     fn reset_seeking_frame_index(&mut self) {
         self.frame_symbols_iter = vec![].into_iter().peekable();
         self.seeking_frame_index = 0;
-        self.long_term_stats = SignalStats::default();
     }
     fn signal_to_noise_db(&self) -> f64 {
-        self.long_term_stats.signal_to_noise_db()
+        self.signal_stats.get().signal_to_noise_db()
     }
     fn signal_to_noise_ratio(&self) -> f64 {
-        self.long_term_stats.signal_to_noise_ratio()
+        self.signal_stats.get().signal_to_noise_ratio()
     }
-    fn current_signal_stats(&self) -> SignalStats {
-        self.callback_context.stats
+    fn signal_stats(&self) -> Rc<Cell<SignalStats>> {
+        self.signal_stats.clone()
     }
 }
 impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
@@ -613,7 +618,10 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizer<I> {
 
 impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> {
     fn from(iq_buf_iter: I) -> Self {
-        let mut callback_context_box = Box::new(CallbackContext::default());
+        let mut callback_context = CallbackContext::default();
+        let signal_stats: Rc<Cell<SignalStats>> = Rc::default();
+        callback_context.long_term_stats = signal_stats.clone();
+        let mut callback_context_box = Box::new(callback_context);
         let callback_context_ptr: *mut CallbackContext = callback_context_box.as_mut();
         let callback_context_ptr = callback_context_ptr as *mut core::ffi::c_void;
 
@@ -647,7 +655,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> From<I> for OFDMFrameSynchronizer<I> 
             seeking_frame_index: 0,
             header_modem: U8QPacketModem::new(),
             frame_symbols_iter: vec![].into_iter().peekable(),
-            long_term_stats: SignalStats::default(),
+            signal_stats,
         }
     }
 }
