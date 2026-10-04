@@ -27,6 +27,8 @@ use num_complex::Complex32;
 pub fn run_simulation(
     mut encoder: FileReaderEncoder,
     mut decoder: FileWriterDecoder,
+    attenuation: f32,
+    clamp: bool,
     noise_power: f32,
     dump: bool,
     decode: bool,
@@ -38,7 +40,8 @@ pub fn run_simulation(
 
     let decoder_result = std::thread::spawn(move || {
         if decode {
-            let mut transformer = SignalTransformer::new(mpsc_reader, noise_power, dump);
+            let mut transformer =
+                SignalTransformer::new(mpsc_reader, attenuation, clamp, noise_power, dump);
             let dump_join = transformer.dump_join.take();
             let result = decoder
                 .run(transformer, abort_token_clone)
@@ -55,7 +58,8 @@ pub fn run_simulation(
                         .into(),
                 );
             }
-            let mut dumper = SignalTransformer::new(mpsc_reader, noise_power, true);
+            let mut dumper =
+                SignalTransformer::new(mpsc_reader, attenuation, clamp, noise_power, true);
             let dumper_join = dumper.dump_join.take().unwrap();
             let _ = dumper.into_iter().count(); // drain the iterator to dump
             let _ = dumper_join.join();
@@ -74,15 +78,29 @@ struct SignalTransformer {
     pub dump_join: Option<std::thread::JoinHandle<()>>,
 }
 impl SignalTransformer {
-    fn new(mpsc_reader: MPSCReader, noise_power: f32, dump: bool) -> Self {
-        let mut transformer: Box<dyn Iterator<Item = Box<[Complex32]>>> =
-            Box::new(mpsc_reader.into_iter());
-        if 0.0 < noise_power {
+    fn new(
+        mpsc_reader: MPSCReader,
+        attenuation: f32,
+        clamp: bool,
+        noise_power: f32,
+        dump: bool,
+    ) -> Self {
+        let transformer = mpsc_reader.into_iter().map(move |mut c32_slice| {
+            c32_slice.as_mut().attenuate(attenuation);
+            if clamp {
+                c32_slice.as_mut().clamp_magnitude(1.0);
+            }
+            c32_slice
+        });
+
+        let transformer: Box<dyn Iterator<Item = Box<[Complex32]>>> = if noise_power > 0.0 {
             let noise_iter = AdditiveWhiteGaussianNoise::new(transformer, noise_power, 0);
-            transformer = Box::new(noise_iter);
-        }
+            Box::new(noise_iter)
+        } else {
+            Box::new(transformer)
+        };
         let mut dump_join = None;
-        if dump {
+        let transformer = if dump {
             let (sender, receiver) = std::sync::mpsc::channel::<Box<[Complex32]>>();
             dump_join = Some(std::thread::spawn(move || {
                 let mut dump_file = create_dump_file(false);
@@ -95,13 +113,36 @@ impl SignalTransformer {
                 let buf_copy = buf.clone();
                 let _ = sender.send(buf_copy); // ingore err
             });
-            transformer = Box::new(dump_iter);
-        }
+            Box::new(dump_iter)
+        } else {
+            transformer
+        };
 
         Self {
             iter: transformer,
             dump_join,
         }
+    }
+}
+
+trait Attenuate {
+    fn attenuate(&mut self, by: f32);
+}
+impl Attenuate for &mut [Complex32] {
+    fn attenuate(&mut self, multiplicand: f32) {
+        self.iter_mut().for_each(|value| *value *= multiplicand);
+    }
+}
+trait Clamp {
+    fn clamp_magnitude(&mut self, max_magnitude: f32);
+}
+impl Clamp for &mut [Complex32] {
+    fn clamp_magnitude(&mut self, max_magnitude: f32) {
+        self.iter_mut().for_each(|value| {
+            if value.norm() > max_magnitude {
+                *value /= value.norm();
+            }
+        });
     }
 }
 

@@ -317,6 +317,12 @@ mod apple {
             #[arg(long, default_value_t = false)]
             disable_wiener: bool,
 
+            #[arg(long, default_value_t = 0.3)]
+            attenuate: f32,
+
+            #[arg(long, default_value_t = false)]
+            clamp: bool,
+
             #[arg(long, default_value_t = false)]
             digital: bool,
 
@@ -535,6 +541,8 @@ mod apple {
         whiten_rounds: usize,
         frame_length: usize,
         disable_wiener: bool,
+        attenuation: f32,
+        clamp: bool,
         digital: bool,
         dump: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -640,7 +648,15 @@ mod apple {
                 macro_block_receiver,
             )?;
             let should_decode = !disable_ofdm;
-            run_simulation(encoder, decoder, noise, dump, should_decode)?;
+            run_simulation(
+                encoder,
+                decoder,
+                attenuation,
+                clamp,
+                noise,
+                dump,
+                should_decode,
+            )?;
         }
         Ok(())
     }
@@ -1008,6 +1024,8 @@ mod apple {
                 whiten_rounds,
                 frame_len,
                 disable_wiener,
+                attenuate,
+                clamp,
                 digital,
                 dump,
             } => simulate(
@@ -1026,6 +1044,8 @@ mod apple {
                 whiten_rounds,
                 frame_len,
                 disable_wiener,
+                attenuate,
+                clamp,
                 digital,
                 dump,
             ),
