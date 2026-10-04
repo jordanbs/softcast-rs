@@ -20,12 +20,6 @@ use crate::metadata_coding::packetizer::*;
 use liquid_sys;
 use num_complex::Complex32;
 
-// Observation: peak slice amplitude is ~3.0.
-// Scale down to prevent metadata from being attenuated.
-const SCALE_SLICE_VALUES_BY: f32 = 4.0;
-
-// TODO: Interleave metadata and slice symbols.
-
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 #[repr(transparent)]
 pub struct QuadratureSymbol {
@@ -126,18 +120,6 @@ impl Drop for U8QPacketModem {
     }
 }
 
-trait ScaleBy {
-    fn scale_by(&mut self, scale: f32);
-}
-
-impl ScaleBy for BPSKModulatedByte {
-    fn scale_by(&mut self, scale: f32) {
-        for q_symbol in self.iter_mut() {
-            q_symbol.value *= scale;
-        }
-    }
-}
-
 pub mod metadata {
     use super::*;
 
@@ -176,15 +158,13 @@ pub mod metadata {
             }
             let working_packet = self.working_packet.as_ref()?;
             let byte = working_packet.encoded_data[self.working_packet_pos];
-            let mut quadrature_symbols =
-                BPSKModulatedByte::from_byte(byte, self.modemcf_wrapper.ptr);
+            let quadrature_symbols = BPSKModulatedByte::from_byte(byte, self.modemcf_wrapper.ptr);
 
             self.working_packet_pos += 1;
             if working_packet.encoded_data.len() == self.working_packet_pos {
                 self.working_packet = None;
                 self.working_packet_pos = 0;
             }
-            quadrature_symbols.scale_by(1.0); // TODO: factor out
             Some(quadrature_symbols)
         }
     }
@@ -297,7 +277,7 @@ pub mod slices {
 
             let values_len = working_slice.values_len();
 
-            let real_value = working_slice.value_at(self.working_idx) / SCALE_SLICE_VALUES_BY;
+            let real_value = working_slice.value_at(self.working_idx);
             self.working_idx += 1;
             self.working_idx %= values_len; // working_idx is indexed into a single slice.
             if 0 == self.working_idx {
@@ -372,8 +352,7 @@ pub mod slices {
             let mut iq_iter = self
                 .quadrature_symbol_iter
                 .by_ref()
-                .flat_map(|symbol| [symbol.value.re, symbol.value.im])
-                .map(|real_value| real_value * SCALE_SLICE_VALUES_BY);
+                .flat_map(|symbol| [symbol.value.re, symbol.value.im]);
 
             for dst in &mut slice.values_mut() {
                 *dst = iq_iter // TODO: use mapv_inplace

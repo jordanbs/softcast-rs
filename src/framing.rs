@@ -102,30 +102,6 @@ impl OFDMFrame {
             Box::from_raw(symbols_slice)
         }
     }
-
-    pub(super) fn normalize(&mut self) {
-        let mut max: f32 = 0.0;
-        for iq in self
-            .symbols
-            .iter()
-            .flat_map(|symbol| symbol.time_domain_symbols)
-        {
-            max = max.max(iq.re.abs());
-            max = max.max(iq.im.abs());
-        }
-        if max > 0.0 {
-            const MAX_VALUE: f32 = 1.0;
-            let normalization_factor = MAX_VALUE / max;
-
-            // eprintln!("Normalizing by {max}");
-
-            for symbol in self.symbols.iter_mut() {
-                for iq in symbol.time_domain_symbols.iter_mut() {
-                    *iq *= normalization_factor;
-                }
-            }
-        }
-    }
 }
 
 pub struct OFDMFrameGenerator<I: Iterator<Item = QuadratureSymbol>> {
@@ -325,7 +301,6 @@ impl<I: Iterator<Item = QuadratureSymbol>> Iterator for OFDMFrameGenerator<I> {
         if frame.symbols.is_empty() {
             None
         } else {
-            frame.normalize();
             self.update_statistics(&frame);
             // println!("PAPR:AVG {:.1}:{:.5}", self.papr(), self.average_power);
             self.reset_statistics();

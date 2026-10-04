@@ -279,10 +279,10 @@ pub mod power_scaling {
         chunk_energies: &[f32],
         sqrt_p_over_sum_sqrt_energies: &std::cell::OnceCell<f32>,
     ) -> f32 {
-        let num_chunks = chunk_energies.len();
+        let num_chunks = chunk_energies.len(); // should take into account compression ratio
 
         // target RMS of iq samples ~0.5-1.
-        let power_budget = num_chunks as f32;
+        let power_budget = num_chunks as f32 * 10f32.powf(-0.125); // -0.125 is good
 
         // skip math if energy is 0
         if chunk_energy.abs() < f32::EPSILON {
