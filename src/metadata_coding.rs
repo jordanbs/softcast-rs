@@ -249,323 +249,6 @@ impl CompressedMetadata2 {
     }
 }
 
-pub mod packetizer {
-    use super::*;
-
-    pub struct DecodedPacket {
-        pub decoded_data: Box<[u8]>,
-        pub compressed_metadata_len: Option<usize>, // only present in the first packet of a compressed metadata
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct EncodedPacket {
-        pub encoded_data: [u8; ENCODED_MESSAGE_LENGTH],
-    }
-    impl From<[u8; ENCODED_MESSAGE_LENGTH]> for EncodedPacket {
-        fn from(encoded_data: [u8; ENCODED_MESSAGE_LENGTH]) -> Self {
-            EncodedPacket { encoded_data }
-        }
-    }
-
-    const DECODED_MESSAGE_LENGTH: usize = 2056; // liquid uses {255, 127}-rs
-    pub const ENCODED_MESSAGE_LENGTH: usize = 4250;
-    const CRC_SCHEME: liquid_sys::crc_scheme = liquid_sys::crc_scheme_LIQUID_CRC_32;
-    const FEC_SCHEME_1: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_RS_M8_50;
-    const FEC_SCHEME_2: liquid_sys::fec_scheme = liquid_sys::fec_scheme_LIQUID_FEC_NONE;
-
-    pub struct Packetizer {
-        packetizer: *mut liquid_sys::packetizer_s,
-        payload_cursor: std::io::Cursor<Box<[u8]>>,
-    }
-
-    fn new_packetizer() -> *mut liquid_sys::packetizer_s {
-        unsafe {
-            liquid_sys::packetizer_create(
-                DECODED_MESSAGE_LENGTH as u32,
-                CRC_SCHEME as i32,
-                FEC_SCHEME_1 as i32,
-                FEC_SCHEME_2 as i32,
-            )
-        }
-    }
-
-    // TODO: Packetizer currently uses 32 parity bits for 223 bytes of data.
-    // This is a 14% redundancy rate. Softcast specifies 50%.
-    impl Packetizer {
-        pub(super) fn new(data: Box<[u8]>) -> Self {
-            let packetizer = new_packetizer();
-            let encoded_payload_len = unsafe {
-                liquid_sys::packetizer_compute_enc_msg_len(
-                    DECODED_MESSAGE_LENGTH as u32,
-                    CRC_SCHEME as i32,
-                    FEC_SCHEME_1 as i32,
-                    FEC_SCHEME_2 as i32,
-                )
-            } as usize;
-            assert_eq!(encoded_payload_len, ENCODED_MESSAGE_LENGTH);
-
-            Packetizer {
-                packetizer,
-                payload_cursor: std::io::Cursor::new(data),
-            }
-        }
-
-        fn encode_packet(&self, decoded_data: &[u8]) -> [u8; ENCODED_MESSAGE_LENGTH] {
-            assert_eq!(decoded_data.len(), DECODED_MESSAGE_LENGTH);
-            let mut encoded_data = [0u8; ENCODED_MESSAGE_LENGTH];
-            unsafe {
-                let status = liquid_sys::packetizer_encode(
-                    self.packetizer,
-                    decoded_data.as_ptr() as *mut u8,
-                    encoded_data.as_mut_ptr(),
-                );
-                assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK as i32);
-            }
-
-            encoded_data
-        }
-    }
-
-    impl From<CompressedMetadata2> for Packetizer {
-        fn from(compressed_metadata: CompressedMetadata2) -> Self {
-            Self::new(compressed_metadata.0)
-        }
-    }
-
-    impl Iterator for Packetizer {
-        type Item = EncodedPacket;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            // send payload len as footer
-            const PACKET_LEN_FOOTER_LEN: usize = size_of::<u16>();
-
-            let mut buf = [0u8; DECODED_MESSAGE_LENGTH];
-            let mut dst_pos = 0;
-
-            // If this is the start of this message, append four bytes for payload_len before padding
-            let payload_len = if self.payload_cursor.position() == 0 {
-                let payload_len = self.payload_cursor.get_ref().len() as u32;
-                Some(payload_len)
-            } else {
-                None
-            };
-            let payload_len_footer_len = match payload_len {
-                Some(payload_len) => size_of_val(&payload_len),
-                None => 0,
-            };
-
-            while dst_pos + payload_len_footer_len + PACKET_LEN_FOOTER_LEN < DECODED_MESSAGE_LENGTH
-            {
-                let end_pos =
-                    DECODED_MESSAGE_LENGTH - payload_len_footer_len - PACKET_LEN_FOOTER_LEN;
-                let dst = &mut buf[dst_pos..end_pos];
-                let bytes_written = self
-                    .payload_cursor
-                    .read(dst)
-                    .expect("Failed to write bytes.");
-                dst_pos += bytes_written;
-
-                if bytes_written == 0 {
-                    break; // EOF
-                }
-            }
-
-            // Four bytes on the payload_len_footer for the payload len of this packet
-            if let Some(payload_len) = payload_len {
-                assert!(dst_pos + payload_len_footer_len <= DECODED_MESSAGE_LENGTH);
-                let end_pos = dst_pos + payload_len_footer_len;
-                let dst = &mut buf[dst_pos..end_pos];
-                dst.copy_from_slice(&payload_len.to_be_bytes());
-                dst_pos += payload_len_footer_len;
-            }
-
-            // Two bytes in the footer for the packet len of this packet
-            match dst_pos {
-                0 => None, // Last packet was EOF
-                _ => {
-                    // U16_MAX == 65,536
-                    assert!(dst_pos + PACKET_LEN_FOOTER_LEN <= DECODED_MESSAGE_LENGTH);
-                    let footer = &mut buf[DECODED_MESSAGE_LENGTH - PACKET_LEN_FOOTER_LEN..];
-
-                    let decoded_packet_len: u16 =
-                        dst_pos.try_into().expect("decoded_packet_len > U16_MAX");
-                    footer.copy_from_slice(&decoded_packet_len.to_be_bytes());
-                    let encoded_data = self.encode_packet(&buf);
-
-                    Some(EncodedPacket::from(encoded_data))
-                }
-            }
-        }
-    }
-
-    pub struct Depacketizer<I: Iterator<Item = EncodedPacket>> {
-        packetizer: *mut liquid_sys::packetizer_s,
-        packet_iter: I,
-        working_cursor: std::io::Cursor<Box<[u8]>>,
-        has_read_first_packet: bool,
-        payload_len: std::cell::OnceCell<usize>,
-        bytes_read: usize,
-    }
-
-    impl<I: Iterator<Item = EncodedPacket>> From<I> for Depacketizer<I> {
-        fn from(packet_iter: I) -> Self {
-            let packetizer = new_packetizer();
-
-            Self {
-                packetizer,
-                packet_iter,
-                working_cursor: std::io::Cursor::new(vec![].into()),
-                has_read_first_packet: false,
-                payload_len: std::cell::OnceCell::new(),
-                bytes_read: 0,
-            }
-        }
-    }
-
-    impl<I: Iterator<Item = EncodedPacket>> Depacketizer<I> {
-        pub fn into_inner(self) -> I {
-            self.packet_iter
-        }
-
-        fn decode_packet(
-            &self,
-            packet: &EncodedPacket,
-            is_first: bool,
-        ) -> Result<DecodedPacket, Box<dyn std::error::Error>> {
-            let encoded_data = packet.encoded_data;
-
-            if encoded_data.len() != ENCODED_MESSAGE_LENGTH {
-                return Err("Unexpected encoded_data len.".into());
-            }
-            let mut decoded_data = vec![0u8; DECODED_MESSAGE_LENGTH];
-            let success = unsafe {
-                liquid_sys::packetizer_decode(
-                    self.packetizer,
-                    encoded_data.as_ptr() as *mut u8,
-                    decoded_data.as_mut_ptr(),
-                )
-            };
-            if success != 1 {
-                return Err("packetizer_decode failed.".into());
-            }
-
-            // decode packet_len
-            {
-                const FOOTER_LEN: usize = size_of::<u16>();
-                let footer = &decoded_data[decoded_data.len() - FOOTER_LEN..];
-                let mut footer_bytes = [0u8; FOOTER_LEN];
-                footer_bytes.copy_from_slice(footer);
-                let packet_len = u16::from_be_bytes(footer_bytes);
-                if packet_len as usize + FOOTER_LEN > DECODED_MESSAGE_LENGTH {
-                    return Err("packet_len > DECODED_MESSAGE_LENGTH".into());
-                }
-                decoded_data.truncate(packet_len.into()); // truncates padding and packet_len
-            }
-
-            // decode payload_len
-            let payload_len = if is_first {
-                const FOOTER_LEN: usize = size_of::<u32>();
-                let footer = &decoded_data[decoded_data.len() - FOOTER_LEN..];
-                let mut footer_bytes = [0u8; FOOTER_LEN];
-                footer_bytes.copy_from_slice(footer);
-                let payload_len = u32::from_be_bytes(footer_bytes) as usize;
-
-                // TODO: any upper bound for payload_len?
-
-                decoded_data.truncate(decoded_data.len() - FOOTER_LEN); // truncates payload_len
-                // eprintln!("payload_len:{payload_len}");
-
-                Some(payload_len)
-            } else {
-                None
-            };
-
-            Ok(DecodedPacket {
-                decoded_data: decoded_data.into(),
-                compressed_metadata_len: payload_len,
-            })
-        }
-    }
-
-    impl<I: Iterator<Item = EncodedPacket>> Read for Depacketizer<I> {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            let mut buf = buf;
-            let mut bytes_in_this_read = 0;
-
-            loop {
-                if let Some(&payload_len) = self.payload_len.get() {
-                    let remaining_in_payload = payload_len - (self.bytes_read + bytes_in_this_read);
-                    if 0 == remaining_in_payload {
-                        self.bytes_read += bytes_in_this_read;
-                        return Ok(bytes_in_this_read); // EOF when bytes_in_this_read == 0
-                    }
-                }
-
-                // Check if cursor is at the end its underlying buffer
-                if self.working_cursor.position() as usize == self.working_cursor.get_ref().len() {
-                    let encoded_packet = self.packet_iter.next();
-                    if encoded_packet.is_none() {
-                        // No more packets
-                        self.bytes_read += bytes_in_this_read;
-
-                        let payload_len = self.payload_len.get().copied().unwrap_or_default();
-                        if payload_len != self.bytes_read {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "EOF does not match payload_len.",
-                            ));
-                        }
-                        // return EOF
-                        return Ok(bytes_in_this_read);
-                    }
-                    let encoded_packet = encoded_packet.unwrap();
-                    let decoded_packet =
-                        self.decode_packet(&encoded_packet, !self.has_read_first_packet);
-                    if decoded_packet.is_err() {
-                        let decode_err = decoded_packet.err().unwrap();
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            decode_err.to_string(),
-                        ));
-                    }
-                    let decoded_packet = decoded_packet.unwrap();
-                    self.has_read_first_packet = true;
-                    let _ = self
-                        .payload_len
-                        .get_or_init(|| decoded_packet.compressed_metadata_len.unwrap());
-                    self.working_cursor = std::io::Cursor::new(decoded_packet.decoded_data);
-                }
-
-                // short circuit read if it is asking for more than the payload
-                let payload_len = *self
-                    .payload_len
-                    .get()
-                    .expect("Payload unexpectedly not initialized.");
-                let remaining_in_payload = payload_len - (self.bytes_read + bytes_in_this_read);
-                if remaining_in_payload < buf.len() {
-                    buf = &mut buf[..remaining_in_payload];
-                }
-
-                let remaining_in_cursor =
-                    self.working_cursor.get_ref().len() - self.working_cursor.position() as usize;
-
-                if remaining_in_cursor < buf.len() {
-                    // read is asking for more than what is in cursor.
-                    // read remainder of cursor and loop
-                    bytes_in_this_read +=
-                        self.working_cursor.read(&mut buf[..remaining_in_cursor])?;
-                    buf = &mut buf[remaining_in_cursor..];
-                } else {
-                    // working cursor has enough buffer to fully satisfy this read.
-                    bytes_in_this_read += self.working_cursor.read(buf)?;
-                    self.bytes_read += bytes_in_this_read;
-                    return Ok(bytes_in_this_read);
-                }
-            }
-        }
-    }
-}
-
 pub mod packet_modem {
     use super::*;
 
@@ -780,7 +463,6 @@ mod tests {
     use crate::asset_reader_writer::asset_reader::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
     use packet_modem::*;
-    use packetizer::*;
 
     #[test]
     #[cfg(target_vendor = "apple")]
@@ -896,33 +578,6 @@ mod tests {
     }
 
     #[test]
-    fn test_packetizer() {
-        let data = vec![0xbau8; 2056];
-        let packetizer = Packetizer::new(data.into());
-
-        for encoded_data in packetizer {
-            assert_eq!(encoded_data.encoded_data.len(), ENCODED_MESSAGE_LENGTH);
-        }
-    }
-
-    #[test]
-    fn test_depacketizer() {
-        let data = vec![0xbau8; 2056];
-        let compressed_metadata = CompressedMetadata2(data.clone().into());
-        let packetizer = Packetizer::from(compressed_metadata);
-
-        let mut depacketizer: Depacketizer<_> = packetizer.into();
-        let mut new_data = vec![];
-        let read_bytes = depacketizer
-            .read_to_end(&mut new_data)
-            .expect("failed to read to end.");
-
-        assert_eq!(read_bytes, 2056);
-
-        assert_eq!(data, new_data);
-    }
-
-    #[test]
     fn test_depacketizer_odd_boundary() {
         let mut data = vec![0xbau8; 1777];
         for (idx, byte) in data.iter_mut().enumerate() {
@@ -932,9 +587,9 @@ mod tests {
         }
 
         let compressed_metadata = CompressedMetadata2(data.clone().into());
-        let packetizer = Packetizer::from(compressed_metadata);
+        let packetizer = PacketModulator::from(compressed_metadata);
 
-        let mut depacketizer: Depacketizer<_> = packetizer.into();
+        let mut depacketizer: PacketDemodulator<_> = packetizer.flatten().into();
         let mut new_data = vec![];
         let read_bytes = depacketizer
             .read_to_end(&mut new_data)
@@ -955,9 +610,9 @@ mod tests {
         }
 
         let compressed_metadata = CompressedMetadata2(data.clone().into());
-        let packetizer = Packetizer::from(compressed_metadata);
+        let packetizer = PacketModulator::from(compressed_metadata);
 
-        let mut depacketizer: Depacketizer<_> = packetizer.into();
+        let mut depacketizer: PacketDemodulator<_> = packetizer.flatten().into();
         let mut new_data = vec![];
         let read_bytes = depacketizer
             .read_to_end(&mut new_data)
@@ -972,15 +627,12 @@ mod tests {
     fn test_depacketizer_extra_data_in_iterator() {
         let data = vec![0xbau8; 8];
         let compressed_metadata = CompressedMetadata2(data.clone().into());
-        let packetizer = Packetizer::from(compressed_metadata);
+        let packetizer = PacketModulator::from(compressed_metadata);
 
-        let zeros = [0u8; ENCODED_MESSAGE_LENGTH];
-        let zeros_encoded_tail = EncodedPacket {
-            encoded_data: zeros,
-        };
+        let zeros = vec![QuadratureSymbol::default(); 5000];
 
-        let mut depacketizer: Depacketizer<_> =
-            packetizer.chain([zeros_encoded_tail].into_iter()).into();
+        let mut depacketizer: PacketDemodulator<_> =
+            packetizer.flatten().chain(zeros.into_iter()).into();
 
         let mut new_data = vec![];
         let read_bytes = depacketizer
@@ -1035,9 +687,8 @@ mod tests {
         .expect("Failed to compress");
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH, true).collect();
 
-        let packetizer: Packetizer = y_compressed_metadata.into();
-        let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
-        let depacketizer: Depacketizer<_> = Depacketizer::from(encoded_packets.into_iter());
+        let packetizer: PacketModulator = y_compressed_metadata.into();
+        let depacketizer: PacketDemodulator<_> = packetizer.flatten().into();
         let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, num_chunks);
 
@@ -1084,9 +735,8 @@ mod tests {
         .expect("Failed to compress");
         let y_slices: Box<_> = y_chunks.into_iter().into_slice_iter(LENGTH, true).collect();
 
-        let packetizer: Packetizer = y_compressed_metadata.into();
-        let encoded_packets: Box<[EncodedPacket]> = packetizer.collect();
-        let depacketizer: Depacketizer<_> = encoded_packets.into_iter().into();
+        let packetizer: PacketModulator = y_compressed_metadata.into();
+        let depacketizer: PacketDemodulator<_> = packetizer.flatten().into();
         let decompressor: MetadataDecompressor<_> =
             MetadataDecompressor::new(depacketizer, num_chunks);
 

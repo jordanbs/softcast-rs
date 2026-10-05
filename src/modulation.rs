@@ -16,7 +16,6 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::compressor::*;
-use crate::metadata_coding::packetizer::*;
 use liquid_sys;
 use num_complex::Complex32;
 
@@ -35,28 +34,8 @@ impl From<QuadratureSymbol> for Complex32 {
         unsafe { std::mem::transmute(iq) }
     }
 }
-trait FromByte {
-    fn from_byte(byte: u8, modem: *mut liquid_sys::modemcf_s) -> Self;
-}
 pub trait FromU16 {
     fn from_u16(u: u16, modem: *mut liquid_sys::modemcf_s) -> Self;
-}
-type BPSKModulatedByte = [QuadratureSymbol; 8];
-impl FromByte for BPSKModulatedByte {
-    fn from_byte(byte: u8, modem: liquid_sys::modemcf) -> Self {
-        let mut quadrature_symbols = BPSKModulatedByte::default();
-
-        for (bitpos, q_symbol) in quadrature_symbols.iter_mut().enumerate().rev() {
-            // MSB-first
-            let bitval = 0 != (byte & (1 << bitpos));
-            let symbol_ptr: *mut Complex32 = &mut q_symbol.value; // Complex32 is bincompat with C float complex
-            let status =
-                unsafe { liquid_sys::modemcf_modulate(modem, bitval.into(), symbol_ptr) } as u32;
-            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-        }
-
-        quadrature_symbols
-    }
 }
 pub struct U8QPacketModem {
     ptr: liquid_sys::qpacketmodem,
@@ -117,123 +96,6 @@ impl Drop for U8QPacketModem {
     fn drop(&mut self) {
         let status = unsafe { liquid_sys::qpacketmodem_destroy(self.ptr) } as u32;
         assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-    }
-}
-
-pub mod metadata {
-    use super::*;
-
-    const MODULATION_SCHEME: u32 = liquid_sys::modulation_scheme_LIQUID_MODEM_BPSK;
-
-    // TODO: consider replacing with qpacketmodem
-    pub struct MetadataModulator<I: Iterator<Item = EncodedPacket>> {
-        modemcf_wrapper: ModemCFWrapper,
-        inner: I,
-        working_packet: Option<EncodedPacket>,
-        working_packet_pos: usize,
-    }
-
-    impl<I: Iterator<Item = EncodedPacket>> From<I> for MetadataModulator<I> {
-        fn from(encoded_packet_iter: I) -> Self {
-            let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) };
-            assert_ne!(std::ptr::null_mut(), modemcf);
-            let modemcf_wrapper = ModemCFWrapper { ptr: modemcf };
-
-            MetadataModulator {
-                modemcf_wrapper,
-                inner: encoded_packet_iter,
-                working_packet: None,
-                working_packet_pos: 0,
-            }
-        }
-    }
-
-    impl<I: Iterator<Item = EncodedPacket>> Iterator for MetadataModulator<I> {
-        // TODO: size hint
-
-        type Item = BPSKModulatedByte;
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.working_packet.is_none() {
-                self.working_packet = self.inner.next();
-            }
-            let working_packet = self.working_packet.as_ref()?;
-            let byte = working_packet.encoded_data[self.working_packet_pos];
-            let quadrature_symbols = BPSKModulatedByte::from_byte(byte, self.modemcf_wrapper.ptr);
-
-            self.working_packet_pos += 1;
-            if working_packet.encoded_data.len() == self.working_packet_pos {
-                self.working_packet = None;
-                self.working_packet_pos = 0;
-            }
-            Some(quadrature_symbols)
-        }
-    }
-
-    pub struct MetadataDemodulator<I: Iterator<Item = QuadratureSymbol>> {
-        modemcf_wrapper: ModemCFWrapper,
-        inner: I,
-    }
-
-    impl<I: Iterator<Item = QuadratureSymbol>> MetadataDemodulator<I> {
-        pub fn into_inner(self) -> I {
-            self.inner
-        }
-    }
-
-    impl<I: Iterator<Item = QuadratureSymbol>> From<I> for MetadataDemodulator<I> {
-        fn from(quadrature_symbol_iter: I) -> Self {
-            let modemcf = unsafe { liquid_sys::modemcf_create(MODULATION_SCHEME) };
-            assert_ne!(std::ptr::null_mut(), modemcf);
-            let modemcf_wrapper = ModemCFWrapper { ptr: modemcf };
-
-            MetadataDemodulator {
-                modemcf_wrapper,
-                inner: quadrature_symbol_iter,
-            }
-        }
-    }
-    impl<I: Iterator<Item = QuadratureSymbol>> Iterator for MetadataDemodulator<I> {
-        // TODO: size hint
-
-        type Item = EncodedPacket;
-        fn next(&mut self) -> Option<Self::Item> {
-            let mut packet_buf = [0u8; ENCODED_MESSAGE_LENGTH];
-            for byte in &mut packet_buf {
-                for bitpos in 0..8 {
-                    // assume 0 bits if inner runs out, let CRC reject
-                    if let Some(q_symbol) = self.inner.next() {
-                        let mut bitval = 0u32;
-                        let status = unsafe {
-                            liquid_sys::modemcf_demodulate(
-                                self.modemcf_wrapper.ptr,
-                                q_symbol.value,
-                                &mut bitval,
-                            )
-                        };
-                        assert_eq!(status as u32, liquid_sys::liquid_error_code_LIQUID_OK);
-
-                        let bitval = bitval as u8;
-                        *byte |= bitval << bitpos;
-                    } else if 0 == bitpos {
-                        return None;
-                    } else {
-                        return Some(packet_buf.into());
-                    }
-                }
-            }
-            Some(packet_buf.into())
-        }
-    }
-
-    // Adds drop support to modemcf, necessary to work around rustc E0509.
-    struct ModemCFWrapper {
-        ptr: liquid_sys::modemcf,
-    }
-    impl Drop for ModemCFWrapper {
-        fn drop(&mut self) {
-            let status = unsafe { liquid_sys::modemcf_destroy(self.ptr) } as u32;
-            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
-        }
     }
 }
 
@@ -371,28 +233,6 @@ mod tests {
     use crate::channel_coding::slice::*;
     use crate::modulation::slices::*;
     use crate::pixel_buffer::*;
-    use metadata::*;
-
-    #[test]
-    fn test_modem_basic() {
-        let mut encoded_packets: Vec<EncodedPacket> =
-            vec![[0xbau8; ENCODED_MESSAGE_LENGTH].into(); 333];
-
-        for (idx, packet) in &mut encoded_packets.iter_mut().enumerate() {
-            packet.encoded_data[idx] = 0x11u8;
-        }
-        let cloned_encoded_packets = encoded_packets.clone();
-
-        let modulator = MetadataModulator::from(encoded_packets.into_iter());
-        let demodulator = MetadataDemodulator::from(modulator.flatten());
-
-        let mut num_new_packets = 0;
-        for (original_packet, new_packet) in cloned_encoded_packets.iter().zip(demodulator) {
-            num_new_packets += 1;
-            assert_eq!(original_packet.encoded_data, new_packet.encoded_data);
-        }
-        assert_eq!(cloned_encoded_packets.len(), num_new_packets);
-    }
 
     #[test]
     fn test_modulate_one_slice() {
@@ -575,110 +415,6 @@ mod tests {
                 let chunk_old = chunks_old_iter.next().expect("ran out of chunks");
                 assert_eq!(chunk_old, chunk_new);
             }
-        }
-    }
-
-    use crate::metadata_coding::*;
-    use crate::source_coding::chunk::*;
-
-    #[test]
-    fn test_chunk_metadata_modulation_values() {
-        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
-        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
-            cm.energy = idx as f32;
-            cm.mean = -(idx as f32);
-        }
-        let metadata_bitmap = MetadataBitmap {
-            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
-        };
-        let compressed_metadata = compress_metadata(
-            (&metadata_bitmap, chunk_metadata.iter()),
-            (&metadata_bitmap, std::iter::empty()),
-            (&metadata_bitmap, std::iter::empty()),
-        )
-        .expect("Failed to compress");
-        let packetizer: Packetizer = compressed_metadata.into();
-
-        let orig_encoded_packets: Vec<_> = packetizer.collect();
-
-        let metadata_modulator: MetadataModulator<_> =
-            orig_encoded_packets.clone().into_iter().into();
-        let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
-
-        let new_encoded_packets: Vec<_> = metadata_demodulator.collect();
-        assert_eq!(orig_encoded_packets, new_encoded_packets);
-    }
-
-    #[test]
-    fn test_chunk_metadata_modulation_decode_1() {
-        let mut chunk_metadata = vec![ChunkMetadata::default(); 15];
-        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
-            cm.energy = idx as f32;
-            cm.mean = -(idx as f32);
-        }
-        let metadata_bitmap = MetadataBitmap {
-            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
-        };
-        let compressed_metadata = compress_metadata(
-            (&metadata_bitmap, chunk_metadata.iter()),
-            (&metadata_bitmap, std::iter::empty()),
-            (&metadata_bitmap, std::iter::empty()),
-        )
-        .expect("Failed to compress");
-        let packetizer: Packetizer = compressed_metadata.into();
-
-        let orig_encoded_packets: Vec<_> = packetizer.collect();
-
-        let metadata_modulator: MetadataModulator<_> =
-            orig_encoded_packets.clone().into_iter().into();
-        let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
-
-        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<_> =
-            MetadataDecompressor::new(depacketizer, chunk_metadata.len());
-        let new_chunk_metatata: Vec<ChunkMetadata> =
-            decompressor.map(|result| result.unwrap()).collect();
-
-        for (orig, new) in chunk_metadata.iter().zip(new_chunk_metatata.iter()) {
-            assert!((orig.mean - new.mean).abs() < 0.5);
-            assert!(orig.energy == new.energy || (1.0 - orig.energy / new.energy).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_chunk_metadata_modulation_decode_2() {
-        let mut chunk_metadata = vec![ChunkMetadata::default(); 15000];
-        for (idx, cm) in chunk_metadata.iter_mut().enumerate() {
-            cm.energy = idx as f32;
-            cm.mean = -(idx as f32) % i8::MAX as f32;
-        }
-        let metadata_bitmap = MetadataBitmap {
-            values: bitvec::bitbox![u8, bitvec::order::Lsb0; 1; chunk_metadata.len()],
-        };
-        let compressed_metadata = compress_metadata(
-            (&metadata_bitmap, chunk_metadata.iter()),
-            (&metadata_bitmap, std::iter::empty()),
-            (&metadata_bitmap, std::iter::empty()),
-        )
-        .expect("Failed to compress");
-        let packetizer: Packetizer = compressed_metadata.into();
-        let metadata_modulator: MetadataModulator<_> = packetizer.into();
-
-        let metadata_demodulator: MetadataDemodulator<_> = metadata_modulator.flatten().into();
-        let depacketizer: Depacketizer<_> = metadata_demodulator.into();
-        let decompressor: MetadataDecompressor<_> =
-            MetadataDecompressor::new(depacketizer, chunk_metadata.len());
-        let new_chunk_metatata: Vec<ChunkMetadata> =
-            decompressor.map(|result| result.unwrap()).collect();
-
-        for (orig, new) in chunk_metadata.iter().zip(new_chunk_metatata.iter()) {
-            assert!(
-                (orig.mean - new.mean).abs() < 0.5,
-                "{} ->  {}",
-                orig.mean,
-                new.mean
-            );
-            assert!(orig.energy == new.energy || (1.0 - orig.energy / new.energy).abs() < 0.001);
         }
     }
 }
