@@ -424,8 +424,6 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         ),
         Box<dyn std::error::Error>,
     > {
-        let packet_modem: PacketDemodulator<_> = self.by_ref().into();
-
         fn chunks_per_gop(
             gop_len: usize,
             asset_resolution: (usize, usize),
@@ -438,28 +436,6 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
             );
             (gop_len * frame_height * frame_width) / (chunk_dim.0 * chunk_dim.1 * chunk_dim.2)
         }
-
-        let y_chunks_per_gop = chunks_per_gop(
-            gop_len,
-            asset_resolution,
-            y_chunk_dim,
-            PixelComponentType::Y,
-        );
-        let cb_chunks_per_gop = chunks_per_gop(
-            gop_len,
-            asset_resolution,
-            cr_chunk_dim,
-            PixelComponentType::Cb,
-        );
-        let cr_chunks_per_gop = chunks_per_gop(
-            gop_len,
-            asset_resolution,
-            cb_chunk_dim,
-            PixelComponentType::Cr,
-        );
-
-        let mut y_decompressor = MetadataDecompressor::new(packet_modem, y_chunks_per_gop);
-
         fn next_metadata<PixelType: HasPixelComponentType, R: std::io::Read>(
             chunks_per_gop: usize,
             decompressor: &mut MetadataDecompressor<R>,
@@ -484,6 +460,26 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
 
             Ok(MetadataInfo::new(metadata_bitmap, chunk_metadatas.into()))
         }
+        let y_chunks_per_gop = chunks_per_gop(
+            gop_len,
+            asset_resolution,
+            y_chunk_dim,
+            PixelComponentType::Y,
+        );
+        let cb_chunks_per_gop = chunks_per_gop(
+            gop_len,
+            asset_resolution,
+            cr_chunk_dim,
+            PixelComponentType::Cb,
+        );
+        let cr_chunks_per_gop = chunks_per_gop(
+            gop_len,
+            asset_resolution,
+            cb_chunk_dim,
+            PixelComponentType::Cr,
+        );
+        let packet_modem: PacketDemodulator<_> = self.by_ref().into();
+        let mut y_decompressor = MetadataDecompressor::new(packet_modem, y_chunks_per_gop);
 
         let y = next_metadata(y_chunks_per_gop, &mut y_decompressor)?;
 
