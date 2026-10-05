@@ -200,10 +200,12 @@ mod tests {
             encoder.cb_chunk_dimensions(),
             encoder.cr_chunk_dimensions(),
             true,
+            true,
             None,
         )
         .expect("Failed to create decoder.");
-        run_simulation(encoder, decoder, noise_power, false, true).expect("run_simulation failed.");
+        run_simulation(encoder, decoder, 1.0, false, noise_power, false, true)
+            .expect("run_simulation failed.");
     }
 
     #[test]
@@ -240,6 +242,7 @@ mod tests {
             encoder.y_chunk_dimensions(),
             encoder.cb_chunk_dimensions(),
             encoder.cr_chunk_dimensions(),
+            true,
             true,
             Some(tap_receiver),
         )

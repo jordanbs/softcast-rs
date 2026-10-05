@@ -1240,7 +1240,7 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop, true);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f64::default());
+        let power_descaler = PowerScaler::inverse(chunks.into_iter(), Rc::default());
         let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
             .take(chunks_per_gop)
@@ -1416,7 +1416,7 @@ mod tests {
             slice_and_chunk_metadata_iter.into_chunks_iter(chunks_per_gop, true);
 
         let chunks: Box<_> = chunks_iter.take(chunks_per_gop).collect();
-        let power_descaler = PowerScaler::inverse(chunks.into_iter(), f64::default());
+        let power_descaler = PowerScaler::inverse(chunks.into_iter(), Rc::default());
 
         let chunk_metadatas_new: Box<_> = power_descaler
             .map(|chunk| chunk.metadata)
@@ -1568,7 +1568,7 @@ mod tests {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks, true)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter, f64::default());
+        let power_descaler = PowerScaler::inverse(chunks_iter, Rc::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let y_dct_components = TransformBlock3DDCT::from_chunks_owned(
@@ -1728,7 +1728,7 @@ mod tests {
         let chunks_iter = slice_and_chunk_metadata_iter
             .into_chunks_iter(num_included_chunks, true)
             .take(num_included_chunks);
-        let power_descaler = PowerScaler::inverse(chunks_iter, f64::default());
+        let power_descaler = PowerScaler::inverse(chunks_iter, Rc::default());
         let _chunks: Box<_> = power_descaler.collect(); // discard.. runs fwht
 
         let cb_dct_components = TransformBlock3DDCT::from_chunks_owned(
