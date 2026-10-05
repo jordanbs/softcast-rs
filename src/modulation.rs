@@ -62,7 +62,7 @@ pub struct U8QPacketModem {
     ptr: liquid_sys::qpacketmodem,
 }
 impl U8QPacketModem {
-    pub const ENCODED_FRAME_LEN: usize = 40;
+    pub const ENCODED_FRAME_LEN: usize = 80;
 
     pub fn new() -> Self {
         unsafe {
@@ -73,7 +73,7 @@ impl U8QPacketModem {
                 liquid_sys::crc_scheme_LIQUID_CRC_24,
                 liquid_sys::fec_scheme_LIQUID_FEC_CONV_V29,
                 liquid_sys::fec_scheme_LIQUID_FEC_NONE,
-                liquid_sys::modulation_scheme_LIQUID_MODEM_QPSK as i32,
+                liquid_sys::modulation_scheme_LIQUID_MODEM_BPSK as i32,
             ) as u32;
             assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
 
