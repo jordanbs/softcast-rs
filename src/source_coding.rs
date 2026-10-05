@@ -282,7 +282,7 @@ pub mod power_scaling {
         let num_chunks = chunk_energies.len(); // should take into account compression ratio
 
         // target RMS of iq samples ~0.5-1.
-        let power_budget = num_chunks as f32 * 10f32.powf(-0.125); // -0.125 is good
+        let power_budget = num_chunks as f32 * 10f32.powf(-1.3);
 
         // skip math if energy is 0
         if chunk_energy.abs() < f32::EPSILON {
