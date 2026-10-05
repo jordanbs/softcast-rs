@@ -17,7 +17,7 @@
 
 pub const FRAME_LEN: usize = 0x400; // ofdm symbols per frame
 
-pub const DEFAULT_WHITEN_LEN: usize = 0x20000;
+pub const DEFAULT_WHITEN_LEN: usize = 0x200000;
 pub const DEFAULT_WHITEN_ROUNDS: usize = 2;
 
 #[derive(Clone, Debug)]
