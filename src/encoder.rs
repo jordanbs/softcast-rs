@@ -21,10 +21,9 @@ use crate::channel_coding::slice::*;
 use crate::compressor::*;
 use crate::config::*;
 use crate::framing::*;
-use crate::metadata_coding::packetizer::*;
+use crate::metadata_coding::packet_modem::*;
 use crate::metadata_coding::*;
 use crate::modulation::QuadratureSymbol;
-use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
 use crate::pixel_buffer::transform_block_3d::*;
 use crate::pixel_buffer::*;
@@ -248,9 +247,8 @@ fn metadata_signal(
         (&cr.0, cr.1.metadata_iter()),
     )
     .expect("Compressing metadata failed.");
-    let packetizer: Packetizer = compressed_metadata.into();
-    let metadata_modulator: MetadataModulator<_> = packetizer.into();
-    metadata_modulator.flatten()
+    let packet_modem: PacketModulator = compressed_metadata.into();
+    packet_modem.flatten()
 }
 
 fn slice_signal<PixelType: HasPixelComponentType>(

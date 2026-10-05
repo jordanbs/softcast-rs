@@ -16,9 +16,11 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::compressor::*;
+use crate::modulation::QuadratureSymbol;
 use crate::source_coding::chunk::*;
 use half::f16;
 use liquid_sys;
+use num_complex::Complex32;
 use std::io::{Read, Write};
 use zstd;
 
@@ -564,12 +566,220 @@ pub mod packetizer {
     }
 }
 
+pub mod packet_modem {
+    use super::*;
+
+    const PACKET_LEN: usize = 1023;
+    const FRAME_LEN: usize = 33864;
+    const HEADER_LEN: usize = size_of::<u32>();
+
+    fn qpacketmodem_new() -> *mut liquid_sys::qpacketmodem_s {
+        unsafe {
+            let qpacketmodem = liquid_sys::qpacketmodem_create();
+            // TODO: Apply CRC check for entire metadata rather than for each packet.
+            let status = liquid_sys::qpacketmodem_configure(
+                qpacketmodem,
+                PACKET_LEN as u32,
+                liquid_sys::crc_scheme_LIQUID_CRC_32,
+                liquid_sys::fec_scheme_LIQUID_FEC_CONV_V27,
+                liquid_sys::fec_scheme_LIQUID_FEC_RS_M8_50,
+                liquid_sys::modulation_scheme_LIQUID_MODEM_BPSK as i32,
+            ) as u32;
+            assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+
+            let frame_len = liquid_sys::qpacketmodem_get_frame_len(qpacketmodem);
+            assert_eq!(FRAME_LEN, frame_len as usize);
+            qpacketmodem
+        }
+    }
+
+    pub struct PacketModulator {
+        qpacketmodem: *mut liquid_sys::qpacketmodem_s,
+        payload_reader: std::io::BufReader<std::io::Cursor<Box<[u8]>>>,
+        payload_len: u32,
+        needs_header: bool,
+        finished: bool,
+    }
+
+    impl From<CompressedMetadata2> for PacketModulator {
+        fn from(compressed_metadata: CompressedMetadata2) -> Self {
+            let qpacketmodem = qpacketmodem_new();
+            let payload_len = compressed_metadata.data().len() as u32;
+            let payload_reader =
+                std::io::BufReader::new(std::io::Cursor::new(compressed_metadata.0));
+            Self {
+                qpacketmodem,
+                payload_reader,
+                payload_len,
+                needs_header: true,
+                finished: false,
+            }
+        }
+    }
+    impl PacketModulator {
+        fn write_header<W: std::io::Write>(&mut self, packet_writer: &mut W) {
+            let header_bytes = self.payload_len.to_be_bytes();
+            let mut header_reader = std::io::BufReader::new(&header_bytes[..]);
+            std::io::copy(&mut header_reader, packet_writer).expect("Failed to write header.");
+        }
+    }
+    impl Iterator for PacketModulator {
+        type Item = Box<[QuadratureSymbol]>;
+
+        fn next(&mut self) -> Option<Box<[QuadratureSymbol]>> {
+            if self.finished {
+                return None;
+            }
+
+            let mut packet_buf = [0u8; PACKET_LEN];
+            let mut packet_writer = std::io::BufWriter::new(&mut packet_buf[..]);
+
+            let mut bytes_needed = PACKET_LEN;
+            if self.needs_header {
+                self.write_header(&mut packet_writer);
+                bytes_needed -= HEADER_LEN;
+                self.needs_header = false;
+            };
+
+            let mut payload_reader = self.payload_reader.by_ref().take(bytes_needed as u64); // to prevent over-reads
+            let bytes_written = std::io::copy(&mut payload_reader, &mut packet_writer)
+                .expect("Failed to write payload.") as usize;
+            drop(packet_writer); // give borrow back to packet_buf
+
+            if 0 == bytes_written {
+                return None;
+            }
+            if bytes_written < bytes_needed {
+                self.finished = true;
+            }
+
+            let mut encoded_packet = vec![Complex32::ZERO; FRAME_LEN];
+            unsafe {
+                let status = liquid_sys::qpacketmodem_encode(
+                    self.qpacketmodem,
+                    packet_buf.as_ptr(),
+                    encoded_packet.as_mut_ptr(),
+                ) as u32;
+                assert_eq!(status, liquid_sys::liquid_error_code_LIQUID_OK);
+            }
+            Some(unsafe { std::mem::transmute(encoded_packet.into_boxed_slice()) })
+        }
+    }
+    impl Drop for PacketModulator {
+        fn drop(&mut self) {
+            unsafe {
+                liquid_sys::qpacketmodem_destroy(self.qpacketmodem);
+            }
+        }
+    }
+
+    pub struct PacketDemodulator<I: Iterator<Item = QuadratureSymbol>> {
+        qpacketmodem: *mut liquid_sys::qpacketmodem_s,
+        inner: I,
+        payload_reader: Option<std::io::BufReader<std::io::Cursor<Box<[u8]>>>>,
+    }
+    impl<I: Iterator<Item = QuadratureSymbol>> From<I> for PacketDemodulator<I> {
+        fn from(inner: I) -> Self {
+            Self {
+                qpacketmodem: qpacketmodem_new(),
+                inner,
+                payload_reader: None,
+            }
+        }
+    }
+    impl<I: Iterator<Item = QuadratureSymbol>> PacketDemodulator<I> {
+        fn decode_next_packet(&mut self, buf: &mut [u8]) -> Result<(), std::io::Error> {
+            let mut encoded_packet = Vec::with_capacity(FRAME_LEN);
+            encoded_packet.extend(
+                self.inner
+                    .by_ref()
+                    .chain([QuadratureSymbol::default()].into_iter().cycle()) // pad with 0s if necessary
+                    .take(FRAME_LEN),
+            );
+
+            let crc_pass = unsafe {
+                0 != liquid_sys::qpacketmodem_decode_soft(
+                    self.qpacketmodem,
+                    encoded_packet.as_mut_ptr() as *mut Complex32,
+                    buf.as_mut_ptr(),
+                )
+            };
+            if !crc_pass {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Metadata decode failed.",
+                ));
+            }
+            Ok(())
+        }
+        fn decode(&mut self) -> Result<Box<[u8]>, std::io::Error> {
+            let mut first_packet_buf = [0u8; PACKET_LEN];
+            self.decode_next_packet(&mut first_packet_buf)?;
+
+            let mut header_buf = [0u8; HEADER_LEN];
+            header_buf.copy_from_slice(&first_packet_buf[..HEADER_LEN]);
+            let payload_len = u32::from_be_bytes(header_buf) as usize;
+
+            let num_packets = 1 + (HEADER_LEN + payload_len) / PACKET_LEN;
+            let mut payload = Vec::with_capacity(num_packets * PACKET_LEN);
+            payload.extend(&first_packet_buf[HEADER_LEN..]);
+
+            while payload.len() < payload_len {
+                let start = payload.len();
+                unsafe {
+                    payload.set_len(start + PACKET_LEN);
+                    self.decode_next_packet(&mut payload[start..])?;
+                }
+            }
+            payload.truncate(payload_len);
+
+            Ok(payload.into())
+        }
+        fn payload_reader(&mut self) -> Result<impl Read, std::io::Error> {
+            if self.payload_reader.is_none() {
+                let decoded_packet = self.decode()?;
+                let reader = std::io::BufReader::new(std::io::Cursor::new(decoded_packet));
+                self.payload_reader = Some(reader);
+            }
+            Ok(self.payload_reader.as_mut().unwrap())
+        }
+    }
+    impl<I: Iterator<Item = QuadratureSymbol>> Read for PacketDemodulator<I> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.payload_reader()?.read(buf)
+        }
+        fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+            self.payload_reader()?.read_exact(buf)
+        }
+        fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+            self.payload_reader()?.read_to_end(buf)
+        }
+        fn read_to_string(&mut self, buf: &mut String) -> std::io::Result<usize> {
+            self.payload_reader()?.read_to_string(buf)
+        }
+        fn read_vectored(
+            &mut self,
+            bufs: &mut [std::io::IoSliceMut<'_>],
+        ) -> std::io::Result<usize> {
+            self.payload_reader()?.read_vectored(bufs)
+        }
+    }
+    impl<I: Iterator<Item = QuadratureSymbol>> Drop for PacketDemodulator<I> {
+        fn drop(&mut self) {
+            unsafe {
+                liquid_sys::qpacketmodem_destroy(self.qpacketmodem);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(target_vendor = "apple")]
     use crate::asset_reader_writer::asset_reader::*;
     use crate::channel_coding::slice::ChunkIterIntoExt;
+    use packet_modem::*;
     use packetizer::*;
 
     #[test]
@@ -780,6 +990,22 @@ mod tests {
         assert_eq!(read_bytes, 8);
 
         assert_eq!(data, new_data);
+    }
+
+    #[test]
+    fn test_packet_modem() {
+        let data_in = vec![0xbau8; 5000];
+        let compressed_metadata = CompressedMetadata2(data_in.clone().into());
+
+        let modulator: PacketModulator = compressed_metadata.into();
+        let iqs: Vec<QuadratureSymbol> = modulator.flatten().collect();
+        let mut data_out = vec![];
+        let mut demodulator: PacketDemodulator<_> = iqs.into_iter().into();
+        demodulator
+            .read_to_end(&mut data_out)
+            .expect("Failed to read data to end.");
+
+        assert_eq!(data_in, data_out);
     }
 
     #[test]

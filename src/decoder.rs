@@ -23,9 +23,8 @@ use crate::channel_coding::slice::*;
 use crate::compressor::*;
 use crate::config::*;
 use crate::framing::*;
-use crate::metadata_coding::packetizer::*;
+use crate::metadata_coding::packet_modem::*;
 use crate::metadata_coding::*;
-use crate::modulation::metadata::*;
 use crate::modulation::slices::*;
 use crate::modulation::*;
 use crate::pixel_buffer::transform_block_3d::*;
@@ -425,8 +424,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         ),
         Box<dyn std::error::Error>,
     > {
-        let demodulator: MetadataDemodulator<_> = self.by_ref().into();
-        let depacketizer: Depacketizer<_> = demodulator.into();
+        let packet_modem: PacketDemodulator<_> = self.by_ref().into();
 
         fn chunks_per_gop(
             gop_len: usize,
@@ -460,7 +458,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
             PixelComponentType::Cr,
         );
 
-        let mut y_decompressor = MetadataDecompressor::new(depacketizer, y_chunks_per_gop);
+        let mut y_decompressor = MetadataDecompressor::new(packet_modem, y_chunks_per_gop);
 
         fn next_metadata<PixelType: HasPixelComponentType, R: std::io::Read>(
             chunks_per_gop: usize,
