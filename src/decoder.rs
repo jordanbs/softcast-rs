@@ -38,8 +38,8 @@ use crate::utils::*;
 use ndarray_stats::DeviationExt;
 use std::{cell::Cell, rc::Rc};
 
-pub struct FileWriterDecoder {
-    asset_writer: AssetWriter,
+#[derive(Debug, Clone, Copy)]
+pub struct DecoderConfig {
     asset_resolution: (usize, usize),
     gop_len: usize,
     y_chunk_dim: (usize, usize, usize),
@@ -47,9 +47,14 @@ pub struct FileWriterDecoder {
     cr_chunk_dim: (usize, usize, usize),
     hadamard: bool,
     wiener: bool,
+}
+
+pub struct FileWriterDecoder {
+    asset_writer: AssetWriter,
+    config: DecoderConfig,
     started_writing: bool,
     original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>, // to compute PSNR
-    final_stats: std::cell::OnceCell<Statistics>,
+    final_stats: Option<Statistics>,
 }
 impl FileWriterDecoder {
     pub fn try_new(
@@ -73,17 +78,19 @@ impl FileWriterDecoder {
 
         let writer = AssetWriter::load_new(writer_settings)?;
         Ok(Self {
-            asset_resolution,
-            gop_len,
-            y_chunk_dim,
-            cb_chunk_dim,
-            cr_chunk_dim,
-            hadamard,
-            wiener,
+            config: DecoderConfig {
+                asset_resolution,
+                gop_len,
+                y_chunk_dim,
+                cb_chunk_dim,
+                cr_chunk_dim,
+                hadamard,
+                wiener,
+            },
             asset_writer: writer,
             started_writing: false,
             original_macro_block_3ds,
-            final_stats: std::cell::OnceCell::new(),
+            final_stats: None,
         })
     }
 
@@ -100,21 +107,41 @@ impl FileWriterDecoder {
 
         let mut decoder = Decoder::new(
             frame_synchronizer,
-            self.asset_resolution,
-            self.gop_len,
-            self.y_chunk_dim,
-            self.cb_chunk_dim,
-            self.cr_chunk_dim,
-            self.hadamard,
-            self.wiener,
+            self.config,
             self.original_macro_block_3ds.take(),
         );
 
+        let result = decoder.run(|pb| {
+            self.asset_writer.append_pixel_buffer(pb)?;
+            self.asset_writer.wait_for_writer_to_be_ready()?;
+            Ok(())
+        });
+        self.final_stats = decoder.final_stats.clone().take();
+        result
+    }
+    pub fn final_stats(&self) -> Statistics {
+        self.final_stats.expect("Stats not yet finalized")
+    }
+}
+
+struct Decoder<O: OFDMFrameSynchronizerTrait> {
+    frame_synchronizer: O,
+    config: DecoderConfig,
+    gops_received: usize,
+    original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
+    stats: PartialStatistics,
+    final_stats: std::cell::OnceCell<Statistics>,
+}
+impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
+    pub fn run<F: FnMut(CVPixelBufferWrapper) -> Result<(), Box<dyn std::error::Error>>>(
+        &mut self,
+        mut pixel_buffer_consumer: F,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
-            if let Err(err) = self.run_loop_inner(&mut decoder) {
+            if let Err(err) = self.run_loop_inner(&mut pixel_buffer_consumer) {
                 // compute and print stats
                 self.final_stats
-                    .set(decoder.stats.finalize())
+                    .set(self.stats.finalize())
                     .expect("Already initialized.");
                 let Statistics {
                     y_psnr,
@@ -122,7 +149,7 @@ impl FileWriterDecoder {
                     cr_psnr,
                     weighted_total_psnr,
                 } = self.final_stats.get().cloned().unwrap();
-                let cumulative_snr = decoder.signal_to_noise_db();
+                let cumulative_snr = self.signal_to_noise_db();
                 println!("Cumulative SNR: {cumulative_snr:.2}");
                 println!(
                     "PSNR: {weighted_total_psnr:.2} dB\t{y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB"
@@ -132,39 +159,17 @@ impl FileWriterDecoder {
         }
     }
 
-    fn run_loop_inner<O: OFDMFrameSynchronizerTrait>(
+    fn run_loop_inner<F: FnMut(CVPixelBufferWrapper) -> Result<(), Box<dyn std::error::Error>>>(
         &mut self,
-        decoder: &mut Decoder<O>,
+        mut pixel_buffer_consumer: F,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let pixel_buffer_iter = decoder.next_pb_iter()?;
+        let pixel_buffer_iter = self.next_pb_iter()?;
         for pixel_buffer in pixel_buffer_iter {
-            self.asset_writer.append_pixel_buffer(pixel_buffer)?;
-            self.asset_writer.wait_for_writer_to_be_ready()?;
+            pixel_buffer_consumer(pixel_buffer)?;
         }
         Ok(())
     }
 
-    pub fn final_stats(&self) -> Result<Statistics, Box<dyn std::error::Error>> {
-        self.final_stats
-            .get()
-            .cloned()
-            .ok_or("Stats not yet finalized".into())
-    }
-}
-struct Decoder<O: OFDMFrameSynchronizerTrait> {
-    frame_synchronizer: O,
-    asset_resolution: (usize, usize),
-    gop_len: usize,
-    y_chunk_dim: (usize, usize, usize),
-    cb_chunk_dim: (usize, usize, usize),
-    cr_chunk_dim: (usize, usize, usize),
-    hadamard: bool,
-    wiener: bool,
-    gops_received: usize,
-    original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
-    stats: PartialStatistics,
-}
-impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
     fn next_pb_iter(
         &mut self,
     ) -> Result<impl Iterator<Item = CVPixelBufferWrapper>, Box<dyn std::error::Error>> {
@@ -175,39 +180,28 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
 
     pub fn new(
         frame_synchronizer: O,
-        asset_resolution: (usize, usize),
-        gop_len: usize,
-        y_chunk_dim: (usize, usize, usize),
-        cb_chunk_dim: (usize, usize, usize),
-        cr_chunk_dim: (usize, usize, usize),
-        hadamard: bool,
-        wiener: bool,
+        config: DecoderConfig,
         original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
     ) -> Self {
         Self {
             frame_synchronizer,
-            asset_resolution,
-            gop_len,
-            y_chunk_dim,
-            cb_chunk_dim,
-            cr_chunk_dim,
-            hadamard,
-            wiener,
+            config,
             gops_received: 0,
             original_macro_block_3ds,
             stats: PartialStatistics::default(),
+            final_stats: std::cell::OnceCell::default(),
         }
     }
 
     fn next_gop(&mut self) -> Result<Box<[CVPixelBufferWrapper]>, Box<dyn std::error::Error>> {
         let (y_dct, cb_dct, cr_dct) = self.frame_synchronizer.next_gop(
-            self.gop_len,
-            self.asset_resolution,
-            self.y_chunk_dim,
-            self.cb_chunk_dim,
-            self.cr_chunk_dim,
-            self.hadamard,
-            if self.wiener {
+            self.config.gop_len,
+            self.config.asset_resolution,
+            self.config.y_chunk_dim,
+            self.config.cb_chunk_dim,
+            self.config.cr_chunk_dim,
+            self.config.hadamard,
+            if self.config.wiener {
                 Some(self.frame_synchronizer.signal_stats())
             } else {
                 None
@@ -223,7 +217,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             y_components: y_dct.into(),
             cb_components: cb_dct.into(),
             cr_components: cr_dct.into(),
-            gop_len: self.gop_len,
+            gop_len: self.config.gop_len,
         };
 
         if let Some(mb_receiver) = &mut self.original_macro_block_3ds {

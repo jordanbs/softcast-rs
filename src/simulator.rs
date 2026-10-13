@@ -257,7 +257,7 @@ mod tests {
             decoder
                 .run(mpsc_reader, abort_token_d)
                 .expect_err("decoder.run() failed.");
-            let stats = decoder.final_stats().expect("Failed to grab final stats.");
+            let stats = decoder.final_stats();
             stats_sender.send(stats).expect("Failed to send stats.");
         });
         encoder
