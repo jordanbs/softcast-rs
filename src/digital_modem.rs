@@ -16,7 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::framing::FFTW_PLANNER_LOCK;
-use crate::sync::Complex32Reader;
+use crate::io::*;
 use liquid_sys;
 use num_complex::Complex32;
 use std::assert_matches;

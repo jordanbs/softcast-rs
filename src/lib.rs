@@ -24,6 +24,7 @@ pub mod decoder;
 pub mod digital_modem; // TODO: remove
 pub mod encoder;
 pub mod framing;
+pub mod io;
 pub mod metadata_coding;
 pub mod modulation;
 pub mod noise;

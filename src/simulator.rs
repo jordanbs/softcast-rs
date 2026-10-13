@@ -19,6 +19,7 @@
 
 use crate::decoder::*;
 use crate::encoder::*;
+use crate::io::*;
 use crate::noise::*;
 use crate::sync::*;
 use crate::utils::dump_file::*;
