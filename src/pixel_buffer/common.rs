@@ -124,7 +124,7 @@ pub trait GOPLen {
 }
 
 // Holds a single frame
-pub trait PixelBuffer: Sized {
+pub trait PixelBuffer: Sized + Send {
     fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize;
     fn plane_height(&self, pixel_component_type: PixelComponentType) -> usize;
     fn from_frame_view(
@@ -144,8 +144,8 @@ pub trait PixelBufferAccessGuardMut<PB: PixelBuffer>: PixelBufferAccessGuard<PB>
     fn pixel_buffer_mut(&mut self) -> &mut PB; // exclusive borrow
     fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8;
 }
-pub trait Bytes<PB: PixelBuffer>: PixelBufferAccessGuard<PB> {
-    fn bytes(&self) -> impl Iterator<Item = &[u8]> {
+pub trait Bufs<PB: PixelBuffer>: PixelBufferAccessGuard<PB> {
+    fn bufs(&self) -> impl Iterator<Item = &[u8]> {
         fn plane_len<'a, PB: PixelBuffer>(
             pb: &'a PB,
             pixel_component_type: PixelComponentType,
@@ -161,7 +161,48 @@ pub trait Bytes<PB: PixelBuffer>: PixelBufferAccessGuard<PB> {
         [y_slice, cbcr_slice].into_iter()
     }
 }
-impl<PB: PixelBuffer, PBAC: PixelBufferAccessGuard<PB>> Bytes<PB> for PBAC {}
+impl<PB: PixelBuffer, PBAC: PixelBufferAccessGuard<PB>> Bufs<PB> for PBAC {}
+
+pub struct AsyncPixelBufferWriter<PB: PixelBuffer + 'static, W: std::io::Write + Send + 'static> {
+    sender: std::sync::mpsc::SyncSender<PB>,
+    join: Option<std::thread::JoinHandle<Result<W, std::io::Error>>>,
+}
+impl<PB: PixelBuffer, W: std::io::Write + Send> AsyncPixelBufferWriter<PB, W> {
+    pub fn spawn(mut writer: W, max_pixel_buffers_in_queue: usize) -> Self {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<PB>(max_pixel_buffers_in_queue);
+        let join = std::thread::spawn(move || {
+            while let Ok(pb) = receiver.recv() {
+                let access_guard = pb.access_guard();
+                for buf in access_guard.bufs() {
+                    writer.write_all(buf)?;
+                }
+            }
+            Ok(writer)
+        });
+        Self {
+            sender,
+            join: Some(join),
+        }
+    }
+    pub fn write_async(&mut self, pb: PB) -> Result<(), Box<dyn std::error::Error>> {
+        self.sender.send(pb).map_err(move |e| e.into())
+    }
+    fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut writer = self
+            .join
+            .take()
+            .expect("No join handle.")
+            .join()
+            .expect("Join failed")?;
+        writer.flush()?;
+        Ok(())
+    }
+}
+impl<PB: PixelBuffer, W: std::io::Write + Send> Drop for AsyncPixelBufferWriter<PB, W> {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
 
 pub struct MacroBlock3DIterator<I: Iterator<Item = PB>, PB: PixelBuffer> {
     pixel_buffer_iter: I,

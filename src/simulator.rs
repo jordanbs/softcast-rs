@@ -34,7 +34,7 @@ pub fn run_simulation(
     dump: bool,
     decode: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(0x400); // 8MiB
+    let (mut mpsc_writer, mpsc_reader) = MPSCWriter::new_channel(2); // in OFDM frames
 
     let abort_token = AbortToken::new();
     let abort_token_clone = abort_token.clone();

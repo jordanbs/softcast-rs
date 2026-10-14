@@ -133,17 +133,19 @@ impl WriterDecoder for FileWriterDecoder {
     }
 }
 
-pub struct NV12WriterDecoder<W: std::io::Write> {
+pub struct NV12WriterDecoder<W: std::io::Write + 'static> {
     config: DecoderConfig,
-    writer: W,
+    writer: Option<W>,
 }
 impl<W: std::io::Write> NV12WriterDecoder<W> {
     pub fn new(config: DecoderConfig, writer: W) -> Self {
-        Self { config, writer }
+        Self {
+            config,
+            writer: Some(writer),
+        }
     }
 }
-
-impl<W: std::io::Write> WriterDecoder for NV12WriterDecoder<W> {
+impl<W: std::io::Write + Send> WriterDecoder for NV12WriterDecoder<W> {
     fn run(
         &mut self,
         complex32_reader: impl Complex32Reader,
@@ -153,23 +155,16 @@ impl<W: std::io::Write> WriterDecoder for NV12WriterDecoder<W> {
         frame_synchronizer.abort_token = Some(abort_token);
 
         let mut decoder = Decoder::new(frame_synchronizer, self.config, None);
-
+        let mut async_writer = AsyncPixelBufferWriter::spawn(
+            self.writer.take().expect("Writer already taken."),
+            2 * self.config.gop_len,
+        );
         let result = decoder.run(|pb| {
-            let access_guard = pb.access_guard();
-            for buf in access_guard.bytes() {
-                // TODO: may want to do this async to not block on I/O
-                self.writer.write_all(buf)?;
-            }
-
+            async_writer.write_async(pb)?;
             Ok(())
         });
 
         result
-    }
-}
-impl<W: std::io::Write> Drop for NV12WriterDecoder<W> {
-    fn drop(&mut self) {
-        let _ = self.writer.flush();
     }
 }
 

@@ -237,6 +237,7 @@ impl PixelBuffer for CVPixelBufferWrapper {
         Ok(wrapper)
     }
 }
+unsafe impl Send for CVPixelBufferWrapper {}
 
 impl PartialEq for CVPixelBufferWrapper {
     // A deep comparison. Useful for testing. Bad idea? Should I hide?
