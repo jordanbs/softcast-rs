@@ -40,13 +40,21 @@ use std::{cell::Cell, rc::Rc};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DecoderConfig {
-    asset_resolution: (usize, usize),
-    gop_len: usize,
-    y_chunk_dim: (usize, usize, usize),
-    cb_chunk_dim: (usize, usize, usize),
-    cr_chunk_dim: (usize, usize, usize),
-    hadamard: bool,
-    wiener: bool,
+    pub asset_resolution: (usize, usize),
+    pub gop_len: usize,
+    pub y_chunk_dim: (usize, usize, usize),
+    pub cb_chunk_dim: (usize, usize, usize),
+    pub cr_chunk_dim: (usize, usize, usize),
+    pub hadamard: bool,
+    pub wiener: bool,
+}
+
+pub trait WriterDecoder {
+    fn run(
+        &mut self,
+        complex32_reader: impl Complex32Reader,
+        abort_token: AbortToken,
+    ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 pub struct FileWriterDecoder {
@@ -93,10 +101,14 @@ impl FileWriterDecoder {
             final_stats: None,
         })
     }
-
-    pub fn run<R: Complex32Reader>(
+    pub fn final_stats(&self) -> Statistics {
+        self.final_stats.expect("Stats not yet finalized")
+    }
+}
+impl WriterDecoder for FileWriterDecoder {
+    fn run(
         &mut self,
-        complex32_reader: R,
+        complex32_reader: impl Complex32Reader,
         abort_token: AbortToken,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.asset_writer.start_writing()?;
@@ -119,8 +131,45 @@ impl FileWriterDecoder {
         self.final_stats = decoder.final_stats.clone().take();
         result
     }
-    pub fn final_stats(&self) -> Statistics {
-        self.final_stats.expect("Stats not yet finalized")
+}
+
+pub struct NV12WriterDecoder<W: std::io::Write> {
+    config: DecoderConfig,
+    writer: W,
+}
+impl<W: std::io::Write> NV12WriterDecoder<W> {
+    pub fn new(config: DecoderConfig, writer: W) -> Self {
+        Self { config, writer }
+    }
+}
+
+impl<W: std::io::Write> WriterDecoder for NV12WriterDecoder<W> {
+    fn run(
+        &mut self,
+        complex32_reader: impl Complex32Reader,
+        abort_token: AbortToken,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut frame_synchronizer: OFDMFrameSynchronizer<_> = complex32_reader.into_iter().into();
+        frame_synchronizer.abort_token = Some(abort_token);
+
+        let mut decoder = Decoder::new(frame_synchronizer, self.config, None);
+
+        let result = decoder.run(|pb| {
+            let access_guard = pb.access_guard();
+            for buf in access_guard.bytes() {
+                // TODO: may want to do this async to not block on I/O
+                self.writer.write_all(buf)?;
+            }
+
+            Ok(())
+        });
+
+        result
+    }
+}
+impl<W: std::io::Write> Drop for NV12WriterDecoder<W> {
+    fn drop(&mut self) {
+        let _ = self.writer.flush();
     }
 }
 
@@ -150,8 +199,8 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
                     weighted_total_psnr,
                 } = self.final_stats.get().cloned().unwrap();
                 let cumulative_snr = self.signal_to_noise_db();
-                println!("Cumulative SNR: {cumulative_snr:.2}");
-                println!(
+                eprintln!("Cumulative SNR: {cumulative_snr:.2}");
+                eprintln!(
                     "PSNR: {weighted_total_psnr:.2} dB\t{y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB"
                 );
                 return Err(err);
@@ -242,7 +291,7 @@ impl<O: OFDMFrameSynchronizerTrait> Decoder<O> {
             self.stats.cb_psnr_partial_sum += cb_psnr;
             self.stats.cr_psnr_partial_sum += cr_psnr;
             self.stats.sample_count += 1;
-            println!("PSNR: {y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB");
+            eprintln!("PSNR: {y_psnr:.2} Y dB\t{cb_psnr:.2} Cb dB\t{cr_psnr:.2} Cr dB");
         }
 
         let pixel_buffer_iter: transform_block_3d::PixelBufferIterator<_, _> =
@@ -509,7 +558,7 @@ impl<O: Iterator<Item = QuadratureSymbol>> SignalDecoder for O {
         } else {
             num_included_chunks
         };
-        println!("{num_included_chunks} chunks | {num_included_slices} slices");
+        eprintln!("{num_included_chunks} chunks | {num_included_slices} slices");
 
         let mut dct_allocation = slices_allocation::<PixelType>(
             gop_len,

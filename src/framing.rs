@@ -499,7 +499,7 @@ impl<I: Iterator<Item = Box<[Complex32]>>> OFDMFrameSynchronizerTrait for OFDMFr
             let samples_read_per_second = (self.stats.samples_read_per_second() / 1000.0).round();
             let cfo = unsafe { liquid_sys::ofdmframesync_get_cfo(self.ofdm_framesync) }
                 / std::f32::consts::PI;
-            println!(
+            eprintln!(
                 "SNR: {snr_db:.2} dB\tRSSI: {rssi:.2} dB\tReading: {samples_read_per_second:.0} kS/s\tCFO: {cfo:6.3}π"
             );
         }

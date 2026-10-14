@@ -133,8 +133,8 @@ pub trait PixelBuffer: Sized {
         cr_components: &FrameComponentView<CrPixelComponentType>,
     ) -> Result<Self, Box<dyn std::error::Error>>;
 
-    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a>;
-    fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a>;
+    fn access_guard(&self) -> impl PixelBufferAccessGuard<Self>;
+    fn access_guard_mut(&mut self) -> impl PixelBufferAccessGuardMut<Self>;
 }
 pub trait PixelBufferAccessGuard<PB: PixelBuffer> {
     fn pixel_buffer(&self) -> &PB;
@@ -144,6 +144,24 @@ pub trait PixelBufferAccessGuardMut<PB: PixelBuffer>: PixelBufferAccessGuard<PB>
     fn pixel_buffer_mut(&mut self) -> &mut PB; // exclusive borrow
     fn get_ptr_mut(&mut self, plane_index: usize) -> *mut u8;
 }
+pub trait Bytes<PB: PixelBuffer>: PixelBufferAccessGuard<PB> {
+    fn bytes(&self) -> impl Iterator<Item = &[u8]> {
+        fn plane_len<'a, PB: PixelBuffer>(
+            pb: &'a PB,
+            pixel_component_type: PixelComponentType,
+        ) -> usize {
+            pb.plane_row_len(pixel_component_type) * pb.plane_height(pixel_component_type)
+        }
+        let y_len = plane_len(self.pixel_buffer(), PixelComponentType::Y);
+        let cbcr_len = plane_len(self.pixel_buffer(), PixelComponentType::Cb); // Cb and Cr are the same plane
+        let y_ptr = self.get_ptr(PixelComponentType::Y.plane_index());
+        let cbcr_ptr = self.get_ptr(PixelComponentType::Cb.plane_index());
+        let y_slice = unsafe { std::slice::from_raw_parts(y_ptr, y_len) };
+        let cbcr_slice = unsafe { std::slice::from_raw_parts(cbcr_ptr, cbcr_len) };
+        [y_slice, cbcr_slice].into_iter()
+    }
+}
+impl<PB: PixelBuffer, PBAC: PixelBufferAccessGuard<PB>> Bytes<PB> for PBAC {}
 
 pub struct MacroBlock3DIterator<I: Iterator<Item = PB>, PB: PixelBuffer> {
     pixel_buffer_iter: I,
@@ -182,16 +200,15 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Iterator for MacroBlock3DIterator<
         let mut pixel_buffer_iterator_is_empty = true;
         for pixel_buffer in self.pixel_buffer_iter.by_ref().take(self.gop_len) {
             let access_guard = pixel_buffer.access_guard();
-            let access_guard = &*access_guard;
 
             y_block
-                .populate_next_frame(access_guard)
+                .populate_next_frame(&access_guard)
                 .expect("Populating Y block failed.");
             cb_block
-                .populate_next_frame(access_guard)
+                .populate_next_frame(&access_guard)
                 .expect("Populating Cb block failed.");
             cr_block
-                .populate_next_frame(access_guard)
+                .populate_next_frame(&access_guard)
                 .expect("Populating Cr block failed.");
 
             pixel_buffer_iterator_is_empty = false;

@@ -190,11 +190,11 @@ impl Drop for CVPixelBufferAccessGuardMut<'_> {
 }
 
 impl PixelBuffer for CVPixelBufferWrapper {
-    fn access_guard<'a>(&'a self) -> Box<dyn PixelBufferAccessGuard<Self> + 'a> {
-        Box::new(CVPixelBufferAccessGuard::new(self))
+    fn access_guard(&self) -> impl PixelBufferAccessGuard<Self> {
+        CVPixelBufferAccessGuard::new(self)
     }
-    fn access_guard_mut<'a>(&'a mut self) -> Box<dyn PixelBufferAccessGuardMut<Self> + 'a> {
-        Box::new(CVPixelBufferAccessGuardMut::new(self))
+    fn access_guard_mut(&mut self) -> impl PixelBufferAccessGuardMut<Self> {
+        CVPixelBufferAccessGuardMut::new(self)
     }
     // The following functions are safe to call without locking the base address of CVPixelBuffer.
     fn plane_row_len(&self, pixel_component_type: PixelComponentType) -> usize {

@@ -71,11 +71,11 @@ impl<I: Iterator<Item = PB>, PB: PixelBuffer> Encoder<I, PB> {
         let frame_rate = reader.frame_rate()?;
         let asset_resolution = reader.resolution()?;
 
-        println!(
+        eprintln!(
             "Asset resolution: {}x{}",
             asset_resolution.0, asset_resolution.1
         );
-        println!("Asset framerate: {}", frame_rate);
+        eprintln!("Asset framerate: {}", frame_rate);
 
         let pb_iter: IntoPixelBufferIterator = reader.into();
 
@@ -340,7 +340,7 @@ fn chunk_dimensions_sizer(
     let chunk_height = max_factor_at_or_below(proposed_chunk_dimensions.1, asset_height);
     let chunk_len = 1; // only supports 1
 
-    println!(
+    eprintln!(
         "Chunk dimensions for {:<2}: {}x{}x{}",
         pixel_type.to_string(),
         chunk_width,

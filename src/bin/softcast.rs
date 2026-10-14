@@ -328,6 +328,9 @@ mod apple {
 
             #[arg(long, default_value_t = false)]
             dump: bool,
+
+            #[arg(long, default_value_t = false)]
+            write_nv12: bool,
         },
         Replay {
             #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -394,6 +397,9 @@ mod apple {
     }
 
     fn validate_file_does_not_exist(path: &str) -> Result<std::path::PathBuf, String> {
+        if "-" == path {
+            return Ok(path.into()); // stdout
+        }
         let path: std::path::PathBuf = path.into();
         if path.try_exists().map_err(|e| e.to_string())? {
             return Err(format!("File already exists: {}", path.display()));
@@ -545,6 +551,7 @@ mod apple {
         clamp: bool,
         digital: bool,
         dump: bool,
+        write_nv12: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let noise = if noise_db != 0.0 {
             noise_db.db_to_awgn_power()
@@ -596,7 +603,7 @@ mod apple {
                     .values()
                     .mean_sq_err(new_mb.cr_components.values())?
                     .psnr(u8::MAX as f64);
-                println!("PSNR: {y_err:.2} Y dB\t{cb_err:.2} Cb dB\t{cr_err:.2} Cr dB");
+                eprintln!("PSNR: {y_err:.2} Y dB\t{cb_err:.2} Cb dB\t{cr_err:.2} Cr dB");
             }
         } else {
             let config = Config {
@@ -635,28 +642,52 @@ mod apple {
             )?;
             let asset_resolution = encoder.asset_resolution();
             let frame_rate = encoder.frame_rate();
-            let decoder = FileWriterDecoder::try_new(
-                outpath,
-                asset_resolution,
-                frame_rate,
-                gop_len,
-                encoder.y_chunk_dimensions(),
-                encoder.cb_chunk_dimensions(),
-                encoder.cr_chunk_dimensions(),
-                !disable_hadamard,
-                !disable_wiener,
-                macro_block_receiver,
-            )?;
             let should_decode = !disable_ofdm;
-            run_simulation(
-                encoder,
-                decoder,
-                attenuation,
-                clamp,
-                noise,
-                dump,
-                should_decode,
-            )?;
+
+            if write_nv12 {
+                let outfile = writer_from_path(outpath)?;
+                let decoder_config = DecoderConfig {
+                    asset_resolution,
+                    gop_len,
+                    y_chunk_dim: encoder.y_chunk_dimensions(),
+                    cb_chunk_dim: encoder.cb_chunk_dimensions(),
+                    cr_chunk_dim: encoder.cr_chunk_dimensions(),
+                    hadamard: !disable_hadamard,
+                    wiener: !disable_wiener,
+                };
+                let decoder = NV12WriterDecoder::new(decoder_config, outfile);
+                run_simulation(
+                    encoder,
+                    decoder,
+                    attenuation,
+                    clamp,
+                    noise,
+                    dump,
+                    should_decode,
+                )?;
+            } else {
+                let decoder = FileWriterDecoder::try_new(
+                    outpath,
+                    asset_resolution,
+                    frame_rate,
+                    gop_len,
+                    encoder.y_chunk_dimensions(),
+                    encoder.cb_chunk_dimensions(),
+                    encoder.cr_chunk_dimensions(),
+                    !disable_hadamard,
+                    !disable_wiener,
+                    macro_block_receiver,
+                )?;
+                run_simulation(
+                    encoder,
+                    decoder,
+                    attenuation,
+                    clamp,
+                    noise,
+                    dump,
+                    should_decode,
+                )?;
+            }
         }
         Ok(())
     }
@@ -872,6 +903,17 @@ mod apple {
 
         Ok(())
     }
+    fn writer_from_path(
+        path: std::path::PathBuf,
+    ) -> Result<Box<dyn std::io::Write + Send>, std::io::Error> {
+        let writer: Box<dyn std::io::Write + Send> =
+            if "-" == path.to_str().expect("Failed to get str from path") {
+                Box::new(std::io::stdout())
+            } else {
+                Box::new(std::fs::File::create_new(&path)?)
+            };
+        Ok(writer)
+    }
 
     pub fn main() -> Result<(), String> {
         let args = Args::parse();
@@ -1028,6 +1070,7 @@ mod apple {
                 clamp,
                 digital,
                 dump,
+                write_nv12,
             } => simulate(
                 infile,
                 outfile,
@@ -1048,6 +1091,7 @@ mod apple {
                 clamp,
                 digital,
                 dump,
+                write_nv12,
             ),
             Commands::Replay {
                 infile,
@@ -1227,8 +1271,6 @@ mod linux {
 
     pub fn main() -> Result<(), String> {
         let args = Args::parse();
-
-        println!("Hello, Linux.");
 
         match args.command {
             Commands::TxCamera {

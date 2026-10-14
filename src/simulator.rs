@@ -27,7 +27,7 @@ use num_complex::Complex32;
 
 pub fn run_simulation(
     mut encoder: FileReaderEncoder,
-    mut decoder: FileWriterDecoder,
+    mut decoder: impl WriterDecoder + Send + 'static,
     attenuation: f32,
     clamp: bool,
     noise_power: f32,
