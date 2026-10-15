@@ -655,7 +655,7 @@ mod apple {
                     hadamard: !disable_hadamard,
                     wiener: !disable_wiener,
                 };
-                let decoder = NV12WriterDecoder::new(decoder_config, outfile);
+                let decoder = NV12WriterDecoder::new(decoder_config, outfile, macro_block_receiver);
                 run_simulation(
                     encoder,
                     decoder,

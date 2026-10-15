@@ -136,12 +136,18 @@ impl WriterDecoder for FileWriterDecoder {
 pub struct NV12WriterDecoder<W: std::io::Write + 'static> {
     config: DecoderConfig,
     writer: Option<W>,
+    original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
 }
 impl<W: std::io::Write> NV12WriterDecoder<W> {
-    pub fn new(config: DecoderConfig, writer: W) -> Self {
+    pub fn new(
+        config: DecoderConfig,
+        writer: W,
+        original_macro_block_3ds: Option<std::sync::mpsc::Receiver<MacroBlock3D>>,
+    ) -> Self {
         Self {
             config,
             writer: Some(writer),
+            original_macro_block_3ds,
         }
     }
 }
@@ -154,7 +160,11 @@ impl<W: std::io::Write + Send> WriterDecoder for NV12WriterDecoder<W> {
         let mut frame_synchronizer: OFDMFrameSynchronizer<_> = complex32_reader.into_iter().into();
         frame_synchronizer.abort_token = Some(abort_token);
 
-        let mut decoder = Decoder::new(frame_synchronizer, self.config, None);
+        let mut decoder = Decoder::new(
+            frame_synchronizer,
+            self.config,
+            self.original_macro_block_3ds.take(),
+        );
         let mut async_writer = AsyncPixelBufferWriter::spawn(
             self.writer.take().expect("Writer already taken."),
             2 * self.config.gop_len,
