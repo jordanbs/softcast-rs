@@ -49,19 +49,6 @@ enum Driver {
     RtlSdr,
 }
 
-fn parse_dimensions_3d(s: &str) -> Result<(usize, usize, usize), String> {
-    let parts: Box<[&str]> = s.split('x').collect();
-    if parts.len() != 3 {
-        return Err("Expected WxHxD format".into());
-    }
-
-    let x = parts[0].parse().map_err(|_| "Invalid width")?;
-    let y = parts[1].parse().map_err(|_| "Invalid height")?;
-    let z = parts[2].parse().map_err(|_| "Invalid length")?;
-
-    Ok((x, y, z))
-}
-
 #[cfg(target_vendor = "apple")]
 mod apple {
     use super::*;
@@ -371,18 +358,6 @@ mod apple {
             #[arg(long, default_value_t = false)]
             disable_wiener: bool,
         },
-    }
-
-    fn parse_dimensions_2d(s: &str) -> Result<(usize, usize), String> {
-        let parts: Box<[&str]> = s.split('x').collect();
-        if parts.len() != 2 {
-            return Err("Expected WxHxD format".into());
-        }
-
-        let x = parts[0].parse().map_err(|_| "Invalid width")?;
-        let y = parts[1].parse().map_err(|_| "Invalid height")?;
-
-        Ok((x, y))
     }
 
     fn validate_file_exists(path: &str) -> Result<std::path::PathBuf, String> {

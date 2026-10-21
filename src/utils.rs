@@ -75,3 +75,28 @@ impl InvertDimensions for (usize, usize, usize) {
         std::mem::swap(&mut self.0, &mut self.2);
     }
 }
+
+pub fn parse_dimensions_2d(s: &str) -> Result<(usize, usize), String> {
+    let parts: Box<[&str]> = s.split('x').collect();
+    if parts.len() != 2 {
+        return Err("Expected WxHxD format".into());
+    }
+
+    let x = parts[0].parse().map_err(|_| "Invalid width")?;
+    let y = parts[1].parse().map_err(|_| "Invalid height")?;
+
+    Ok((x, y))
+}
+
+pub fn parse_dimensions_3d(s: &str) -> Result<(usize, usize, usize), String> {
+    let parts: Box<[&str]> = s.split('x').collect();
+    if parts.len() != 3 {
+        return Err("Expected WxHxD format".into());
+    }
+
+    let x = parts[0].parse().map_err(|_| "Invalid width")?;
+    let y = parts[1].parse().map_err(|_| "Invalid height")?;
+    let z = parts[2].parse().map_err(|_| "Invalid length")?;
+
+    Ok((x, y, z))
+}

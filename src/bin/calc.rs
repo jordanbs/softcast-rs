@@ -1,0 +1,156 @@
+// Copyright 2026 Jordan Schneider
+//
+// This file is part of softcast-rs.
+//
+// softcast-rs is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version.
+//
+// softcast-rs is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+// details.
+//
+// You should have received a copy of the GNU General Public License along with
+// softcast-rs. If not, see <https://www.gnu.org/licenses/>.
+
+use clap::Parser;
+use softcast_rs::pixel_buffer::PixelComponentType;
+use softcast_rs::utils::parse_dimensions_2d;
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(value_parser = parse_dimensions_2d)]
+    resolution: (usize, usize),
+
+    gop_len: usize,
+
+    y_compression: f64,
+    cbcr_compression: f64,
+
+    #[arg(long, value_parser = parse_dimensions_2d, default_value = "24x24")]
+    min_chunk_size: (usize, usize),
+    #[arg(long, value_parser = parse_dimensions_2d, default_value = "64x64")]
+    max_chunk_size: (usize, usize),
+}
+
+struct ChunkDimInfo {
+    dim: (usize, usize),
+    num_chunks: usize,
+    num_slices: usize,
+    overhead_pixels: usize,
+}
+
+fn minimium_overhead(
+    frame_dim: (usize, usize),
+    gop_len: usize,
+    compression_ratio: f64,
+    min_chunk_dim: (usize, usize),
+    max_chunk_dim: (usize, usize),
+) -> Result<ChunkDimInfo, String> {
+    let w_candidates = frame_dim
+        .0
+        .factors_in_range(min_chunk_dim.0..max_chunk_dim.0);
+    let h_candidates = frame_dim
+        .1
+        .factors_in_range(min_chunk_dim.1..max_chunk_dim.1);
+    if w_candidates.is_empty() {
+        return Err(format!(
+            "No factors of {} in ({}..{})",
+            frame_dim.0, min_chunk_dim.0, max_chunk_dim.0,
+        ));
+    }
+    if h_candidates.is_empty() {
+        return Err(format!(
+            "No factors of {} in ({}..{})",
+            frame_dim.1, min_chunk_dim.1, max_chunk_dim.1,
+        ));
+    }
+    let num_pixels = frame_dim.0 * frame_dim.1;
+    let mut winner = None;
+    let mut winner_num_chunks = None;
+    let mut winner_num_slices = None;
+    let mut min_overhead = std::usize::MAX;
+    for w in &w_candidates {
+        for h in &h_candidates {
+            assert_eq!(num_pixels % (w * h), 0);
+            let num_chunks =
+                (compression_ratio * (gop_len * (num_pixels / (w * h))) as f64).ceil() as usize;
+            let num_slices = num_chunks.next_power_of_two();
+            let overhead = w * h * (num_slices - num_chunks);
+            if overhead < min_overhead {
+                min_overhead = overhead;
+                winner = Some((*w, *h));
+                winner_num_chunks = Some(num_chunks);
+                winner_num_slices = Some(num_slices);
+            }
+        }
+    }
+
+    Ok(ChunkDimInfo {
+        dim: winner.expect("Winner not initialized."),
+        num_chunks: winner_num_chunks.unwrap(),
+        num_slices: winner_num_slices.unwrap(),
+        overhead_pixels: min_overhead,
+    })
+}
+
+trait FactorsInRange
+where
+    Self: Sized,
+{
+    fn factors_in_range(self, range: std::ops::Range<Self>) -> Vec<Self>;
+}
+impl FactorsInRange for usize {
+    fn factors_in_range(self, range: std::ops::Range<Self>) -> Vec<Self> {
+        range.filter(|n| self % n == 0).collect()
+    }
+}
+
+fn main() -> Result<(), String> {
+    let args = Args::parse();
+
+    let y_frame_dim = args.resolution;
+    let c_frame_dim = (
+        args.resolution.0 / PixelComponentType::Cb.interleave_step(),
+        args.resolution.1 / PixelComponentType::Cb.vertical_subsampling(),
+    );
+
+    let ChunkDimInfo {
+        dim: y_chunk_dim,
+        num_chunks: y_num_chunks,
+        num_slices: y_num_slices,
+        overhead_pixels: y_overhead,
+    } = minimium_overhead(
+        y_frame_dim,
+        args.gop_len,
+        args.y_compression,
+        args.min_chunk_size,
+        args.max_chunk_size,
+    )?;
+
+    let ChunkDimInfo {
+        dim: c_chunk_dim,
+        num_chunks: c_num_chunks,
+        num_slices: c_num_slices,
+        overhead_pixels: c_overhead,
+    } = minimium_overhead(
+        c_frame_dim,
+        args.gop_len,
+        args.cbcr_compression,
+        args.min_chunk_size,
+        args.max_chunk_size,
+    )?;
+
+    println!(
+        "y   :{}x{}\toverhead:{y_overhead}\tnum_chunks:{y_num_chunks}\tnum_slices:{y_num_slices}",
+        y_chunk_dim.0, y_chunk_dim.1,
+    );
+    println!(
+        "cbcr:{}x{}\toverhead:{c_overhead}\tnum_chunks:{c_num_chunks}\tnum_slices:{c_num_slices}",
+        c_chunk_dim.0, c_chunk_dim.1,
+    );
+
+    Ok(())
+}
