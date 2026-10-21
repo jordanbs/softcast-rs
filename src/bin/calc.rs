@@ -129,12 +129,10 @@ fn packet_len(
     let metadata_means_len = chunks_per_gop * size_of::<u8>();
     let medatata_energies_len = num_chunks * size_of::<f16>(); // energy only included for included chunks
     const SYMBOLS_PER_BYTE: usize = 34; // including FEC and CRC
-    const FRAME_LEN: usize = 33864;
     let metadata_len = SYMBOLS_PER_BYTE
         * (ENTROPY_COMPRESSION_RATIO
             * (metadata_bitmap_len + metadata_means_len + medatata_energies_len) as f64)
             .ceil() as usize;
-    let metadata_len = (1 + (metadata_len / FRAME_LEN)) * FRAME_LEN;
 
     let analog_len = num_slices * chunk_dim.0 * chunk_dim.1 / 2;
 
