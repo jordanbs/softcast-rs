@@ -728,7 +728,6 @@ impl PermuteColumns for Vec<Complex32> {
         }
     }
 }
-
 trait ScrambleSigns {
     fn scramble_signs(&mut self, seed: u64);
     fn scramble_signs_reverse(&mut self, seed: u64);
@@ -746,7 +745,23 @@ impl ScrambleSigns for Vec<Complex32> {
         self.scramble_signs(seed);
     }
 }
-
+trait DecorrelateIQ {
+    fn decorrelate_iq(&mut self, seed: u64);
+    fn decorrelate_iq_reverse(&mut self, seed: u64);
+}
+impl DecorrelateIQ for Vec<Complex32> {
+    fn decorrelate_iq(&mut self, seed: u64) {
+        let mut rng = rand_xoshiro::Xoroshiro128PlusPlus::seed_from_u64(seed);
+        for symbol in self.iter_mut() {
+            if rng.random_bool(0.5) {
+                std::mem::swap(&mut symbol.re, &mut symbol.im);
+            }
+        }
+    }
+    fn decorrelate_iq_reverse(&mut self, seed: u64) {
+        self.decorrelate_iq(seed);
+    }
+}
 trait Fwht2d {
     fn fwht_2d_mut(&mut self, rows: usize, cols: usize);
 }
@@ -786,22 +801,26 @@ impl Whiten for Vec<Complex32> {
         // X'' = Hadamard(X')
         // X†  = ScrambleSign(PermuteColumns(X"))
 
-        self.permute_columns(rows, cols, seed(0, round));
-        self.scramble_signs(seed(1, round));
+        self.decorrelate_iq(seed(0, round));
+
+        self.permute_columns(rows, cols, seed(1, round));
+        self.scramble_signs(seed(2, round));
 
         self.fwht_2d_mut(rows, cols);
 
-        self.permute_columns(rows, cols, seed(2, round));
-        self.scramble_signs(seed(3, round));
+        self.permute_columns(rows, cols, seed(3, round));
+        self.scramble_signs(seed(4, round));
     }
     fn whiten_reverse(&mut self, rows: usize, cols: usize, round: usize) {
-        self.scramble_signs_reverse(seed(3, round));
-        self.permute_columns_reverse(rows, cols, seed(2, round));
+        self.scramble_signs_reverse(seed(4, round));
+        self.permute_columns_reverse(rows, cols, seed(3, round));
 
         self.fwht_2d_mut(rows, cols);
 
-        self.scramble_signs_reverse(seed(1, round));
-        self.permute_columns_reverse(rows, cols, seed(0, round));
+        self.scramble_signs_reverse(seed(2, round));
+        self.permute_columns_reverse(rows, cols, seed(1, round));
+
+        self.decorrelate_iq_reverse(seed(0, round));
     }
 }
 
