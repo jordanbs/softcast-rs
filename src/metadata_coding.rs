@@ -67,7 +67,7 @@ pub fn compress_metadata<
     }
     compress(&mut encoder, y.0, y.1)?;
     compress(&mut encoder, cb.0, cb.1)?;
-    compress(&mut encoder, cb.0, cr.1)?;
+    compress(&mut encoder, cr.0, cr.1)?;
     let compressed_bytes = encoder.finish()?.into_inner();
 
     Ok(CompressedMetadata2(compressed_bytes.into()))
