@@ -359,6 +359,12 @@ pub mod packet_modem {
             let header_frame_len =
                 unsafe { liquid_sys::qpacketmodem_get_frame_len(header_modem.ptr) } as usize;
             let mod_header_buf: Box<_> = self.inner.by_ref().take(header_frame_len).collect();
+            if mod_header_buf.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Input stream ended.",
+                ));
+            }
             if header_frame_len != mod_header_buf.len() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
