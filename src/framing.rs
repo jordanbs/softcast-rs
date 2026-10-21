@@ -835,7 +835,7 @@ pub struct Whitener<I: Iterator<Item = QuadratureSymbol>> {
 impl<I: Iterator<Item = QuadratureSymbol>> Whitener<I> {
     pub fn new(inner: I, rows: usize, cols: usize, rounds: usize, reverse: bool) -> Self {
         assert!(rows.is_power_of_two(), "{rows} rows not a power of two");
-        assert_eq!(0, cols % 2, "{cols}");
+        assert_eq!(0, cols % 2, "{cols} cols not divisible by two");
         Self {
             inner: inner.peekable(),
             working_iter: vec![].into_iter(),

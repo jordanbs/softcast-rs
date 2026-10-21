@@ -16,6 +16,7 @@
 // softcast-rs. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
+use half::f16;
 use softcast_rs::pixel_buffer::PixelComponentType;
 use softcast_rs::utils::parse_dimensions_2d;
 
@@ -108,6 +109,41 @@ impl FactorsInRange for usize {
     }
 }
 
+struct PacketLenInfo {
+    metadata_len: usize,
+    analog_len: usize,
+}
+fn packet_len(
+    chunk_dim: (usize, usize),
+    frame_dim: (usize, usize),
+    gop_len: usize,
+    num_chunks: usize, // number of included chunks
+    num_slices: usize,
+) -> PacketLenInfo {
+    assert_eq!((frame_dim.0 * frame_dim.1) % (chunk_dim.0 * chunk_dim.1), 0);
+    // number of all chunks, including those not included
+    let chunks_per_gop = gop_len * (frame_dim.0 * frame_dim.1) / (chunk_dim.0 * chunk_dim.1);
+
+    const ENTROPY_COMPRESSION_RATIO: f64 = 0.04; // arbitrary... based on observation.
+    let metadata_bitmap_len = ((chunks_per_gop / 8) as f64).ceil() as usize;
+    let metadata_means_len = chunks_per_gop * size_of::<u8>();
+    let medatata_energies_len = num_chunks * size_of::<f16>(); // energy only included for included chunks
+    const SYMBOLS_PER_BYTE: usize = 34; // including FEC and CRC
+    const FRAME_LEN: usize = 33864;
+    let metadata_len = SYMBOLS_PER_BYTE
+        * (ENTROPY_COMPRESSION_RATIO
+            * (metadata_bitmap_len + metadata_means_len + medatata_energies_len) as f64)
+            .ceil() as usize;
+    let metadata_len = (1 + (metadata_len / FRAME_LEN)) * FRAME_LEN;
+
+    let analog_len = num_slices * chunk_dim.0 * chunk_dim.1 / 2;
+
+    PacketLenInfo {
+        metadata_len,
+        analog_len,
+    }
+}
+
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
@@ -143,6 +179,34 @@ fn main() -> Result<(), String> {
         args.max_chunk_size,
     )?;
 
+    let PacketLenInfo {
+        metadata_len: y_metadata_len,
+        analog_len: y_analog_len,
+    } = packet_len(
+        y_chunk_dim,
+        y_frame_dim,
+        args.gop_len,
+        y_num_chunks,
+        y_num_slices,
+    );
+    let PacketLenInfo {
+        metadata_len: c_metadata_len,
+        analog_len: c_analog_len,
+    } = packet_len(
+        c_chunk_dim,
+        c_frame_dim,
+        args.gop_len,
+        c_num_chunks,
+        c_num_slices,
+    );
+    let metadata_len = y_metadata_len + 2 * c_metadata_len + 4 /* length header */;
+    let analog_len = y_analog_len + 2 * c_analog_len;
+    let packet_len = metadata_len + analog_len;
+
+    println!(
+        "packet_len:0x{:x}\tmetadata_len:0x{:x}\tanalog_len:0x{:x}",
+        packet_len, metadata_len, analog_len
+    );
     println!(
         "y   :{}x{}\toverhead:{y_overhead}\tnum_chunks:{y_num_chunks}\tnum_slices:{y_num_slices}",
         y_chunk_dim.0, y_chunk_dim.1,
